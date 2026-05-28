@@ -4,9 +4,10 @@ use std::rc::Rc;
 use winit::dpi::{LogicalSize, PhysicalPosition, PhysicalSize};
 use winit::event::{ElementState, Event as WinitEvent, MouseButton as WinitMouseButton, WindowEvent};
 use winit::event_loop::{ControlFlow, EventLoop};
+use winit::keyboard::{Key as WKey, NamedKey as WNamedKey};
 use winit::window::WindowBuilder;
 
-use crate::event::{Event, EventCtx, MouseButton};
+use crate::event::{Event, EventCtx, Key, Modifiers, MouseButton, NamedKey};
 use crate::font::Font;
 use crate::geometry::{Point, Size};
 use crate::painter::Painter;
@@ -93,6 +94,7 @@ impl App {
 
         let mut cursor: Option<Point> = None;
         let mut needs_redraw = true;
+        let mut modifiers = Modifiers::default();
 
         event_loop
             .run(move |event, elwt| {
@@ -141,6 +143,66 @@ impl App {
                                 ElementState::Released => Event::PointerUp { pos, button },
                             };
                             dispatch(&mut root, &event, &mut needs_redraw, elwt);
+                        }
+                        WindowEvent::ModifiersChanged(new_mods) => {
+                            let s = new_mods.state();
+                            modifiers = Modifiers {
+                                shift: s.shift_key(),
+                                control: s.control_key(),
+                                alt: s.alt_key(),
+                                logo: s.super_key(),
+                            };
+                        }
+                        WindowEvent::KeyboardInput { event: key, .. } => {
+                            if key.repeat {
+                                // Allow repeats — editing widgets generally
+                                // want held-key repeat for arrows / backspace.
+                            }
+                            let mapped = map_key(&key.logical_key);
+                            match key.state {
+                                ElementState::Pressed => {
+                                    if let Some(mapped) = mapped {
+                                        dispatch(
+                                            &mut root,
+                                            &Event::KeyDown { key: mapped, modifiers },
+                                            &mut needs_redraw,
+                                            elwt,
+                                        );
+                                    }
+                                    // Dispatch a Char event for each character
+                                    // the OS says this key produced, but
+                                    // suppress it when a command modifier is
+                                    // held so editors don't ingest "\x01" for
+                                    // Ctrl+A and similar.
+                                    if !modifiers.has_command()
+                                        && let Some(text) = key.text.as_deref()
+                                    {
+                                        for ch in text.chars() {
+                                            if (ch.is_control() && ch != '\t' && ch != '\n')
+                                                || ch == '\r'
+                                            {
+                                                continue;
+                                            }
+                                            dispatch(
+                                                &mut root,
+                                                &Event::Char { ch, modifiers },
+                                                &mut needs_redraw,
+                                                elwt,
+                                            );
+                                        }
+                                    }
+                                }
+                                ElementState::Released => {
+                                    if let Some(mapped) = mapped {
+                                        dispatch(
+                                            &mut root,
+                                            &Event::KeyUp { key: mapped, modifiers },
+                                            &mut needs_redraw,
+                                            elwt,
+                                        );
+                                    }
+                                }
+                            }
                         }
                         WindowEvent::RedrawRequested => {
                             let (origin_x, origin_y) = origin(logical_size, scale, physical);
@@ -196,6 +258,34 @@ fn dispatch(
     if ctx.close_requested {
         elwt.exit();
     }
+}
+
+fn map_key(key: &WKey) -> Option<Key> {
+    match key {
+        WKey::Named(named) => map_named(*named).map(Key::Named),
+        WKey::Character(s) => s.chars().next().map(Key::Char),
+        _ => None,
+    }
+}
+
+fn map_named(named: WNamedKey) -> Option<NamedKey> {
+    Some(match named {
+        WNamedKey::Enter => NamedKey::Enter,
+        WNamedKey::Backspace => NamedKey::Backspace,
+        WNamedKey::Delete => NamedKey::Delete,
+        WNamedKey::Tab => NamedKey::Tab,
+        WNamedKey::Escape => NamedKey::Escape,
+        WNamedKey::Space => NamedKey::Space,
+        WNamedKey::ArrowLeft => NamedKey::Left,
+        WNamedKey::ArrowRight => NamedKey::Right,
+        WNamedKey::ArrowUp => NamedKey::Up,
+        WNamedKey::ArrowDown => NamedKey::Down,
+        WNamedKey::Home => NamedKey::Home,
+        WNamedKey::End => NamedKey::End,
+        WNamedKey::PageUp => NamedKey::PageUp,
+        WNamedKey::PageDown => NamedKey::PageDown,
+        _ => return None,
+    })
 }
 
 fn map_button(button: WinitMouseButton) -> Option<MouseButton> {

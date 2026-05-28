@@ -37,10 +37,10 @@ mod widget;
 mod widgets;
 
 pub use app::{App, WindowConfig};
-pub use event::{Event, EventCtx, MouseButton};
+pub use event::{Event, EventCtx, Key, Modifiers, MouseButton, NamedKey};
 pub use font::Font;
 pub use geometry::{Color, Point, Rect, Size};
 pub use painter::Painter;
 pub use theme::Theme;
 pub use widget::Widget;
-pub use widgets::{Bevel, Button, Container, Image, Label};
+pub use widgets::{Bevel, Button, Container, Image, Label, Menu, MenuBar, MenuItem, TextEditor};

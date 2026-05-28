@@ -11,6 +11,10 @@ pub struct Theme {
     pub border: Color,
     pub text: Color,
     pub disabled_text: Color,
+    /// Selected-item background — Win 3.1 dark navy blue.
+    pub highlight_bg: Color,
+    /// Selected-item foreground text color — white on Win 3.1.
+    pub highlight_text: Color,
     pub font_size: f32,
 }
 
@@ -26,6 +30,8 @@ impl Theme {
             border: Color::BLACK,
             text: Color::BLACK,
             disabled_text: Color::MID_GRAY,
+            highlight_bg: Color::NAVY,
+            highlight_text: Color::WHITE,
             font_size: 11.0,
         }
     }

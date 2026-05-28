@@ -6,16 +6,26 @@ use crate::widget::Widget;
 
 /// A flat collection of widgets at absolute positions inside a fixed-size area.
 ///
-/// This is the only container retrogui ships with right now: enough for
-/// WINGs-style dialog layouts. A constraints/flexbox layout pass can be added
-/// later without breaking the Widget trait.
+/// The container is the only thing retrogui ships with right now — enough for
+/// WINGs-style dialog layouts. It is responsible for three runtime concerns:
+///
+/// * **hit testing**: pointer events are routed to the top-most child whose
+///   bounds contain the cursor;
+/// * **pointer capture**: a child that returns `captures_pointer() == true`
+///   keeps receiving pointer events until it stops capturing — used by
+///   buttons and menus to keep events flowing while a press is in progress;
+/// * **keyboard focus**: clicking a focusable child makes it the keyboard
+///   target. Keyboard events are routed to the focused child only.
+///
+/// An overlay paint pass runs after every child has rendered, so widgets like
+/// menus can draw popups on top of their siblings.
 pub struct Container {
     pub size: Size,
     pub background: Option<Color>,
     pub border: Option<Color>,
     children: Vec<Box<dyn Widget>>,
-    /// Index of the child currently capturing the pointer, if any.
     captured: Option<usize>,
+    focused: Option<usize>,
 }
 
 impl Container {
@@ -26,6 +36,7 @@ impl Container {
             border: None,
             children: Vec::new(),
             captured: None,
+            focused: None,
         }
     }
 
@@ -40,12 +51,58 @@ impl Container {
     }
 
     pub fn add(mut self, widget: impl Widget + 'static) -> Self {
-        self.children.push(Box::new(widget));
+        self.push(widget);
         self
     }
 
     pub fn push(&mut self, widget: impl Widget + 'static) {
         self.children.push(Box::new(widget));
+    }
+
+    /// Focus the first focusable child, if any. Call this at startup if you
+    /// want a window to begin with a particular widget keyboard-ready (e.g.
+    /// a Notepad window that should accept typing immediately).
+    pub fn focus_first(&mut self) {
+        for (idx, child) in self.children.iter_mut().enumerate() {
+            if child.focusable() {
+                child.set_focused(true);
+                self.focused = Some(idx);
+                return;
+            }
+        }
+    }
+
+    fn choose_target(&self, event: &Event) -> Option<usize> {
+        if event.is_keyboard() {
+            return self.focused;
+        }
+        if let Some(idx) = self.captured {
+            return Some(idx);
+        }
+        let Some(pos) = event.position() else {
+            return None;
+        };
+        (0..self.children.len())
+            .rev()
+            .find(|&i| self.children[i].bounds().contains(pos))
+    }
+
+    fn change_focus(&mut self, new_focus: Option<usize>, ctx: &mut EventCtx) {
+        if new_focus == self.focused {
+            return;
+        }
+        if let Some(old) = self.focused
+            && let Some(child) = self.children.get_mut(old)
+        {
+            child.set_focused(false);
+        }
+        if let Some(new) = new_focus
+            && let Some(child) = self.children.get_mut(new)
+        {
+            child.set_focused(true);
+        }
+        self.focused = new_focus;
+        ctx.request_paint();
     }
 }
 
@@ -64,37 +121,68 @@ impl Widget for Container {
         if let Some(border) = self.border {
             painter.stroke_rect(self.bounds(), border);
         }
+        // Overlay pass: floating UI (menus, tooltips) on top of every sibling.
+        for child in &mut self.children {
+            child.paint_overlay(painter, theme);
+        }
+    }
+
+    fn paint_overlay(&mut self, painter: &mut Painter, theme: &Theme) {
+        for child in &mut self.children {
+            child.paint_overlay(painter, theme);
+        }
     }
 
     fn event(&mut self, event: &Event, ctx: &mut EventCtx) {
-        // Captured child gets every event until it stops capturing.
-        if let Some(idx) = self.captured {
-            if let Some(child) = self.children.get_mut(idx) {
+        // Non-positional, non-keyboard events with no current capture
+        // (e.g. PointerLeave on its own): broadcast to all children.
+        if !event.is_keyboard() && event.position().is_none() && self.captured.is_none() {
+            for child in &mut self.children {
                 child.event(event, ctx);
-                if !child.captures_pointer() {
-                    self.captured = None;
-                }
-            } else {
-                self.captured = None;
             }
             return;
         }
 
-        // Otherwise dispatch by hit-test, top-down (most-recently-added first).
-        if let Some(pos) = event.position() {
-            for (idx, child) in self.children.iter_mut().enumerate().rev() {
-                if child.bounds().contains(pos) {
+        // Keyboard events go first to every accelerator-accepting child (e.g.
+        // a MenuBar listening for Alt+letter), then to the focused widget.
+        // This lets the menu bar intercept Alt-key combos without stealing
+        // focus from text editors and the like.
+        if event.is_keyboard() {
+            for (idx, child) in self.children.iter_mut().enumerate() {
+                if child.accepts_accelerators() && Some(idx) != self.focused {
                     child.event(event, ctx);
-                    if child.captures_pointer() {
-                        self.captured = Some(idx);
-                    }
-                    return;
                 }
             }
-        } else {
-            // Broadcast non-positional events (e.g. PointerLeave) to all.
-            for child in &mut self.children {
-                child.event(event, ctx);
+        }
+
+        let Some(idx) = self.choose_target(event) else {
+            return;
+        };
+
+        let captured_was_set = self.captured == Some(idx);
+        {
+            let child = &mut self.children[idx];
+            child.event(event, ctx);
+
+            if !event.is_keyboard() {
+                if child.captures_pointer() {
+                    self.captured = Some(idx);
+                } else if captured_was_set {
+                    self.captured = None;
+                }
+            }
+        }
+
+        // Apply focus changes after dispatch so we can mutably borrow
+        // a different child to notify it of focus-out.
+        if ctx.focus_requested {
+            ctx.focus_requested = false;
+            self.change_focus(Some(idx), ctx);
+        }
+        if ctx.focus_released {
+            ctx.focus_released = false;
+            if self.focused == Some(idx) {
+                self.change_focus(None, ctx);
             }
         }
     }

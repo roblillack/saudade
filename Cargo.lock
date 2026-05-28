@@ -697,6 +697,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "notepad"
+version = "0.1.0"
+dependencies = [
+ "retrogui",
+]
+
+[[package]]
 name = "ntapi"
 version = "0.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
