@@ -142,10 +142,24 @@ impl<'a> Painter<'a> {
     }
 
     pub fn fill_rect(&mut self, rect: Rect, color: Color) {
-        let x0 = self.origin_x + self.snap(rect.x);
-        let y0 = self.origin_y + self.snap(rect.y);
-        let x1 = self.origin_x + self.snap(rect.x + rect.w);
-        let y1 = self.origin_y + self.snap(rect.y + rect.h);
+        self.fill_rect_with_phys_offset(rect, 0, 0, color);
+    }
+
+    /// Fill a rectangle with an additional physical-pixel offset applied
+    /// *after* the logical→physical snap. Pair with `text_with_phys_offset`
+    /// when you want chrome (e.g., a mnemonic underline) to track text that
+    /// has been nudged a fraction of a logical pixel.
+    pub fn fill_rect_with_phys_offset(
+        &mut self,
+        rect: Rect,
+        dx_phys: i32,
+        dy_phys: i32,
+        color: Color,
+    ) {
+        let x0 = self.origin_x + self.snap(rect.x) + dx_phys;
+        let y0 = self.origin_y + self.snap(rect.y) + dy_phys;
+        let x1 = self.origin_x + self.snap(rect.x + rect.w) + dx_phys;
+        let y1 = self.origin_y + self.snap(rect.y + rect.h) + dy_phys;
         self.fill_phys(x0, y0, x1 - x0, y1 - y0, color);
     }
 
@@ -220,11 +234,28 @@ impl<'a> Painter<'a> {
     /// painter rasterizes glyphs once at `size × scale` physical pixels for
     /// crisp output regardless of fractional DPI.
     pub fn text(&mut self, x: i32, y: i32, text: &str, size: f32, color: Color) {
+        self.text_with_phys_offset(x, y, 0, 0, text, size, color);
+    }
+
+    /// Draw text with an additional physical-pixel offset applied *after*
+    /// the logical→physical snap. Useful for fine alignment tweaks (e.g.
+    /// nudging menu-bar labels down a single physical pixel) that don't
+    /// correspond cleanly to any whole logical-pixel value.
+    pub fn text_with_phys_offset(
+        &mut self,
+        x: i32,
+        y: i32,
+        dx_phys: i32,
+        dy_phys: i32,
+        text: &str,
+        size: f32,
+        color: Color,
+    ) {
         let Some(font) = self.font else {
             return;
         };
-        let x_phys = self.snap(x) as f32;
-        let y_phys = self.snap(y) as f32;
+        let x_phys = (self.snap(x) + dx_phys) as f32;
+        let y_phys = (self.snap(y) + dy_phys) as f32;
         let size_phys = size * self.scale;
         font.draw_phys(self, text, x_phys, y_phys, size_phys, color);
     }

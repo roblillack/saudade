@@ -5,10 +5,13 @@ use crate::theme::Theme;
 use crate::widget::Widget;
 
 const BAR_PADDING: i32 = 8;
-const BAR_LABEL_INSET_Y: i32 = 3;
+/// Top inset for the label baseline inside the bar. Tight enough that the
+/// 13-pt menu font fits in a 20-px bar without growing it.
+const BAR_LABEL_INSET_Y: i32 = 1;
 const POPUP_PADDING_X: i32 = 18;
 const POPUP_PADDING_Y: i32 = 3;
-const ITEM_HEIGHT: i32 = 16;
+const ITEM_HEIGHT: i32 = 18;
+const ITEM_TEXT_INSET_Y: i32 = 1;
 const SEPARATOR_HEIGHT: i32 = 6;
 const SHADOW_SIZE: i32 = 2;
 /// L-shape drop shadow color: a dark gray with no alpha trickery so it
@@ -168,11 +171,15 @@ impl MenuBar {
     }
 
     fn rebuild_label_rects(&mut self, painter: &Painter, theme: &Theme) {
+        // First label butts up against the bar's left edge so its highlight
+        // reaches the window edge when active; subsequent labels follow with
+        // their own internal padding. Every label still carries `BAR_PADDING`
+        // on both sides of its text for visual breathing room.
         self.cache.label_rects.clear();
-        let mut x = self.rect.x + BAR_PADDING;
+        let mut x = self.rect.x;
         for menu in &self.menus {
             let parsed = parse_label(&menu.label);
-            let w = painter.measure_text(&parsed.display, theme.font_size).w + BAR_PADDING * 2;
+            let w = painter.measure_text(&parsed.display, theme.menu_font_size).w + BAR_PADDING * 2;
             self.cache.label_rects.push((x, w));
             x += w;
         }
@@ -191,7 +198,7 @@ impl MenuBar {
         for item in &menu.items {
             if let MenuItem::Action { label, .. } = item {
                 let parsed = parse_label(label);
-                let w = painter.measure_text(&parsed.display, theme.font_size).w;
+                let w = painter.measure_text(&parsed.display, theme.menu_font_size).w;
                 if w > max_label {
                     max_label = w;
                 }
@@ -266,16 +273,21 @@ impl MenuBar {
         None
     }
 
-    /// Draw text with the mnemonic glyph underlined.
+    /// Draw text with the mnemonic glyph underlined. `dy_phys` lets the
+    /// caller nudge both the text and the underline by a physical-pixel
+    /// amount independent of any logical-pixel inset (the menu bar uses
+    /// this to drop its labels exactly one physical pixel without growing
+    /// the bar by a whole logical pixel).
     fn draw_label_with_mnemonic(
         painter: &mut Painter,
         x: i32,
         y: i32,
+        dy_phys: i32,
         parsed: &ParsedLabel,
         size: f32,
         color: Color,
     ) {
-        painter.text(x, y, &parsed.display, size, color);
+        painter.text_with_phys_offset(x, y, 0, dy_phys, &parsed.display, size, color);
         if let Some(idx) = parsed.mnemonic_index {
             let prefix: String = parsed.display.chars().take(idx).collect();
             let mnemonic_ch: String = parsed.display.chars().skip(idx).take(1).collect();
@@ -284,8 +296,16 @@ impl MenuBar {
             }
             let prefix_w = painter.measure_text(&prefix, size).w;
             let glyph_w = painter.measure_text(&mnemonic_ch, size).w;
-            let underline_y = y + (size as i32);
-            painter.h_line(x + prefix_w, underline_y, glyph_w, color);
+            // Drop the underline 1 logical pixel below the baseline so it
+            // doesn't kiss the bottom of the letter (and doesn't fight any
+            // descender on the rare lowercase mnemonic).
+            let underline_y = y + (size as i32) + 1;
+            painter.fill_rect_with_phys_offset(
+                Rect::new(x + prefix_w, underline_y, glyph_w, 1),
+                0,
+                dy_phys,
+                color,
+            );
         }
     }
 }
@@ -324,12 +344,16 @@ impl Widget for MenuBar {
             if draw_bg {
                 painter.fill_rect(label_rect, theme.highlight_bg);
             }
+            // Bar labels are nudged down by one physical pixel so the cap
+            // height has visible breathing room above without growing the
+            // bar by a whole logical pixel.
             Self::draw_label_with_mnemonic(
                 painter,
                 lx + BAR_PADDING,
                 self.rect.y + BAR_LABEL_INSET_Y,
+                1,
                 &parsed,
-                theme.font_size,
+                theme.menu_font_size,
                 fg,
             );
         }
@@ -387,9 +411,10 @@ impl Widget for MenuBar {
                     Self::draw_label_with_mnemonic(
                         painter,
                         row.x + POPUP_PADDING_X - 4,
-                        row.y + 2,
+                        row.y + ITEM_TEXT_INSET_Y,
+                        0,
                         &parsed,
-                        theme.font_size,
+                        theme.menu_font_size,
                         fg,
                     );
                     y += ITEM_HEIGHT;
