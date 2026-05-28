@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use std::rc::Rc;
 
 use retrogui::{
-    App, Container, Event, EventCtx, Menu, MenuBar, MenuItem, Painter, Rect, TextEditor, Theme,
+    App, Color, Column, Event, EventCtx, Menu, MenuBar, MenuItem, Painter, Rect, TextEditor, Theme,
     Widget, WindowConfig,
 };
 
@@ -16,15 +16,14 @@ const MENU_BAR_H: i32 = 20;
 fn main() {
     // First positional argument (if any) is the file we open and save to.
     // Notepad has always had exactly one document — so do we, for now.
-    let path: PathBuf = env::args().nth(1).map(PathBuf::from).unwrap_or_else(|| PathBuf::from("notepad.txt"));
+    let path: PathBuf = env::args()
+        .nth(1)
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("notepad.txt"));
 
-    let editor_rect = Rect::new(
-        4,
-        MENU_BAR_H + 4,
-        WINDOW_W - 8,
-        WINDOW_H - MENU_BAR_H - 8,
-    );
-    let mut editor = TextEditor::new(editor_rect).with_font_size(11.0);
+    // Initial editor rect doesn't matter: Column::layout will resize it to
+    // fill the window the moment the runtime starts.
+    let mut editor = TextEditor::new(Rect::new(0, 0, 0, 0)).with_font_size(11.0);
     if let Ok(content) = fs::read_to_string(&path) {
         editor.set_text(&content);
     }
@@ -79,10 +78,12 @@ fn main() {
             })],
         ));
 
-    let mut root = Container::new(WINDOW_W, WINDOW_H)
-        .with_background(retrogui::Color::WHITE)
-        .add(menu_bar)
-        .add(SharedEditor(editor.clone()));
+    // The Column layout makes the menu bar a fixed strip at the top spanning
+    // the full window width, and lets the editor flex to fill the rest.
+    let mut root = Column::new()
+        .with_background(Color::WHITE)
+        .add_fixed(menu_bar, MENU_BAR_H)
+        .add_fill(SharedEditor(editor.clone()));
     root.focus_first();
 
     App::new(
@@ -119,5 +120,8 @@ impl Widget for SharedEditor {
     }
     fn set_focused(&mut self, focused: bool) {
         self.0.borrow_mut().set_focused(focused);
+    }
+    fn layout(&mut self, bounds: Rect) {
+        self.0.borrow_mut().layout(bounds);
     }
 }

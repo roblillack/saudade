@@ -9,7 +9,7 @@ use winit::window::WindowBuilder;
 
 use crate::event::{Event, EventCtx, Key, Modifiers, MouseButton, NamedKey};
 use crate::font::Font;
-use crate::geometry::{Point, Size};
+use crate::geometry::{Point, Rect, Size};
 use crate::painter::Painter;
 use crate::theme::Theme;
 use crate::widget::Widget;
@@ -86,11 +86,12 @@ impl App {
             .expect("retrogui: failed to create softbuffer surface");
 
         let font = Font::load_system();
-        let logical_size = window_cfg.size;
+        let design_size = window_cfg.size;
 
         let mut physical = win.inner_size();
         let mut scale = win.scale_factor() as f32;
         resize_surface(&mut surface, physical);
+        relayout(&mut root, physical, scale, design_size);
 
         let mut cursor: Option<Point> = None;
         let mut needs_redraw = true;
@@ -106,16 +107,19 @@ impl App {
                         WindowEvent::Resized(new_size) => {
                             physical = new_size;
                             resize_surface(&mut surface, physical);
+                            relayout(&mut root, physical, scale, design_size);
                             needs_redraw = true;
                         }
                         WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
                             scale = scale_factor as f32;
                             physical = win.inner_size();
                             resize_surface(&mut surface, physical);
+                            relayout(&mut root, physical, scale, design_size);
                             needs_redraw = true;
                         }
                         WindowEvent::CursorMoved { position, .. } => {
-                            let (origin_x, origin_y) = origin(logical_size, scale, physical);
+                            let content = root.bounds().into();
+                            let (origin_x, origin_y) = origin(content, scale, physical);
                             let pos = physical_to_logical(position, scale, origin_x, origin_y);
                             cursor = Some(pos);
                             dispatch(
@@ -205,7 +209,8 @@ impl App {
                             }
                         }
                         WindowEvent::RedrawRequested => {
-                            let (origin_x, origin_y) = origin(logical_size, scale, physical);
+                            let content = root.bounds().into();
+                            let (origin_x, origin_y) = origin(content, scale, physical);
                             let mut surface_buf = surface
                                 .buffer_mut()
                                 .expect("retrogui: failed to acquire surface buffer");
@@ -318,6 +323,37 @@ fn origin(logical: Size, scale: f32, physical: PhysicalSize<u32>) -> (i32, i32) 
     let ox = ((physical.width as i32 - content_w) / 2).max(0);
     let oy = ((physical.height as i32 - content_h) / 2).max(0);
     (ox, oy)
+}
+
+/// Re-run the widget tree's layout for the current buffer size.
+///
+/// We pass the larger of the actual window's logical inner size and the
+/// configured design size as the parent bounds. Layout-aware roots (like
+/// `Column`) honor those bounds and flex; absolute-positioned roots (like
+/// `Container`) ignore the call and stay at their construction size, which
+/// the runtime then centers via the `origin` helper.
+fn relayout(
+    root: &mut Box<dyn Widget>,
+    physical: PhysicalSize<u32>,
+    scale: f32,
+    design_size: Size,
+) {
+    let s = scale.max(0.01);
+    let logical_w = (physical.width as f32 / s).round() as i32;
+    let logical_h = (physical.height as f32 / s).round() as i32;
+    let bounds = Rect::new(
+        0,
+        0,
+        logical_w.max(design_size.w),
+        logical_h.max(design_size.h),
+    );
+    root.layout(bounds);
+}
+
+impl From<Rect> for Size {
+    fn from(r: Rect) -> Size {
+        Size::new(r.w, r.h)
+    }
 }
 
 fn physical_to_logical(

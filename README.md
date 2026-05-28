@@ -84,7 +84,7 @@ to an object-oriented UI framework.
 | painter   | `Painter` — drawing primitives + Win 3.1 chrome helpers         |
 | font      | `Font` — system font lookup + glyph rasterization               |
 | widget    | `Widget` trait (paint / event / focus / overlay hooks)          |
-| widgets   | `Container`, `Label`, `Button`, `Bevel`, `Image`, `MenuBar`, `Menu`, `MenuItem`, `TextEditor` |
+| widgets   | `Container`, `Column`, `Label`, `Button`, `Bevel`, `Image`, `MenuBar`, `Menu`, `MenuItem`, `TextEditor` |
 | app       | `App`, `WindowConfig` — runtime entry point                     |
 
 Everything user-facing is re-exported from the crate root; you generally
@@ -214,6 +214,40 @@ border, navy/white selection, 11pt text. Pass an alternative via
 
 All widgets implement `Widget` and own their own state. Coordinates are
 always in logical pixels.
+
+### Layout vs. absolute positioning
+
+retrogui ships with two top-level container styles:
+
+* **`Container`** — children are placed at absolute logical-pixel positions.
+  This is what you want for *dialogs* (about boxes, simple alerts) that
+  have a fixed design size and shouldn't reflow. If the OS gives the
+  window a larger buffer than the design, the runtime centers the
+  Container and fills the surroundings with `theme.background`.
+* **`Column`** — children are stacked top-to-bottom and *flex* with the
+  window. Each child is either `add_fixed(widget, height)` (takes a
+  declared height) or `add_fill(widget)` (shares whatever space is left
+  over). On every window resize, the runtime calls `layout` on the root
+  widget; `Column` propagates that to its children, so a menu bar stays
+  pinned to the top and a text editor below it grows with the window.
+
+Widgets opt into layout by overriding `Widget::layout(&mut self, bounds:
+Rect)`. The built-in `MenuBar` and `TextEditor` both override it (they
+store the new rect and rebuild any cached geometry). Widgets that don't
+override `layout` keep the position they were given at construction —
+which is exactly what `Container`'s children want.
+
+```rust
+// Notepad layout: menu bar pinned to the top, editor fills the rest.
+let mut root = Column::new()
+    .with_background(Color::WHITE)
+    .add_fixed(menu_bar, MENU_BAR_H)
+    .add_fill(text_editor);
+root.focus_first();
+```
+
+`Column` also handles capture, focus, accelerator routing, and the
+overlay pass — same contract as `Container`.
 
 ### `Container`
 
@@ -417,6 +451,7 @@ pub trait Widget {
     fn focusable(&self) -> bool { false }
     fn set_focused(&mut self, _focused: bool) {}
     fn accepts_accelerators(&self) -> bool { false }
+    fn layout(&mut self, _bounds: Rect) {}
 }
 ```
 
@@ -434,6 +469,10 @@ pub trait Widget {
   this to show/hide a cursor, commit pending input, etc.
 * `accepts_accelerators` makes the widget receive keyboard events even
   without focus — used by menu bars for Alt+letter combos.
+* `layout` is called by a layout-aware parent (e.g., `Column`) whenever
+  the available rect changes. Widgets used in absolutely-positioned
+  layouts ignore it; flexible widgets store the new rect and propagate
+  it to their own children.
 
 Minimal custom widget:
 
@@ -563,15 +602,19 @@ transformation to physical pixels itself.
   fontdue. No upscale, no resample, no blur.
 
 When the window is resized larger than the design size, **content does
-not stretch**. It stays at its natural logical size; the runtime
-centers it and fills the surroundings with `theme.background`. This
-matches retrogui's philosophy: resizing a dialog reflows content, it
-doesn't zoom it.
+not stretch** — it stays at its natural logical size. What happens
+around it depends on the root widget:
 
-Reflow itself is per-widget; built-in widgets are absolutely positioned
-today, so they stay put. A constraints-based layout pass (Column / Row /
-Grid) is on the roadmap and will fit on top of this scale model
-without breaking existing widget code.
+* a `Container` (absolute positioning) keeps its design size; the
+  runtime centers it and fills the surroundings with `theme.background`,
+  so dialogs always look the same regardless of window size;
+* a `Column` (layout container) receives the new bounds via
+  `Widget::layout` and reflows its children so the window's chrome and
+  content fill the available space — pixels stay the same physical size
+  but, e.g., the editor grows wider and taller.
+
+Resize **never** scales pixels — it only changes how much space is
+available for layout decisions.
 
 Trade-off to be aware of: at non-integer scale factors (1.25, 1.5,…) a
 1-logical-pixel chrome line can land on a y-coordinate where the
@@ -662,7 +705,7 @@ your head.
 
 Things that would fit retrogui's spirit but aren't there yet:
 
-* `Column` / `Row` / `Grid` containers with constraints-based layout
+* `Row` and `Grid` containers (sibling to the existing `Column`)
 * `Checkbox`, `RadioButton`, single-line `TextBox`, `ListBox`
 * Multi-line / wrapping `Label`
 * Selections, undo, and clipboard in `TextEditor`

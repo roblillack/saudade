@@ -537,6 +537,13 @@ impl Widget for MenuBar {
     fn accepts_accelerators(&self) -> bool {
         true
     }
+
+    fn layout(&mut self, bounds: Rect) {
+        self.rect = bounds;
+        // Force the cached label rects to be rebuilt on the next paint —
+        // they were measured against the previous width.
+        self.cache = Cache::default();
+    }
 }
 
 impl MenuBar {

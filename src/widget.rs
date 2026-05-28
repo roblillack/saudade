@@ -49,4 +49,13 @@ pub trait Widget {
     fn accepts_accelerators(&self) -> bool {
         false
     }
+
+    /// Position the widget inside the rectangle the parent has allocated.
+    ///
+    /// Layout containers (`Column`, etc.) call this to tell each child where
+    /// it lives now; the widget should store the rect and propagate to its
+    /// own children. The default is a no-op: widgets with absolute, fixed
+    /// positions (the ones in retrofetch's about box) ignore the call and
+    /// stay where they were placed at construction.
+    fn layout(&mut self, _bounds: Rect) {}
 }

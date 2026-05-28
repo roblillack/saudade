@@ -1,5 +1,6 @@
 mod bevel;
 mod button;
+mod column;
 mod container;
 mod image;
 mod label;
@@ -8,6 +9,7 @@ mod text_editor;
 
 pub use bevel::Bevel;
 pub use button::Button;
+pub use column::Column;
 pub use container::Container;
 pub use image::Image;
 pub use label::Label;

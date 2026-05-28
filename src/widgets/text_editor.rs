@@ -345,6 +345,12 @@ impl Widget for TextEditor {
     fn set_focused(&mut self, focused: bool) {
         self.focused = focused;
     }
+
+    fn layout(&mut self, bounds: Rect) {
+        self.rect = bounds;
+        // Re-clamp scroll so a smaller viewport still shows the cursor.
+        self.ensure_cursor_visible();
+    }
 }
 
 /// Convert a logical character index into a byte index inside a UTF-8 line.
