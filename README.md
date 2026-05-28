@@ -405,20 +405,20 @@ widget below — typing in an open menu doesn't leak into the editor.
 
 **Popups live in their own window.** When a menu opens, the runtime
 spawns a borderless window for the popup, sized exactly to its
-contents.
+contents and behaving like Chrome / Firefox menus on each backend:
 
-* **X11**: the popup is an *override-redirect* window with the
-  `_NET_WM_WINDOW_TYPE_DROPDOWN_MENU` hint. The window manager is
-  bypassed entirely, the popup appears instantly at the requested
-  position and size, and can extend beyond the main window's edges —
-  the same path Chrome and Firefox take.
-* **Wayland**: winit (as of 0.30) doesn't implement `xdg_popup` in its
-  Wayland backend, so the popup falls back to a regular `xdg_toplevel`
-  whose position is chosen by the compositor. The dropdown still
-  works, but it isn't anchored to the menu bar and is subject to
-  compositor placement / decoration rules. Native Wayland popup
-  support is on the roadmap and will land when winit adds it (or via
-  smithay-client-toolkit if we drop down to raw Wayland).
+* **X11** (through winit): an *override-redirect* window with the
+  `_NET_WM_WINDOW_TYPE_DROPDOWN_MENU` hint. The WM is bypassed
+  entirely, so the popup appears instantly at the requested position
+  and size and can extend beyond the main window's edges. The runtime
+  also re-anchors it via `Window::set_outer_position` whenever the
+  main window emits a `Moved` event, so the popup follows window
+  drags.
+* **Wayland** (through smithay-client-toolkit): a real `xdg_popup`
+  surface created with an `xdg_positioner` anchored to the parent
+  surface. The compositor handles placement, follow-on-drag, and
+  auto-dismiss (sending `popup_done`, which we translate into a
+  synthesized Escape).
 
 The popup is dismissed by clicking outside it (the main window
 receives the click and the menu folds up), pressing Escape, or firing
@@ -690,6 +690,24 @@ You can have at most one `App` per process today; multi-window support
 is on the roadmap.
 
 
+## Backends
+
+retrogui picks the windowing backend at startup based on the session:
+
+* If `WAYLAND_DISPLAY` is set and non-empty, the runtime talks **pure
+  smithay-client-toolkit** — no winit on the Wayland code path.
+  This is what gets us real `xdg_popup` popups and lets us drop
+  winit's `wayland-csd-adwaita` and `wayland-dlopen` features from
+  the dependency tree.
+* Otherwise (X11, including XWayland when `WAYLAND_DISPLAY` is unset)
+  the runtime drives winit 0.30 with only the `x11` feature enabled.
+  Popups are X11 override-redirect windows.
+
+The widget tree, painter, fonts, clipboard, theme, and every public
+API are identical across both paths — only `app.rs` + `wayland.rs`
+differ.
+
+
 ## DPI and resizing
 
 Widgets always work in **logical pixels**. The library handles the
@@ -814,9 +832,6 @@ Things that would fit retrogui's spirit but aren't there yet:
 * Horizontal scrolling in `TextEditor` (a horizontal `ScrollBar` is
   already implemented; the editor just doesn't ride it yet)
 * Mouse-wheel scroll events
-* Native Wayland `xdg_popup` support — currently popups fall back to
-  `xdg_toplevel` on Wayland because winit doesn't implement popup
-  surfaces yet. X11 already uses override-redirect for proper menus.
 * Multi-line / wrapping `Label`
 * Undo / redo in `TextEditor`
 * Save-As / Open file dialogs

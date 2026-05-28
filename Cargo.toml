@@ -4,8 +4,16 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-winit = "0.30"
+# winit drives X11 only. We bypass it entirely on Wayland sessions and
+# talk to the compositor through smithay-client-toolkit, which gives us
+# real xdg_popup and proper window placement. Disabling winit's Wayland
+# features drops `wayland-csd-adwaita` and `wayland-dlopen` from the
+# tree as a side benefit.
+winit = { version = "0.30", default-features = false, features = ["rwh_06", "x11"] }
 softbuffer = "0.4"
+smithay-client-toolkit = "0.19"
+wayland-client = "0.31"
+wayland-protocols = { version = "0.32", features = ["client"] }
 fontdue = "0.8"
 fontdb = "0.16"
 arboard = { version = "3", default-features = false, features = ["wayland-data-control"] }

@@ -33,6 +33,7 @@ mod font;
 mod geometry;
 mod painter;
 mod theme;
+mod wayland;
 mod widget;
 mod widgets;
 

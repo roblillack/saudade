@@ -76,6 +76,14 @@ impl App {
     }
 
     pub fn run(self) {
+        if is_wayland_session() {
+            crate::wayland::run(self);
+            return;
+        }
+        self.run_winit();
+    }
+
+    fn run_winit(self) {
         let event_loop = EventLoop::new().expect("retrogui: failed to create event loop");
         event_loop.set_control_flow(ControlFlow::Wait);
 
@@ -84,6 +92,16 @@ impl App {
             .run_app(&mut handler)
             .expect("retrogui: event loop error");
     }
+
+    pub(crate) fn into_parts(self) -> (WindowConfig, Theme, Box<dyn Widget>) {
+        (self.window, self.theme, self.root)
+    }
+}
+
+fn is_wayland_session() -> bool {
+    std::env::var_os("WAYLAND_DISPLAY")
+        .map(|v| !v.is_empty())
+        .unwrap_or(false)
 }
 
 /// All persistent runtime state. Constructed at startup; resources that
