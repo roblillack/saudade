@@ -401,40 +401,72 @@ application-level keybindings.
 
 ### `TextEditor`
 
-A minimal multi-line text editor: sunken white field, vertical cursor,
-basic editing and navigation. Designed for system-utility editors
-(Notepad-style); selections, undo, word wrap, and clipboard come later.
+A minimal multi-line text editor: sunken white field, monospace text,
+vertical cursor, selection, and cut/copy/paste against the OS
+clipboard. Designed for system-utility editors (Notepad-style); undo
+and word wrap come later.
 
 ```rust
 let mut editor = TextEditor::new(Rect::new(4, 24, 512, 312))
-    .with_font_size(11.0);
-editor.set_text("Hello\nWorld");
+    .with_font_size(11.0)
+    .with_text("Hello\nWorld");
 
 let text: String = editor.text();
 ```
 
+The editor renders with the monospace font loaded by the runtime
+(Consolas / Courier / Liberation Mono / DejaVu Sans Mono, in that
+preference order). The rest of the UI (menu labels, dialog text) keeps
+the proportional default — pick whichever font you want per call via
+`Painter::text` vs `Painter::mono_text`.
+
 Editing operations:
 
-| Input          | Effect                                  |
-|----------------|-----------------------------------------|
-| typing         | inserts the character                   |
-| Backspace      | deletes the character before the cursor (joins lines at column 0) |
-| Delete         | deletes the character after the cursor (joins the next line at end-of-line) |
-| Enter          | splits the line                         |
-| ←  /  →        | move cursor one character               |
-| ↑  /  ↓        | move cursor one line, clamping column   |
-| Home / End     | jump to line start / end                |
-| left click     | place the cursor at the click           |
+| Input               | Effect                                         |
+|---------------------|------------------------------------------------|
+| typing              | inserts the character (replaces selection)     |
+| Backspace           | deletes the previous char or the selection     |
+| Delete              | deletes the next char or the selection         |
+| Enter               | splits the line (replacing the selection)      |
+| ← / →               | move cursor one character                      |
+| ↑ / ↓               | move cursor one line, clamping column          |
+| Home / End          | jump to line start / end                       |
+| Shift + any move    | extends the selection                          |
+| Ctrl + A            | select all                                     |
+| Ctrl + C            | copy selection to the OS clipboard             |
+| Ctrl + X            | cut selection to the OS clipboard              |
+| Ctrl + V            | paste at the cursor (replaces selection)       |
+| left click          | place the cursor                               |
+| drag with left      | extend the selection                           |
 
-The editor advertises `focusable() = true`. Clicking focuses it; the
-cursor only renders while focused. Container's vertical scroll follows
-the cursor automatically — there is no scroll bar yet.
+Selected text renders with `theme.highlight_bg` (navy) behind it and
+`theme.highlight_text` (white) on top. Multi-line selections show a
+small visual continuation past end-of-line so the band looks unbroken.
+
+Programmatic methods mirror the keyboard shortcuts so menu items can
+invoke the same operations:
+
+```rust
+editor.cut();
+editor.copy();
+editor.paste();
+editor.select_all();
+```
+
+The clipboard handle is lazily initialized via `arboard`; in headless
+environments where the OS clipboard isn't reachable, `copy`/`cut`/
+`paste` simply become no-ops — editing still works. On Wayland sessions
+arboard is built with the `wayland-data-control` feature so it speaks
+the native `wlr-data-control` protocol; clipboard exchange with other
+Wayland-native apps works without needing XWayland.
 
 `TextEditor` keeps content as `Vec<String>` (one entry per line) and
 tracks `(row, col)` in *characters*, not bytes — multi-byte UTF-8 is
 handled correctly. Per-character widths are cached during paint so a
 click can be mapped to a column position without a `Painter` at event
-time.
+time. Clicking focuses the widget; the cursor only renders while
+focused; vertical scroll follows the cursor automatically (no scroll
+bar yet).
 
 
 ## The `Widget` trait
@@ -547,6 +579,14 @@ means no font was found, and the painter silently skips text.
 
 The runtime calls `Font::load_system()` once at startup and hands the
 font reference to every `Painter` it constructs.
+
+A monospace counterpart is loaded the same way via
+`Font::load_monospace`, preferring Lucida Console → Consolas → Courier
+New → Courier → Liberation Mono → DejaVu Sans Mono → Menlo → Monaco. If
+none of those match, fontdb's monospace flag is used as a fallback.
+`Painter::mono_text` / `Painter::measure_mono_text` use that font;
+`Painter::text` / `Painter::measure_text` keep using the proportional
+default.
 
 retrogui does **not** ship a bundled bitmap font, so its text rendering
 inherits the local system font. The Win 3.1 chrome still looks right,
@@ -708,7 +748,7 @@ Things that would fit retrogui's spirit but aren't there yet:
 * `Row` and `Grid` containers (sibling to the existing `Column`)
 * `Checkbox`, `RadioButton`, single-line `TextBox`, `ListBox`
 * Multi-line / wrapping `Label`
-* Selections, undo, and clipboard in `TextEditor`
+* Undo / redo in `TextEditor`
 * Save-As / Open file dialogs
 * Optional bitmap fonts for fully retro-faithful text
 * Multi-window support

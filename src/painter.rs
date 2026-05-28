@@ -25,7 +25,13 @@ pub struct Painter<'a> {
     /// resized larger than the design — surroundings become clean letterbox.
     origin_x: i32,
     origin_y: i32,
+    /// Default proportional font, used by `text`/`text_centered`/etc. Most
+    /// widgets pick this up via the `Theme`.
     font: Option<&'a Font>,
+    /// Fixed-width font, used by text-editor widgets that need predictable
+    /// per-character advances. May be the same physical face as `font` on
+    /// systems where no dedicated monospace face was discovered.
+    mono_font: Option<&'a Font>,
 }
 
 impl<'a> Painter<'a> {
@@ -37,6 +43,7 @@ impl<'a> Painter<'a> {
         origin_x: i32,
         origin_y: i32,
         font: Option<&'a Font>,
+        mono_font: Option<&'a Font>,
     ) -> Self {
         Self {
             pixels,
@@ -46,6 +53,7 @@ impl<'a> Painter<'a> {
             origin_x,
             origin_y,
             font,
+            mono_font,
         }
     }
 
@@ -59,6 +67,10 @@ impl<'a> Painter<'a> {
 
     pub fn font(&self) -> Option<&Font> {
         self.font
+    }
+
+    pub fn mono_font(&self) -> Option<&Font> {
+        self.mono_font
     }
 
     /// Snap a logical-pixel coordinate (edge or position) to a physical pixel.
@@ -229,6 +241,25 @@ impl<'a> Painter<'a> {
 
     pub fn measure_text(&self, text: &str, size: f32) -> Size {
         let Some(font) = self.font else {
+            return Size::new(0, 0);
+        };
+        let (w, h) = font.measure(text, size);
+        Size::new(w.ceil() as i32, h.ceil() as i32)
+    }
+
+    /// Draw text using the monospace font. Returns immediately if no
+    /// monospace font is available — the caller should be prepared for
+    /// `measure_mono_text` to return zero in that case.
+    pub fn mono_text(&mut self, x: i32, y: i32, text: &str, size: f32, color: Color) {
+        let Some(font) = self.mono_font else { return };
+        let x_phys = self.snap(x) as f32;
+        let y_phys = self.snap(y) as f32;
+        let size_phys = size * self.scale;
+        font.draw_phys(self, text, x_phys, y_phys, size_phys, color);
+    }
+
+    pub fn measure_mono_text(&self, text: &str, size: f32) -> Size {
+        let Some(font) = self.mono_font else {
             return Size::new(0, 0);
         };
         let (w, h) = font.measure(text, size);

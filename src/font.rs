@@ -15,10 +15,7 @@ impl Font {
     /// Try to load a system sans-serif font. Returns `None` if no candidate
     /// face could be loaded — text drawing then becomes a no-op.
     pub fn load_system() -> Option<Self> {
-        let mut db = fontdb::Database::new();
-        db.load_system_fonts();
-
-        const FAMILIES: &[&str] = &[
+        const SANS_FAMILIES: &[&str] = &[
             "MS Sans Serif",
             "Microsoft Sans Serif",
             "Tahoma",
@@ -29,28 +26,24 @@ impl Font {
             "DejaVu Sans",
             "Liberation Sans",
         ];
+        load_family_chain(SANS_FAMILIES, false)
+    }
 
-        for family in FAMILIES {
-            let query = fontdb::Query {
-                families: &[fontdb::Family::Name(family)],
-                weight: fontdb::Weight::NORMAL,
-                stretch: fontdb::Stretch::Normal,
-                style: fontdb::Style::Normal,
-            };
-            if let Some(id) = db.query(&query)
-                && let Some(font) = load_face(&db, id)
-            {
-                return Some(Self { inner: font });
-            }
-        }
-
-        for face in db.faces() {
-            if let Some(font) = load_face(&db, face.id) {
-                return Some(Self { inner: font });
-            }
-        }
-
-        None
+    /// Try to load a fixed-width font for plain-text editors / code displays.
+    /// Walks the same set of fallbacks Notepad and friends used through the
+    /// nineties down to modern Linux replacements.
+    pub fn load_monospace() -> Option<Self> {
+        const MONO_FAMILIES: &[&str] = &[
+            "Lucida Console",
+            "Consolas",
+            "Courier New",
+            "Courier",
+            "Liberation Mono",
+            "DejaVu Sans Mono",
+            "Menlo",
+            "Monaco",
+        ];
+        load_family_chain(MONO_FAMILIES, true)
     }
 
     /// Measure a single line of text at the given pixel size. Returns
@@ -110,4 +103,47 @@ fn load_face(db: &fontdb::Database, id: fontdb::ID) -> Option<fontdue::Font> {
     db.with_face_data(id, |bytes, _| data = Some(bytes.to_vec()));
     let data = data?;
     fontdue::Font::from_bytes(data, fontdue::FontSettings::default()).ok()
+}
+
+/// Search `db` for the first family name in `families` that resolves to a
+/// loadable face. When `monospace_fallback` is true, after exhausting the
+/// named families the search also accepts any face whose face record claims
+/// monospace — useful so we don't accidentally drop into a proportional font
+/// when none of the well-known mono families are installed.
+fn load_family_chain(families: &[&str], monospace_fallback: bool) -> Option<Font> {
+    let mut db = fontdb::Database::new();
+    db.load_system_fonts();
+
+    for family in families {
+        let query = fontdb::Query {
+            families: &[fontdb::Family::Name(family)],
+            weight: fontdb::Weight::NORMAL,
+            stretch: fontdb::Stretch::Normal,
+            style: fontdb::Style::Normal,
+        };
+        if let Some(id) = db.query(&query)
+            && let Some(font) = load_face(&db, id)
+        {
+            return Some(Font { inner: font });
+        }
+    }
+
+    if monospace_fallback {
+        for face in db.faces() {
+            if face.monospaced
+                && let Some(font) = load_face(&db, face.id)
+            {
+                return Some(Font { inner: font });
+            }
+        }
+    }
+
+    // Last-ditch: any face we can find. Better something than nothing.
+    for face in db.faces() {
+        if let Some(font) = load_face(&db, face.id) {
+            return Some(Font { inner: font });
+        }
+    }
+
+    None
 }

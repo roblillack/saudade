@@ -86,6 +86,7 @@ impl App {
             .expect("retrogui: failed to create softbuffer surface");
 
         let font = Font::load_system();
+        let mono_font = Font::load_monospace();
         let design_size = window_cfg.size;
 
         let mut physical = win.inner_size();
@@ -222,6 +223,7 @@ impl App {
                                 origin_x,
                                 origin_y,
                                 font.as_ref(),
+                                mono_font.as_ref(),
                             );
                             // Clear the whole physical buffer so any letterbox
                             // area around the content (when the window has

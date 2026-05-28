@@ -63,12 +63,35 @@ fn main() {
         ))
         .add_menu(Menu::new(
             "&Edit",
-            // Cut/Copy/Paste need clipboard integration we don't have yet —
-            // the entries are here for the period-correct chrome.
             vec![
-                MenuItem::action("Cu&t", |_| {}),
-                MenuItem::action("&Copy", |_| {}),
-                MenuItem::action("&Paste", |_| {}),
+                MenuItem::action("Cu&t", {
+                    let editor = editor.clone();
+                    move |cx| {
+                        editor.borrow_mut().cut();
+                        cx.request_paint();
+                    }
+                }),
+                MenuItem::action("&Copy", {
+                    let editor = editor.clone();
+                    move |_cx| {
+                        editor.borrow_mut().copy();
+                    }
+                }),
+                MenuItem::action("&Paste", {
+                    let editor = editor.clone();
+                    move |cx| {
+                        editor.borrow_mut().paste();
+                        cx.request_paint();
+                    }
+                }),
+                MenuItem::separator(),
+                MenuItem::action("Select &All", {
+                    let editor = editor.clone();
+                    move |cx| {
+                        editor.borrow_mut().select_all();
+                        cx.request_paint();
+                    }
+                }),
             ],
         ))
         .add_menu(Menu::new(
