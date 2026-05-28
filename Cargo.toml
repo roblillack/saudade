@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-winit = { version = "0.29", features = ["rwh_05"] }
+winit = "0.30"
 softbuffer = "0.4"
 fontdue = "0.8"
 fontdb = "0.16"

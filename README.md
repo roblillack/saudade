@@ -374,12 +374,14 @@ while a `TextEditor` holds keyboard focus.
 
 **Mouse behavior.** A single click on a top-level label opens the menu;
 moving the cursor over items highlights them, and a second click on an
-item fires it. The press-drag-release gesture also works: press on a
-top-level label, drag down through the popup, release on an item to
-fire it without an intermediate click. Releasing anywhere that isn't
-an action just disarms the gesture and leaves the menu open. Sliding
-the cursor along the bar with a menu open swaps between top-level
-menus. Click outside (or press Esc) to dismiss.
+item fires it. **A click that opens the menu without dragging
+pre-highlights the first action**, so the user can immediately fire it
+with Enter or keep arrow-navigating. The press-drag-release gesture
+also works: press on a top-level label, drag down through the popup,
+release on an item to fire it without an intermediate click.
+Releasing anywhere else just disarms the gesture and leaves the menu
+open. Sliding the cursor along the bar with a menu open swaps between
+top-level menus. Click outside (or press Esc) to dismiss.
 
 **Keyboard navigation** (active while a menu is open):
 
@@ -392,9 +394,35 @@ menus. Click outside (or press Esc) to dismiss.
 | letter          | fire the action whose mnemonic matches              |
 | Esc             | dismiss the menu                                    |
 
-Menus opened with Alt+letter pre-highlight their first action so Enter
-fires immediately. Menus opened by mouse click leave nothing highlighted
-until the cursor enters an item.
+Menus opened with Alt+letter (or arrow-switched left/right) always
+pre-highlight the **first** action of the newly opened menu — the
+previous highlight position never carries over. Click-to-open menus
+also pre-highlight the first item if the cursor never reached the
+popup before release; only drag-style opens leave nothing hovered.
+
+While a menu is active no keyboard event is forwarded to the focused
+widget below — typing in an open menu doesn't leak into the editor.
+
+**Popups live in their own window.** When a menu opens, the runtime
+spawns a borderless window for the popup, sized exactly to its
+contents.
+
+* **X11**: the popup is an *override-redirect* window with the
+  `_NET_WM_WINDOW_TYPE_DROPDOWN_MENU` hint. The window manager is
+  bypassed entirely, the popup appears instantly at the requested
+  position and size, and can extend beyond the main window's edges —
+  the same path Chrome and Firefox take.
+* **Wayland**: winit (as of 0.30) doesn't implement `xdg_popup` in its
+  Wayland backend, so the popup falls back to a regular `xdg_toplevel`
+  whose position is chosen by the compositor. The dropdown still
+  works, but it isn't anchored to the menu bar and is subject to
+  compositor placement / decoration rules. Native Wayland popup
+  support is on the roadmap and will land when winit adds it (or via
+  smithay-client-toolkit if we drop down to raw Wayland).
+
+The popup is dismissed by clicking outside it (the main window
+receives the click and the menu folds up), pressing Escape, or firing
+an item.
 
 `MenuBar::open(idx)` programmatically opens a menu — handy for custom
 application-level keybindings.
@@ -514,6 +542,7 @@ pub trait Widget {
     fn set_focused(&mut self, _focused: bool) {}
     fn accepts_accelerators(&self) -> bool { false }
     fn layout(&mut self, _bounds: Rect) {}
+    fn popup_request(&self) -> Option<PopupRequest> { None }
 }
 ```
 
@@ -535,6 +564,11 @@ pub trait Widget {
   the available rect changes. Widgets used in absolutely-positioned
   layouts ignore it; flexible widgets store the new rect and propagate
   it to their own children.
+* `popup_request` returns `Some` while the widget wants the runtime to
+  host a popup (e.g., menubar dropdowns) in its own top-level window.
+  Containers propagate it from their children; the runtime polls it
+  after each event burst and opens / repositions / closes the popup
+  window to match.
 
 Minimal custom widget:
 
@@ -780,6 +814,9 @@ Things that would fit retrogui's spirit but aren't there yet:
 * Horizontal scrolling in `TextEditor` (a horizontal `ScrollBar` is
   already implemented; the editor just doesn't ride it yet)
 * Mouse-wheel scroll events
+* Native Wayland `xdg_popup` support — currently popups fall back to
+  `xdg_toplevel` on Wayland because winit doesn't implement popup
+  surfaces yet. X11 already uses override-redirect for proper menus.
 * Multi-line / wrapping `Label`
 * Undo / redo in `TextEditor`
 * Save-As / Open file dialogs

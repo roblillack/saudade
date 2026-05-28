@@ -32,6 +32,15 @@ pub struct Painter<'a> {
     /// per-character advances. May be the same physical face as `font` on
     /// systems where no dedicated monospace face was discovered.
     mono_font: Option<&'a Font>,
+    /// `true` when this painter is drawing into a popup top-level window
+    /// rather than the main window. Widgets that maintain floating overlays
+    /// (menu popups, tooltips) inspect this in `paint_overlay` so they only
+    /// draw on the surface that actually hosts them.
+    popup_pass: bool,
+    /// Physical-pixel clip rectangle. When set, all draws are restricted to
+    /// pixels inside this rect. The runtime uses this to keep the popup
+    /// pass from leaking widget content past the popup's footprint.
+    clip: Option<(i32, i32, i32, i32)>,
 }
 
 impl<'a> Painter<'a> {
@@ -45,6 +54,25 @@ impl<'a> Painter<'a> {
         font: Option<&'a Font>,
         mono_font: Option<&'a Font>,
     ) -> Self {
+        Self::with_popup_pass(
+            pixels, width, height, scale, origin_x, origin_y, font, mono_font, false,
+        )
+    }
+
+    /// Like [`Painter::new`] but explicitly marks the painter as running
+    /// in a popup top-level window. Use this from the runtime when
+    /// rendering a separate popup surface.
+    pub fn with_popup_pass(
+        pixels: &'a mut [u32],
+        width: i32,
+        height: i32,
+        scale: f32,
+        origin_x: i32,
+        origin_y: i32,
+        font: Option<&'a Font>,
+        mono_font: Option<&'a Font>,
+        popup_pass: bool,
+    ) -> Self {
         Self {
             pixels,
             width,
@@ -54,6 +82,35 @@ impl<'a> Painter<'a> {
             origin_y,
             font,
             mono_font,
+            popup_pass,
+            clip: None,
+        }
+    }
+
+    pub fn is_popup_pass(&self) -> bool {
+        self.popup_pass
+    }
+
+    /// Restrict all subsequent drawing to a physical-pixel rectangle. Used
+    /// by the popup runtime to confine paint operations to the popup's
+    /// footprint inside its (often oversized) host window.
+    pub fn set_clip_phys(&mut self, x: i32, y: i32, w: i32, h: i32) {
+        self.clip = Some((x, y, x + w, y + h));
+    }
+
+    pub fn clear_clip(&mut self) {
+        self.clip = None;
+    }
+
+    fn clip_bounds(&self) -> (i32, i32, i32, i32) {
+        match self.clip {
+            Some((x0, y0, x1, y1)) => (
+                x0.max(0),
+                y0.max(0),
+                x1.min(self.width),
+                y1.min(self.height),
+            ),
+            None => (0, 0, self.width, self.height),
         }
     }
 
@@ -91,10 +148,11 @@ impl<'a> Painter<'a> {
         if w <= 0 || h <= 0 {
             return;
         }
-        let x0 = x.max(0);
-        let y0 = y.max(0);
-        let x1 = (x + w).min(self.width);
-        let y1 = (y + h).min(self.height);
+        let (cx0, cy0, cx1, cy1) = self.clip_bounds();
+        let x0 = x.max(cx0);
+        let y0 = y.max(cy0);
+        let x1 = (x + w).min(cx1);
+        let y1 = (y + h).min(cy1);
         for yy in y0..y1 {
             let row = (yy * self.width) as usize;
             for xx in x0..x1 {
@@ -109,7 +167,8 @@ impl<'a> Painter<'a> {
     pub(crate) fn blend_pixel_phys(&mut self, x: i32, y: i32, color: Color, alpha: u8) {
         let x = x + self.origin_x;
         let y = y + self.origin_y;
-        if x < 0 || y < 0 || x >= self.width || y >= self.height {
+        let (cx0, cy0, cx1, cy1) = self.clip_bounds();
+        if x < cx0 || y < cy0 || x >= cx1 || y >= cy1 {
             return;
         }
         if alpha == 0 {

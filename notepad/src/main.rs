@@ -5,8 +5,8 @@ use std::path::PathBuf;
 use std::rc::Rc;
 
 use retrogui::{
-    App, Color, Column, Event, EventCtx, Menu, MenuBar, MenuItem, Painter, Rect, TextEditor, Theme,
-    Widget, WindowConfig,
+    App, Color, Column, Event, EventCtx, Menu, MenuBar, MenuItem, Painter, PopupRequest, Rect,
+    TextEditor, Theme, Widget, WindowConfig,
 };
 
 const WINDOW_W: i32 = 520;
@@ -146,5 +146,8 @@ impl Widget for SharedEditor {
     }
     fn layout(&mut self, bounds: Rect) {
         self.0.borrow_mut().layout(bounds);
+    }
+    fn popup_request(&self) -> Option<PopupRequest> {
+        self.0.borrow().popup_request()
     }
 }

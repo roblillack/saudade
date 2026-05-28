@@ -2,7 +2,7 @@ use crate::event::{Event, EventCtx, Key, Modifiers, MouseButton, NamedKey};
 use crate::geometry::{Color, Point, Rect};
 use crate::painter::Painter;
 use crate::theme::Theme;
-use crate::widget::Widget;
+use crate::widget::{PopupRequest, Widget};
 
 const BAR_PADDING: i32 = 8;
 /// Top inset for the label baseline inside the bar. Tight enough that the
@@ -360,6 +360,13 @@ impl Widget for MenuBar {
     }
 
     fn paint_overlay(&mut self, painter: &mut Painter, theme: &Theme) {
+        // The popup lives in a separate top-level window — only draw it
+        // when the painter is running in popup-pass mode. In the main
+        // window's overlay pass we deliberately leave the popup area
+        // untouched so the runtime can place a real popup window there.
+        if !painter.is_popup_pass() {
+            return;
+        }
         let Some(menu_idx) = self.open else { return };
         let popup = match self.cache.popup {
             Some(p) => p,
@@ -477,15 +484,23 @@ impl Widget for MenuBar {
                     return;
                 }
                 self.drag_armed = false;
-                // Released over an item → fire it. Released anywhere else
-                // (the bar, outside) just disarms — the menu stays open so
-                // the user can keep navigating with a second click.
+                // Released over an item → fire it.
                 if let Some(item) = self.hit_item(*pos) {
                     self.fire(item, ctx);
                     self.open = None;
                     self.hovered_item = None;
                     ctx.request_paint();
+                    return;
                 }
+                // Click-without-drag (released back over the bar, no item
+                // ever hovered) → pre-highlight the first action so the
+                // user can fire it with Enter or keep arrow-navigating.
+                if self.hovered_item.is_none() && self.hit_label(*pos).is_some() {
+                    self.hovered_item = self.first_action();
+                    ctx.request_paint();
+                }
+                // Released somewhere else (dragged outside, then released):
+                // just disarm and leave the menu in its current state.
             }
             Event::PointerMove { pos } => {
                 if self.open.is_some() {
@@ -569,6 +584,23 @@ impl Widget for MenuBar {
         // they were measured against the previous width.
         self.cache = Cache::default();
     }
+
+    fn popup_request(&self) -> Option<PopupRequest> {
+        // Cache.popup is populated during paint; until the first paint
+        // completes after the menu opens, we have nothing to anchor.
+        let _ = self.open?;
+        let popup = self.cache.popup?;
+        // Include the L-shape drop shadow inside the popup window's bounds
+        // so it doesn't clip at the right/bottom edges.
+        Some(PopupRequest {
+            rect: Rect::new(
+                popup.x,
+                popup.y,
+                popup.w + SHADOW_SIZE,
+                popup.h + SHADOW_SIZE,
+            ),
+        })
+    }
 }
 
 impl MenuBar {
@@ -626,6 +658,8 @@ impl MenuBar {
     }
 
     /// Move to the previous / next top-level menu, keeping a dropdown open.
+    /// Always pre-highlights the first action of the newly opened menu — the
+    /// previous highlight position doesn't carry over.
     fn switch_top_level(&mut self, delta: i32, ctx: &mut EventCtx) {
         let Some(current) = self.open else { return };
         let n = self.menus.len() as i32;
@@ -635,7 +669,7 @@ impl MenuBar {
         let next = ((current as i32 + delta).rem_euclid(n)) as usize;
         if next != current {
             self.open = Some(next);
-            self.hovered_item = None;
+            self.hovered_item = self.first_action();
             ctx.request_paint();
         }
     }

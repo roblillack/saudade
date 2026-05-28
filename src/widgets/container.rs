@@ -2,7 +2,7 @@ use crate::event::{Event, EventCtx};
 use crate::geometry::{Color, Rect, Size};
 use crate::painter::Painter;
 use crate::theme::Theme;
-use crate::widget::Widget;
+use crate::widget::{PopupRequest, Widget};
 
 /// A flat collection of widgets at absolute positions inside a fixed-size area.
 ///
@@ -143,15 +143,24 @@ impl Widget for Container {
             return;
         }
 
-        // Keyboard events go first to every accelerator-accepting child (e.g.
-        // a MenuBar listening for Alt+letter), then to the focused widget.
-        // This lets the menu bar intercept Alt-key combos without stealing
-        // focus from text editors and the like.
+        // Keyboard events first go to every accelerator-accepting child
+        // (e.g. a MenuBar listening for Alt+letter). If any of those is
+        // *actively capturing* — typically a menubar with an open menu —
+        // the focused widget below is locked out: the menu owns the user's
+        // attention until it closes. This is what stops keystrokes from
+        // leaking into an editor while a menu is up.
         if event.is_keyboard() {
+            let mut accelerator_blocking = false;
             for (idx, child) in self.children.iter_mut().enumerate() {
                 if child.accepts_accelerators() && Some(idx) != self.focused {
                     child.event(event, ctx);
+                    if child.captures_pointer() {
+                        accelerator_blocking = true;
+                    }
                 }
+            }
+            if accelerator_blocking {
+                return;
             }
         }
 
@@ -189,5 +198,14 @@ impl Widget for Container {
 
     fn captures_pointer(&self) -> bool {
         self.captured.is_some()
+    }
+
+    fn popup_request(&self) -> Option<PopupRequest> {
+        for child in &self.children {
+            if let Some(req) = child.popup_request() {
+                return Some(req);
+            }
+        }
+        None
     }
 }

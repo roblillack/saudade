@@ -3,6 +3,18 @@ use crate::geometry::Rect;
 use crate::painter::Painter;
 use crate::theme::Theme;
 
+/// A widget asks the runtime to host its popup in a separate top-level
+/// window. The runtime polls `Widget::popup_request` after each event and
+/// matches the request against any existing popup window — opening,
+/// repositioning, or closing as needed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PopupRequest {
+    /// Popup's logical bounds in the *root widget's* coordinate space.
+    /// The runtime translates this into screen coordinates by adding the
+    /// main window's inner position and scaling by the current DPI.
+    pub rect: Rect,
+}
+
 /// The fundamental UI abstraction.
 ///
 /// A widget owns its state, draws itself, and reacts to typed input events.
@@ -58,4 +70,13 @@ pub trait Widget {
     /// positions (the ones in retrofetch's about box) ignore the call and
     /// stay where they were placed at construction.
     fn layout(&mut self, _bounds: Rect) {}
+
+    /// Ask the runtime to host a popup window for this widget. Returning
+    /// `Some` makes the runtime open (or move) a borderless top-level
+    /// window at the indicated logical-coord rect so the popup can extend
+    /// past the main window's edges. Container widgets propagate this from
+    /// their children. Default: no popup.
+    fn popup_request(&self) -> Option<PopupRequest> {
+        None
+    }
 }

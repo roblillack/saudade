@@ -2,7 +2,7 @@ use crate::event::{Event, EventCtx};
 use crate::geometry::{Color, Rect};
 use crate::painter::Painter;
 use crate::theme::Theme;
-use crate::widget::Widget;
+use crate::widget::{PopupRequest, Widget};
 
 /// Vertical layout container. Each child is given a horizontal slice of the
 /// column's bounds: either a *fixed* height it asked for, or it shares the
@@ -210,10 +210,17 @@ impl Widget for Column {
         }
 
         if event.is_keyboard() {
+            let mut accelerator_blocking = false;
             for (idx, child) in self.children.iter_mut().enumerate() {
                 if child.widget.accepts_accelerators() && Some(idx) != self.focused {
                     child.widget.event(event, ctx);
+                    if child.widget.captures_pointer() {
+                        accelerator_blocking = true;
+                    }
                 }
+            }
+            if accelerator_blocking {
+                return;
             }
         }
 
@@ -249,5 +256,14 @@ impl Widget for Column {
 
     fn captures_pointer(&self) -> bool {
         self.captured.is_some()
+    }
+
+    fn popup_request(&self) -> Option<PopupRequest> {
+        for child in &self.children {
+            if let Some(req) = child.widget.popup_request() {
+                return Some(req);
+            }
+        }
+        None
     }
 }
