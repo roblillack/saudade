@@ -65,6 +65,9 @@ impl App {
         } = self;
 
         let event_loop = EventLoop::new().expect("retrogui: failed to create event loop");
+        // Request the window in *logical* units. winit + the compositor pick
+        // the physical buffer size based on the monitor's scale_factor, so we
+        // get the right physical pixels for the design size on every DPI.
         let win = WindowBuilder::new()
             .with_title(&window_cfg.title)
             .with_inner_size(LogicalSize::new(
@@ -85,6 +88,7 @@ impl App {
         let logical_size = window_cfg.size;
 
         let mut physical = win.inner_size();
+        let mut scale = win.scale_factor() as f32;
         resize_surface(&mut surface, physical);
 
         let mut cursor: Option<Point> = None;
@@ -102,17 +106,15 @@ impl App {
                             resize_surface(&mut surface, physical);
                             needs_redraw = true;
                         }
-                        WindowEvent::ScaleFactorChanged { .. } => {
+                        WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
+                            scale = scale_factor as f32;
                             physical = win.inner_size();
                             resize_surface(&mut surface, physical);
                             needs_redraw = true;
                         }
                         WindowEvent::CursorMoved { position, .. } => {
-                            let (scale, origin_x, origin_y) =
-                                layout(logical_size, physical);
-                            let pos = physical_to_logical(
-                                position, scale, origin_x, origin_y,
-                            );
+                            let (origin_x, origin_y) = origin(logical_size, scale, physical);
+                            let pos = physical_to_logical(position, scale, origin_x, origin_y);
                             cursor = Some(pos);
                             dispatch(
                                 &mut root,
@@ -141,8 +143,7 @@ impl App {
                             dispatch(&mut root, &event, &mut needs_redraw, elwt);
                         }
                         WindowEvent::RedrawRequested => {
-                            let (scale, origin_x, origin_y) =
-                                layout(logical_size, physical);
+                            let (origin_x, origin_y) = origin(logical_size, scale, physical);
                             let mut surface_buf = surface
                                 .buffer_mut()
                                 .expect("retrogui: failed to acquire surface buffer");
@@ -155,8 +156,9 @@ impl App {
                                 origin_y,
                                 font.as_ref(),
                             );
-                            // Clear the whole physical buffer first so any
-                            // letterbox area outside the content shows the
+                            // Clear the whole physical buffer so any letterbox
+                            // area around the content (when the window has
+                            // been resized larger than the design) shows the
                             // theme background instead of garbage.
                             painter.fill(theme.background);
                             root.paint(&mut painter, &theme);
@@ -216,32 +218,25 @@ fn resize_surface(
         .expect("retrogui: failed to resize surface");
 }
 
-/// Decide how the logical design fits into the actual physical buffer.
-///
-/// We never stretch the content. We pick the largest integer scale where
-/// `logical × scale` fits in the buffer in both axes, then center it. The
-/// painter applies that scale and origin so chrome stays pixel-perfect
-/// regardless of fractional desktop scaling factors.
-fn layout(logical: Size, physical: PhysicalSize<u32>) -> (i32, i32, i32) {
-    let pw = physical.width.max(1) as i32;
-    let ph = physical.height.max(1) as i32;
-    let sx = (pw / logical.w.max(1)).max(1);
-    let sy = (ph / logical.h.max(1)).max(1);
-    let scale = sx.min(sy).max(1);
-    let content_w = logical.w * scale;
-    let content_h = logical.h * scale;
-    let origin_x = ((pw - content_w) / 2).max(0);
-    let origin_y = ((ph - content_h) / 2).max(0);
-    (scale, origin_x, origin_y)
+/// Center the design within the physical buffer. At the natural DPI the
+/// content fills the window exactly (origin = 0); only a resized-larger
+/// window produces a non-zero offset, and the surrounding area becomes
+/// background letterbox — content is never stretched.
+fn origin(logical: Size, scale: f32, physical: PhysicalSize<u32>) -> (i32, i32) {
+    let content_w = (logical.w as f32 * scale).round() as i32;
+    let content_h = (logical.h as f32 * scale).round() as i32;
+    let ox = ((physical.width as i32 - content_w) / 2).max(0);
+    let oy = ((physical.height as i32 - content_h) / 2).max(0);
+    (ox, oy)
 }
 
 fn physical_to_logical(
     pos: PhysicalPosition<f64>,
-    scale: i32,
+    scale: f32,
     origin_x: i32,
     origin_y: i32,
 ) -> Point {
-    let s = scale.max(1) as f64;
+    let s = scale.max(0.01) as f64;
     let x = ((pos.x - origin_x as f64) / s).floor() as i32;
     let y = ((pos.y - origin_y as f64) / s).floor() as i32;
     Point::new(x, y)

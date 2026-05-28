@@ -4,22 +4,25 @@ use crate::theme::Theme;
 
 /// Pixel-perfect 2D painter over an ARGB32 framebuffer.
 ///
-/// The painter exposes a *logical* coordinate space to widgets — the same
-/// design units you'd type in by hand. Internally it multiplies every
-/// coordinate by an integer `scale` and writes directly into the physical
-/// surface buffer, so output is always crisp: no nearest-neighbor upscale,
-/// no anti-aliased smudge at non-integer DPI scales.
+/// Widgets paint in **logical pixels**: density-independent design units. The
+/// painter applies the OS-reported scale factor (which may be fractional —
+/// 1.0, 1.25, 1.5, 2.0, …) and writes straight into the physical surface
+/// buffer. Rectangle edges are snapped independently so adjacent rectangles
+/// always share an exact physical-pixel boundary, which keeps Win 3.1 chrome
+/// crisp at every DPI. Text is rasterized once at its final physical size via
+/// fontdue — no resampling, no smudge.
 pub struct Painter<'a> {
     pixels: &'a mut [u32],
     /// Physical buffer width in pixels.
     width: i32,
     /// Physical buffer height in pixels.
     height: i32,
-    /// 1 logical pixel = `scale` × `scale` physical pixels. Always ≥ 1.
-    scale: i32,
+    /// Logical→physical scale. Equals winit's `scale_factor` for the current
+    /// monitor (always ≥ 1 in practice).
+    scale: f32,
     /// Physical-pixel offset of the logical origin within the buffer. The
-    /// runtime sets this to center the content when the window is larger than
-    /// `logical_size × scale`, so the surroundings become clean letterbox area.
+    /// runtime sets this to center the content when the window has been
+    /// resized larger than the design — surroundings become clean letterbox.
     origin_x: i32,
     origin_y: i32,
     font: Option<&'a Font>,
@@ -30,7 +33,7 @@ impl<'a> Painter<'a> {
         pixels: &'a mut [u32],
         width: i32,
         height: i32,
-        scale: i32,
+        scale: f32,
         origin_x: i32,
         origin_y: i32,
         font: Option<&'a Font>,
@@ -39,7 +42,7 @@ impl<'a> Painter<'a> {
             pixels,
             width,
             height,
-            scale: scale.max(1),
+            scale: scale.max(0.01),
             origin_x,
             origin_y,
             font,
@@ -50,7 +53,7 @@ impl<'a> Painter<'a> {
         Size::new(self.width, self.height)
     }
 
-    pub fn scale(&self) -> i32 {
+    pub fn scale(&self) -> f32 {
         self.scale
     }
 
@@ -58,16 +61,39 @@ impl<'a> Painter<'a> {
         self.font
     }
 
-    /// Fill the whole physical buffer with a solid color. Used by the runtime
-    /// to clear the surface (including any letterbox area outside the content).
+    /// Snap a logical-pixel coordinate (edge or position) to a physical pixel.
+    /// Edges of adjacent rectangles are snapped *independently*, so they
+    /// always meet on the same physical pixel without gaps or overlap.
+    fn snap(&self, logical: i32) -> i32 {
+        (logical as f32 * self.scale).round() as i32
+    }
+
+    /// Fill the whole physical buffer with a solid color.
     pub fn fill(&mut self, color: Color) {
         self.pixels.fill(color.0);
     }
 
-    /// Alpha-blend a physical-pixel pixel. Used by glyph rasterization.
-    /// Coordinates are relative to the logical origin (already pre-multiplied
-    /// by `scale` by [`Painter::text`]); this function applies the origin
-    /// offset and clips against the physical buffer.
+    /// Solid-fill a physical-pixel rectangle. Used internally after logical
+    /// coordinates have been snapped + offset.
+    fn fill_phys(&mut self, x: i32, y: i32, w: i32, h: i32, color: Color) {
+        if w <= 0 || h <= 0 {
+            return;
+        }
+        let x0 = x.max(0);
+        let y0 = y.max(0);
+        let x1 = (x + w).min(self.width);
+        let y1 = (y + h).min(self.height);
+        for yy in y0..y1 {
+            let row = (yy * self.width) as usize;
+            for xx in x0..x1 {
+                self.pixels[row + xx as usize] = color.0;
+            }
+        }
+    }
+
+    /// Alpha-blend a single physical-pixel pixel. Coordinates are relative to
+    /// the logical origin — the origin offset and clipping happen here. Used
+    /// by glyph rasterization in [`Font::draw_phys`].
     pub(crate) fn blend_pixel_phys(&mut self, x: i32, y: i32, color: Color, alpha: u8) {
         let x = x + self.origin_x;
         let y = y + self.origin_y;
@@ -97,40 +123,18 @@ impl<'a> Painter<'a> {
         self.pixels[idx] = 0xFF000000 | (r << 16) | (g << 8) | b;
     }
 
-    /// Solid-fill a physical-pixel rectangle. Coordinates are relative to the
-    /// logical origin; this helper applies the origin offset and clips.
-    fn fill_phys(&mut self, x: i32, y: i32, w: i32, h: i32, color: Color) {
-        if w <= 0 || h <= 0 {
-            return;
-        }
-        let x = x + self.origin_x;
-        let y = y + self.origin_y;
-        let x0 = x.max(0);
-        let y0 = y.max(0);
-        let x1 = (x + w).min(self.width);
-        let y1 = (y + h).min(self.height);
-        for yy in y0..y1 {
-            let row = (yy * self.width) as usize;
-            for xx in x0..x1 {
-                self.pixels[row + xx as usize] = color.0;
-            }
-        }
-    }
-
-    /// Logical-coordinate single-pixel write. One logical pixel becomes a
-    /// `scale`-pixel square in the physical buffer.
+    /// Logical-coordinate single-pixel write — a 1×1 logical pixel becomes the
+    /// physical area between (x, y) and (x+1, y+1) after edge snapping.
     pub fn pixel(&mut self, x: i32, y: i32, color: Color) {
-        self.fill_phys(x * self.scale, y * self.scale, self.scale, self.scale, color);
+        self.fill_rect(Rect::new(x, y, 1, 1), color);
     }
 
     pub fn fill_rect(&mut self, rect: Rect, color: Color) {
-        self.fill_phys(
-            rect.x * self.scale,
-            rect.y * self.scale,
-            rect.w * self.scale,
-            rect.h * self.scale,
-            color,
-        );
+        let x0 = self.origin_x + self.snap(rect.x);
+        let y0 = self.origin_y + self.snap(rect.y);
+        let x1 = self.origin_x + self.snap(rect.x + rect.w);
+        let y1 = self.origin_y + self.snap(rect.y + rect.h);
+        self.fill_phys(x0, y0, x1 - x0, y1 - y0, color);
     }
 
     pub fn h_line(&mut self, x: i32, y: i32, w: i32, color: Color) {
@@ -200,16 +204,17 @@ impl<'a> Painter<'a> {
         }
     }
 
-    /// Draw a line of text. `x` / `y` are in logical units; the painter
-    /// rasterizes glyphs at `size × scale` physical pixels.
-    pub fn text(&mut self, x: i32, y: i32, text: &str, size: f32, color: Color) -> i32 {
+    /// Draw a line of text. `x` / `y` and `size` are in logical units; the
+    /// painter rasterizes glyphs once at `size × scale` physical pixels for
+    /// crisp output regardless of fractional DPI.
+    pub fn text(&mut self, x: i32, y: i32, text: &str, size: f32, color: Color) {
         let Some(font) = self.font else {
-            return x;
+            return;
         };
-        let scale = self.scale as f32;
-        let advance =
-            font.draw_phys(self, text, (x * self.scale) as f32, (y * self.scale) as f32, size * scale, color);
-        (advance / self.scale as f32).round() as i32
+        let x_phys = self.snap(x) as f32;
+        let y_phys = self.snap(y) as f32;
+        let size_phys = size * self.scale;
+        font.draw_phys(self, text, x_phys, y_phys, size_phys, color);
     }
 
     pub fn text_centered(&mut self, rect: Rect, text: &str, size: f32, color: Color) {
