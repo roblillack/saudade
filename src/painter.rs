@@ -262,16 +262,27 @@ impl<'a> Painter<'a> {
         self.h_line(x, y + 1, w, theme.highlight);
     }
 
-    /// Full Win 3.1 button chrome: optional 1px black outer border (for the
-    /// default button), light-gray face, raised bevel, sunken when pressed.
+    /// Full Win 3.1 button chrome: every button has a 1px black outer border
+    /// with rounded (unpainted) corners; the default button gets an
+    /// additional sharp-cornered outer border. Light-gray face, raised
+    /// bevel, sunken when pressed.
     pub fn button(&mut self, rect: Rect, theme: &Theme, pressed: bool, default: bool) {
         if rect.w <= 0 || rect.h <= 0 {
             return;
         }
-        let mut inner = rect;
+        // Rounded black outline: skip the four corner pixels.
+        if rect.w > 2 {
+            self.h_line(rect.x + 1, rect.y, rect.w - 2, theme.border);
+            self.h_line(rect.x + 1, rect.bottom() - 1, rect.w - 2, theme.border);
+        }
+        if rect.h > 2 {
+            self.v_line(rect.x, rect.y + 1, rect.h - 2, theme.border);
+            self.v_line(rect.right() - 1, rect.y + 1, rect.h - 2, theme.border);
+        }
+        let mut inner = rect.inset(1);
         if default {
-            self.stroke_rect(rect, theme.border);
-            inner = rect.inset(1);
+            self.stroke_rect(inner, theme.border);
+            inner = inner.inset(1);
         }
         self.fill_rect(inner, theme.face);
         if pressed {
