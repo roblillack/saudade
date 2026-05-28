@@ -31,6 +31,7 @@ mod app;
 mod event;
 mod font;
 mod geometry;
+pub mod mock;
 mod painter;
 mod theme;
 mod wayland;

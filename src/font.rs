@@ -46,6 +46,16 @@ impl Font {
         load_family_chain(MONO_FAMILIES, true)
     }
 
+    /// Load a font directly from an in-memory TTF/OTF byte buffer. Use this
+    /// when you need deterministic glyph output independent of the host's
+    /// installed fonts — for example, snapshot tests that bundle the font
+    /// they render with via `include_bytes!`.
+    pub fn from_bytes(data: Vec<u8>) -> Option<Self> {
+        fontdue::Font::from_bytes(data, fontdue::FontSettings::default())
+            .ok()
+            .map(|inner| Self { inner })
+    }
+
     /// Measure a single line of text at the given pixel size. Returns
     /// (advance width, em height).
     pub fn measure(&self, text: &str, size: f32) -> (f32, f32) {

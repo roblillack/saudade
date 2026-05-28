@@ -17,3 +17,7 @@ wayland-protocols = { version = "0.32", features = ["client"] }
 fontdue = "0.8"
 fontdb = "0.16"
 arboard = { version = "3", default-features = false, features = ["wayland-data-control"] }
+png = "0.17"
+
+[dev-dependencies]
+insta = "1"
