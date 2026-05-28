@@ -39,6 +39,8 @@ use smithay_client_toolkit::{
 use wayland_client::globals::registry_queue_init;
 use wayland_client::protocol::{wl_keyboard, wl_output, wl_pointer, wl_seat, wl_shm, wl_surface};
 use wayland_client::{Connection, Dispatch, Proxy, QueueHandle};
+use wayland_protocols::xdg::dialog::v1::client::xdg_dialog_v1::XdgDialogV1;
+use wayland_protocols::xdg::dialog::v1::client::xdg_wm_dialog_v1::XdgWmDialogV1;
 use wayland_protocols::xdg::shell::client::xdg_positioner::{Anchor, Gravity, XdgPositioner};
 
 use crate::app::App;
@@ -68,6 +70,12 @@ pub(crate) fn run(app: App) {
         CompositorState::bind(&globals, &qh).expect("retrogui: wl_compositor not available");
     let xdg_shell = XdgShell::bind(&globals, &qh).expect("retrogui: xdg_shell not available");
     let shm = Shm::bind(&globals, &qh).expect("retrogui: wl_shm not available");
+    // Optional: the dialog protocol is a "staging" extension. Compositors
+    // that don't advertise it fall back to plain xdg_toplevel with
+    // set_parent — still a real top-level, just without the explicit
+    // "this is a dialog, hide min/max" hint.
+    let xdg_dialog_mgr: Option<XdgWmDialogV1> =
+        globals.bind::<XdgWmDialogV1, _, _>(&qh, 1..=1, ()).ok();
 
     let surface = compositor.create_surface(&qh);
     let window =
@@ -89,6 +97,7 @@ pub(crate) fn run(app: App) {
         compositor,
         shm,
         xdg_shell,
+        xdg_dialog_mgr,
 
         window,
         root,
@@ -130,6 +139,10 @@ struct State {
     compositor: CompositorState,
     shm: Shm,
     xdg_shell: XdgShell,
+    /// Optional `xdg_wm_dialog_v1` global. Compositors that advertise
+    /// the protocol (e.g. labwc) let us mark dialog toplevels so the
+    /// SSD chrome hides minimize/maximize and the parent gets dimmed.
+    xdg_dialog_mgr: Option<XdgWmDialogV1>,
 
     window: XdgWindow,
     root: Box<dyn Widget>,
@@ -170,21 +183,35 @@ struct State {
 /// dropdown-style popup for menus, or a real top-level dialog window.
 enum ChildSurface {
     Popup(Popup),
-    Dialog(XdgWindow),
+    Dialog {
+        window: XdgWindow,
+        /// `xdg_dialog_v1` ancillary object that flags the toplevel as
+        /// a (modal) dialog when the compositor advertises the
+        /// protocol. `None` when the global is unavailable.
+        dialog_v1: Option<XdgDialogV1>,
+    },
 }
 
 impl ChildSurface {
     fn wl_surface(&self) -> &wl_surface::WlSurface {
         match self {
             ChildSurface::Popup(p) => p.wl_surface(),
-            ChildSurface::Dialog(w) => w.wl_surface(),
+            ChildSurface::Dialog { window, .. } => window.wl_surface(),
         }
     }
 
     fn kind(&self) -> PopupKind {
         match self {
             ChildSurface::Popup(_) => PopupKind::Popup,
-            ChildSurface::Dialog(_) => PopupKind::Dialog,
+            ChildSurface::Dialog { .. } => PopupKind::Dialog,
+        }
+    }
+}
+
+impl Drop for ChildSurface {
+    fn drop(&mut self) {
+        if let ChildSurface::Dialog { dialog_v1: Some(d), .. } = self {
+            d.destroy();
         }
     }
 }
@@ -423,21 +450,32 @@ impl State {
                 // close button, and we ask it to enforce a fixed size
                 // (set_min_size == set_max_size disables the resize
                 // affordances). `set_parent` makes the dialog transient
-                // to the main window so the compositor groups them and
-                // — on most compositors — also hides minimize /
-                // maximize controls on the dialog.
+                // to the main window. If the compositor advertises
+                // `xdg_wm_dialog_v1` we additionally register the
+                // toplevel as a dialog and ask for modal semantics —
+                // that's what tells wlroots-based compositors (river,
+                // labwc, …) to drop the minimize / maximize controls
+                // from the SSD chrome.
                 let dialog_surface = self.compositor.create_surface(&self.qh);
                 let dialog = self.xdg_shell.create_window(
                     dialog_surface,
                     WindowDecorations::RequestServer,
                     &self.qh,
                 );
-                dialog.set_title("retrogui dialog");
+                let title = request.title.as_deref().unwrap_or("Dialog");
+                dialog.set_title(title);
                 dialog.set_parent(Some(&self.window));
                 dialog.set_min_size(Some((phys_w, phys_h)));
                 dialog.set_max_size(Some((phys_w, phys_h)));
+
+                let dialog_v1 = self.xdg_dialog_mgr.as_ref().map(|mgr| {
+                    let d = mgr.get_xdg_dialog(dialog.xdg_toplevel(), &self.qh, ());
+                    d.set_modal();
+                    d
+                });
+
                 dialog.commit();
-                ChildSurface::Dialog(dialog)
+                ChildSurface::Dialog { window: dialog, dialog_v1 }
             }
         };
 
@@ -561,7 +599,7 @@ impl WindowHandler for State {
         // widget's dismiss path runs (which clears `open`, the next
         // sync_popup tear-down then destroys the toplevel).
         if let Some(p) = self.popup.as_ref()
-            && let ChildSurface::Dialog(dialog) = &p.surface
+            && let ChildSurface::Dialog { window: dialog, .. } = &p.surface
             && dialog.xdg_toplevel() == window.xdg_toplevel()
         {
             let mods = self.modifiers;
@@ -604,7 +642,7 @@ impl WindowHandler for State {
         // proposes something else, accept it but keep at least 1px on
         // each axis.
         if let Some(p) = self.popup.as_mut()
-            && let ChildSurface::Dialog(dialog) = &p.surface
+            && let ChildSurface::Dialog { window: dialog, .. } = &p.surface
             && dialog.xdg_toplevel() == window.xdg_toplevel()
         {
             let w = configure
@@ -948,6 +986,33 @@ impl Dispatch<XdgPositioner, ()> for State {
         _state: &mut Self,
         _proxy: &XdgPositioner,
         _event: <XdgPositioner as Proxy>::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qhandle: &QueueHandle<Self>,
+    ) {
+    }
+}
+
+// The xdg_wm_dialog_v1 / xdg_dialog_v1 interfaces are sender-only: the
+// client makes requests but receives no events. Empty Dispatch impls
+// are enough to satisfy the queue-handle requirement on both objects.
+impl Dispatch<XdgWmDialogV1, ()> for State {
+    fn event(
+        _state: &mut Self,
+        _proxy: &XdgWmDialogV1,
+        _event: <XdgWmDialogV1 as Proxy>::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qhandle: &QueueHandle<Self>,
+    ) {
+    }
+}
+
+impl Dispatch<XdgDialogV1, ()> for State {
+    fn event(
+        _state: &mut Self,
+        _proxy: &XdgDialogV1,
+        _event: <XdgDialogV1 as Proxy>::Event,
         _data: &(),
         _conn: &Connection,
         _qhandle: &QueueHandle<Self>,

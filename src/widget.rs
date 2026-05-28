@@ -25,7 +25,7 @@ pub enum PopupKind {
 /// window. The runtime polls `Widget::popup_request` after each event and
 /// matches the request against any existing popup window — opening,
 /// repositioning, or closing as needed.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PopupRequest {
     /// Popup's logical bounds in the *root widget's* coordinate space.
     /// The runtime translates this into screen coordinates by adding the
@@ -35,6 +35,10 @@ pub struct PopupRequest {
     pub rect: Rect,
     /// What kind of host window the widget needs.
     pub kind: PopupKind,
+    /// OS-level window title. `Some` for [`PopupKind::Dialog`] so the
+    /// compositor / WM can label the toplevel; `None` for
+    /// [`PopupKind::Popup`], which has no decorations to label.
+    pub title: Option<String>,
 }
 
 /// The fundamental UI abstraction.

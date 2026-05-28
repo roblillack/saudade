@@ -1,10 +1,9 @@
 use crate::event::{Event, EventCtx, Key, MouseButton, NamedKey};
-use crate::geometry::{Color, Rect, Size};
+use crate::geometry::{Color, Point, Rect, Size};
 use crate::painter::Painter;
 use crate::theme::Theme;
 use crate::widget::{PopupKind, PopupRequest, Widget};
 
-const TITLE_BAR_H: i32 = 18;
 const BUTTON_W: i32 = 70;
 const BUTTON_H: i32 = 22;
 const ICON_SIZE: i32 = 32;
@@ -30,15 +29,23 @@ pub enum DialogIcon {
 ///
 /// When the dialog opens it reports a [`PopupRequest`] of kind
 /// [`PopupKind::Dialog`], so the runtime opens a real top-level window
-/// (transient to the main window) and the dialog paints itself into that
-/// window's surface — `paint_overlay` only draws while the popup-pass
-/// painter is active. Inside the widget tree the dialog still asserts
-/// `captures_pointer` and `accepts_accelerators`, so even events that
-/// somehow reach the main window are swallowed instead of leaking through
-/// to the widgets below.
+/// (transient to the main window, with server-side decorations) and the
+/// dialog paints its body into that window's surface — `paint_overlay`
+/// only draws while the popup-pass painter is active. The dialog's title
+/// rides along on the request and ends up as the OS window title, so we
+/// do **not** draw a client-side title bar. Inside the widget tree the
+/// dialog still asserts `captures_pointer` and `accepts_accelerators`,
+/// so any events that somehow reach the main window are swallowed
+/// instead of leaking through to the widgets below.
+///
+/// The window is centered over the parent at show-time. The position is
+/// then frozen for the lifetime of the open state — a parent resize
+/// while the dialog is up does **not** move the dialog.
 pub struct Dialog {
     size: Size,
-    /// Parent bounds last passed to `layout`; we center inside these.
+    /// Parent bounds last passed to `layout`. Used at show-time to pick
+    /// the initial centered position; ignored afterwards so a parent
+    /// resize doesn't yank the dialog around.
     parent_bounds: Rect,
     open: bool,
     title: String,
@@ -47,12 +54,18 @@ pub struct Dialog {
     button_pressed: bool,
     button_armed: bool,
     on_dismiss: Option<DismissHandler>,
+    /// Top-left corner of the dialog in the parent's widget-tree
+    /// coordinate space, captured at `show()` time. `None` while the
+    /// dialog is closed.
+    frozen_origin: Option<Point>,
 }
 
 impl Dialog {
     pub fn new() -> Self {
         Self {
-            size: Size::new(340, 150),
+            // 18 logical px shorter than the original to reclaim the
+            // space the client-drawn title bar used to occupy.
+            size: Size::new(340, 132),
             parent_bounds: Rect::new(0, 0, 0, 0),
             open: false,
             title: String::new(),
@@ -61,11 +74,12 @@ impl Dialog {
             button_pressed: false,
             button_armed: false,
             on_dismiss: None,
+            frozen_origin: None,
         }
     }
 
     pub fn with_size(mut self, width: i32, height: i32) -> Self {
-        self.size = Size::new(width.max(120), height.max(80));
+        self.size = Size::new(width.max(120), height.max(60));
         self
     }
 
@@ -86,6 +100,20 @@ impl Dialog {
         self.open = true;
         self.button_pressed = false;
         self.button_armed = false;
+        // Capture the centered position now if we already know where
+        // our parent lives. Otherwise the first `layout()` call will
+        // freeze it instead. Either way, once frozen, subsequent
+        // layout() updates do not move the dialog.
+        self.frozen_origin = self.centered_origin();
+    }
+
+    fn centered_origin(&self) -> Option<Point> {
+        if self.parent_bounds.w <= 0 || self.parent_bounds.h <= 0 {
+            return None;
+        }
+        let px = self.parent_bounds.x + (self.parent_bounds.w - self.size.w) / 2;
+        let py = self.parent_bounds.y + (self.parent_bounds.h - self.size.h) / 2;
+        Some(Point::new(px.max(0), py.max(0)))
     }
 
     pub fn show_warning(&mut self, title: impl Into<String>, message: impl Into<String>) {
@@ -104,6 +132,7 @@ impl Dialog {
         self.open = false;
         self.button_pressed = false;
         self.button_armed = false;
+        self.frozen_origin = None;
     }
 
     pub fn is_open(&self) -> bool {
@@ -111,9 +140,12 @@ impl Dialog {
     }
 
     fn dialog_rect(&self) -> Rect {
-        let px = self.parent_bounds.x + (self.parent_bounds.w - self.size.w) / 2;
-        let py = self.parent_bounds.y + (self.parent_bounds.h - self.size.h) / 2;
-        Rect::new(px.max(0), py.max(0), self.size.w, self.size.h)
+        let origin = self.frozen_origin.unwrap_or_else(|| {
+            let px = self.parent_bounds.x + (self.parent_bounds.w - self.size.w) / 2;
+            let py = self.parent_bounds.y + (self.parent_bounds.h - self.size.h) / 2;
+            Point::new(px.max(0), py.max(0))
+        });
+        Rect::new(origin.x, origin.y, self.size.w, self.size.h)
     }
 
     fn button_rect(&self) -> Rect {
@@ -141,6 +173,12 @@ impl Widget for Dialog {
 
     fn layout(&mut self, bounds: Rect) {
         self.parent_bounds = bounds;
+        // First time we learn our parent bounds while open: freeze the
+        // centered origin now. (Subsequent layouts leave the frozen
+        // value alone.)
+        if self.open && self.frozen_origin.is_none() {
+            self.frozen_origin = self.centered_origin();
+        }
     }
 
     fn paint(&mut self, _painter: &mut Painter, _theme: &Theme) {
@@ -160,33 +198,16 @@ impl Widget for Dialog {
         }
 
         let dialog = self.dialog_rect();
-        let inner = Rect::new(dialog.x + 1, dialog.y + 1, dialog.w - 2, dialog.h - 2);
 
-        // Outer 1-px black border + raised bevel + face fill.
-        painter.stroke_rect(dialog, theme.border);
-        painter.fill_rect(inner, theme.face);
-        painter.raised_bevel(inner, theme.highlight, theme.shadow);
-
-        // Title bar: navy block with white text.
-        let title_inset = 2;
-        let title_bar = Rect::new(
-            dialog.x + title_inset,
-            dialog.y + title_inset,
-            dialog.w - title_inset * 2,
-            TITLE_BAR_H,
-        );
-        painter.fill_rect(title_bar, theme.highlight_bg);
-        painter.text(
-            title_bar.x + 6,
-            title_bar.y + 2,
-            &self.title,
-            theme.menu_font_size,
-            theme.highlight_text,
-        );
+        // Solid face fill across the whole client area. The compositor /
+        // WM draws the surrounding decorations (title bar, close
+        // button), so we don't need a border or bevel here — the dialog
+        // body is just the face color.
+        painter.fill_rect(dialog, theme.face);
 
         // Body content: icon on the left, wrapped message lines on the
         // right.
-        let body_y = title_bar.bottom() + PADDING;
+        let body_y = dialog.y + PADDING;
         let icon_x = dialog.x + PADDING;
         let icon_y = body_y;
         if self.icon != DialogIcon::None {
@@ -284,6 +305,7 @@ impl Widget for Dialog {
         Some(PopupRequest {
             rect: self.dialog_rect(),
             kind: PopupKind::Dialog,
+            title: Some(self.title.clone()),
         })
     }
 }

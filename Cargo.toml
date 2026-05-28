@@ -13,7 +13,7 @@ winit = { version = "0.30", default-features = false, features = ["rwh_06", "x11
 softbuffer = "0.4"
 smithay-client-toolkit = "0.19"
 wayland-client = "0.31"
-wayland-protocols = { version = "0.32", features = ["client"] }
+wayland-protocols = { version = "0.32", features = ["client", "staging"] }
 fontdue = "0.8"
 fontdb = "0.16"
 arboard = { version = "3", default-features = false, features = ["wayland-data-control"] }

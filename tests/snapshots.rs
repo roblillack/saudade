@@ -225,13 +225,18 @@ fn menubar_file_open() {
 
 // ---------------------------------------------------------------- Dialog
 
+// Dialog bodies fill with the theme's face color (also light gray in
+// the default theme) and rely on the compositor to draw the surrounding
+// chrome. The tests use a white column background so the dialog face
+// stands out against it.
+
 #[test]
 fn dialog_info() {
     snapshot_at_all_scales("dialog_info", 420, 240, || {
         let mut dialog = Dialog::new();
         dialog.show_info("Information", "Operation completed successfully.");
         let column = Column::new()
-            .with_background(Color::LIGHT_GRAY)
+            .with_background(Color::WHITE)
             .add_overlay(dialog);
         Box::new(column)
     });
@@ -243,7 +248,7 @@ fn dialog_warning() {
         let mut dialog = Dialog::new();
         dialog.show_warning("Warning", "Unsaved changes will be lost.");
         let column = Column::new()
-            .with_background(Color::LIGHT_GRAY)
+            .with_background(Color::WHITE)
             .add_overlay(dialog);
         Box::new(column)
     });
@@ -255,7 +260,7 @@ fn dialog_error() {
         let mut dialog = Dialog::new();
         dialog.show_error("Error", "Could not open the requested file.");
         let column = Column::new()
-            .with_background(Color::LIGHT_GRAY)
+            .with_background(Color::WHITE)
             .add_overlay(dialog);
         Box::new(column)
     });
@@ -271,7 +276,7 @@ fn dialog_no_icon() {
             retrogui::DialogIcon::None,
         );
         let column = Column::new()
-            .with_background(Color::LIGHT_GRAY)
+            .with_background(Color::WHITE)
             .add_overlay(dialog);
         Box::new(column)
     });

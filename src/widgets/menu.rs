@@ -600,6 +600,7 @@ impl Widget for MenuBar {
                 popup.h + SHADOW_SIZE,
             ),
             kind: PopupKind::Popup,
+            title: None,
         })
     }
 }

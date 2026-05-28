@@ -603,9 +603,10 @@ impl AppHandler {
                 // minimize / maximize controls. The WM places the
                 // window — we don't pass a position — and the Dialog
                 // window-type hint keeps it visually grouped with the
-                // main window.
+                // main window. The dialog's caption rides along on the
+                // PopupRequest so it ends up as the OS window title.
                 attrs = attrs
-                    .with_title("retrogui dialog")
+                    .with_title(request.title.as_deref().unwrap_or("Dialog"))
                     .with_decorations(true)
                     .with_enabled_buttons(WindowButtons::CLOSE);
 
