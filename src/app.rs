@@ -329,27 +329,21 @@ fn origin(logical: Size, scale: f32, physical: PhysicalSize<u32>) -> (i32, i32) 
 
 /// Re-run the widget tree's layout for the current buffer size.
 ///
-/// We pass the larger of the actual window's logical inner size and the
-/// configured design size as the parent bounds. Layout-aware roots (like
-/// `Column`) honor those bounds and flex; absolute-positioned roots (like
-/// `Container`) ignore the call and stay at their construction size, which
-/// the runtime then centers via the `origin` helper.
+/// We pass the *actual* logical inner size of the window. Layout-aware roots
+/// (like `Column`) flex to fit it exactly so chrome — menu bars, scrollbars
+/// — lines up with the window edges. Absolute-positioned roots (`Container`)
+/// implement `layout` as a no-op, so they keep their construction size and
+/// the runtime centers them via the `origin` helper.
 fn relayout(
     root: &mut Box<dyn Widget>,
     physical: PhysicalSize<u32>,
     scale: f32,
-    design_size: Size,
+    _design_size: Size,
 ) {
     let s = scale.max(0.01);
     let logical_w = (physical.width as f32 / s).round() as i32;
     let logical_h = (physical.height as f32 / s).round() as i32;
-    let bounds = Rect::new(
-        0,
-        0,
-        logical_w.max(design_size.w),
-        logical_h.max(design_size.h),
-    );
-    root.layout(bounds);
+    root.layout(Rect::new(0, 0, logical_w.max(1), logical_h.max(1)));
 }
 
 impl From<Rect> for Size {

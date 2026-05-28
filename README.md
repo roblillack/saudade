@@ -84,7 +84,7 @@ to an object-oriented UI framework.
 | painter   | `Painter` — drawing primitives + Win 3.1 chrome helpers         |
 | font      | `Font` — system font lookup + glyph rasterization               |
 | widget    | `Widget` trait (paint / event / focus / overlay hooks)          |
-| widgets   | `Container`, `Column`, `Label`, `Button`, `Bevel`, `Image`, `MenuBar`, `Menu`, `MenuItem`, `TextEditor` |
+| widgets   | `Container`, `Column`, `Label`, `Button`, `Bevel`, `Image`, `MenuBar`, `Menu`, `MenuItem`, `ScrollBar`, `TextEditor` |
 | app       | `App`, `WindowConfig` — runtime entry point                     |
 
 Everything user-facing is re-exported from the crate root; you generally
@@ -399,12 +399,39 @@ until the cursor enters an item.
 `MenuBar::open(idx)` programmatically opens a menu — handy for custom
 application-level keybindings.
 
+### `ScrollBar`
+
+A Win 3.1 scrollbar: two arrow buttons bracketing a track with a
+proportionally-sized thumb. Built standalone — embed it next to any
+scrollable view, or let `TextEditor` carry one for you.
+
+```rust
+let mut bar = ScrollBar::vertical(Rect::new(380, 20, 16, 280));
+bar.set_range(/* viewport */ 20, /* max */ 60);  // 80-row file, 20 visible
+bar.set_value(0);
+bar.set_line_step(1);
+```
+
+Interaction:
+
+| Input              | Effect                                            |
+|--------------------|---------------------------------------------------|
+| click arrow        | scroll by `line_step` toward the arrow            |
+| click track        | scroll by `viewport` (one page) toward the click  |
+| drag thumb         | scroll proportionally to the drag distance        |
+
+The thumb is sized as `track_extent × viewport / (viewport + max)` with a
+sane minimum so it stays grabbable even on huge documents. Use
+`SCROLLBAR_THICKNESS` (16 logical pixels) to lay siblings out around it.
+
 ### `TextEditor`
 
 A minimal multi-line text editor: sunken white field, monospace text,
-vertical cursor, selection, and cut/copy/paste against the OS
-clipboard. Designed for system-utility editors (Notepad-style); undo
-and word wrap come later.
+vertical cursor, selection, cut/copy/paste against the OS clipboard,
+and a built-in vertical scrollbar pinned to the right edge. Only the
+visible rows are measured and drawn each paint, so large files stay
+cheap. Designed for system-utility editors (Notepad-style); undo and
+word wrap come later.
 
 ```rust
 let mut editor = TextEditor::new(Rect::new(4, 24, 512, 312))
@@ -431,6 +458,7 @@ Editing operations:
 | ← / →               | move cursor one character                      |
 | ↑ / ↓               | move cursor one line, clamping column          |
 | Home / End          | jump to line start / end                       |
+| PageUp / PageDown   | jump by one viewport                           |
 | Shift + any move    | extends the selection                          |
 | Ctrl + A            | select all                                     |
 | Ctrl + C            | copy selection to the OS clipboard             |
@@ -464,9 +492,11 @@ Wayland-native apps works without needing XWayland.
 tracks `(row, col)` in *characters*, not bytes — multi-byte UTF-8 is
 handled correctly. Per-character widths are cached during paint so a
 click can be mapped to a column position without a `Painter` at event
-time. Clicking focuses the widget; the cursor only renders while
-focused; vertical scroll follows the cursor automatically (no scroll
-bar yet).
+time — and the cache is keyed by row, so only rows currently on screen
+contribute work. The scrollbar's canonical position is its own
+`value()`; the editor reads it (no duplicate state). Clicking focuses
+the widget; the cursor only renders while focused; vertical scroll
+follows the cursor automatically.
 
 
 ## The `Widget` trait
@@ -747,6 +777,9 @@ Things that would fit retrogui's spirit but aren't there yet:
 
 * `Row` and `Grid` containers (sibling to the existing `Column`)
 * `Checkbox`, `RadioButton`, single-line `TextBox`, `ListBox`
+* Horizontal scrolling in `TextEditor` (a horizontal `ScrollBar` is
+  already implemented; the editor just doesn't ride it yet)
+* Mouse-wheel scroll events
 * Multi-line / wrapping `Label`
 * Undo / redo in `TextEditor`
 * Save-As / Open file dialogs

@@ -44,5 +44,6 @@ pub use painter::Painter;
 pub use theme::Theme;
 pub use widget::Widget;
 pub use widgets::{
-    Bevel, Button, Column, Container, Image, Label, Menu, MenuBar, MenuItem, TextEditor,
+    Bevel, Button, Column, Container, Image, Label, Menu, MenuBar, MenuItem, Orientation,
+    SCROLLBAR_THICKNESS, ScrollBar, TextEditor,
 };

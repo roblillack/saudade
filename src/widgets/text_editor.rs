@@ -1,40 +1,38 @@
+use std::collections::HashMap;
+
 use crate::event::{Event, EventCtx, Key, MouseButton, NamedKey};
 use crate::geometry::{Color, Point, Rect};
 use crate::painter::Painter;
 use crate::theme::Theme;
 use crate::widget::Widget;
+use crate::widgets::scrollbar::{SCROLLBAR_THICKNESS, ScrollBar};
 
 const PADDING_X: i32 = 4;
 const PADDING_Y: i32 = 2;
 const LINE_HEIGHT: i32 = 14;
 
 /// A minimal multi-line text editor — sunken white field, monospace text,
-/// cursor, selection with cut/copy/paste. Matches Notepad's behavior closely
-/// enough for a system-utility editor; undo and word wrap come later.
+/// cursor, selection with cut/copy/paste, and a built-in vertical scrollbar.
 ///
-/// Coordinates and `font_size` are all in logical pixels. The editor stores
-/// content as `Vec<String>` (one entry per line); the cursor and the
-/// selection anchor are tracked as `(row, col)` *character* indices that
-/// always point to a valid position (UTF-8 multi-byte safe).
+/// Only the visible rows are measured and drawn on each paint — text that's
+/// scrolled out of view contributes no work to the render loop. The scrollbar
+/// owns the canonical scroll position; `TextEditor` reads it via
+/// `scrollbar.value()`.
 pub struct TextEditor {
     pub rect: Rect,
     pub font_size: f32,
     lines: Vec<String>,
     cursor: (usize, usize),
-    /// Start of the current selection. When `Some` and != cursor, that
-    /// range is the selection.
     selection_anchor: Option<(usize, usize)>,
-    scroll_top: usize,
     focused: bool,
-    /// Per-line cumulative pixel widths from column 0 → N, rebuilt every
-    /// paint. `widths[row][col]` is the x-offset (in logical px) where the
-    /// caret should sit at character index `col` on that row.
-    cumulative_widths: Vec<Vec<i32>>,
-    /// True while the user is mouse-dragging to extend the selection.
+    /// Per-visible-row cumulative pixel widths, keyed by absolute row index.
+    /// `widths[col]` is the x-offset (in logical px) where the caret sits
+    /// at character index `col`. Rebuilt every paint; only visible rows are
+    /// populated so big files stay cheap.
+    cumulative_widths: HashMap<usize, Vec<i32>>,
     drag_active: bool,
-    /// Lazily-initialized clipboard handle. `None` once we've tried and
-    /// failed to open the OS clipboard (e.g., headless environments).
     clipboard: Option<arboard::Clipboard>,
+    v_scrollbar: ScrollBar,
 }
 
 impl TextEditor {
@@ -45,11 +43,11 @@ impl TextEditor {
             lines: vec![String::new()],
             cursor: (0, 0),
             selection_anchor: None,
-            scroll_top: 0,
             focused: false,
-            cumulative_widths: Vec::new(),
+            cumulative_widths: HashMap::new(),
             drag_active: false,
             clipboard: None,
+            v_scrollbar: ScrollBar::vertical(Rect::new(0, 0, 0, 0)),
         }
     }
 
@@ -75,11 +73,30 @@ impl TextEditor {
         };
         self.cursor = (0, 0);
         self.selection_anchor = None;
-        self.scroll_top = 0;
+        self.v_scrollbar.set_value(0);
     }
 
     pub fn is_focused(&self) -> bool {
         self.focused
+    }
+
+    fn scroll_top(&self) -> usize {
+        self.v_scrollbar.value().max(0) as usize
+    }
+
+    fn set_scroll_top(&mut self, top: usize) {
+        self.v_scrollbar.set_value(top as i32);
+    }
+
+    /// The rectangle used to render text — everything except the column the
+    /// scrollbar occupies on the right edge.
+    fn text_area(&self) -> Rect {
+        let sb_w = if self.v_scrollbar.rect().w > 0 {
+            SCROLLBAR_THICKNESS
+        } else {
+            0
+        };
+        Rect::new(self.rect.x, self.rect.y, (self.rect.w - sb_w).max(0), self.rect.h)
     }
 
     // ---------------------------------------------------------------- selection
@@ -100,8 +117,6 @@ impl TextEditor {
             .unwrap_or(false)
     }
 
-    /// Returns the ordered (start, end) of the current selection, or `None`
-    /// if there isn't one.
     fn selection_range(&self) -> Option<((usize, usize), (usize, usize))> {
         let anchor = self.selection_anchor?;
         if anchor == self.cursor {
@@ -151,9 +166,6 @@ impl TextEditor {
         self.selection_anchor = None;
     }
 
-    /// Update the selection anchor for an impending cursor move. If `extend`
-    /// is true (Shift held), we start (or keep) a selection anchored at the
-    /// current cursor; if not, any selection collapses.
     fn before_move(&mut self, extend: bool) {
         if extend {
             if self.selection_anchor.is_none() {
@@ -207,16 +219,25 @@ impl TextEditor {
     // ---------------------------------------------------------------- editing
 
     fn visible_rows(&self) -> i32 {
-        ((self.rect.h - PADDING_Y * 2) / LINE_HEIGHT).max(1)
+        ((self.text_area().h - PADDING_Y * 2) / LINE_HEIGHT).max(1)
+    }
+
+    fn sync_scrollbar(&mut self) {
+        let visible = self.visible_rows();
+        let max_scroll = (self.lines.len() as i32 - visible).max(0);
+        self.v_scrollbar.set_range(visible, max_scroll);
     }
 
     fn ensure_cursor_visible(&mut self) {
+        self.sync_scrollbar();
         let visible = self.visible_rows() as usize;
-        if self.cursor.0 < self.scroll_top {
-            self.scroll_top = self.cursor.0;
-        } else if self.cursor.0 >= self.scroll_top + visible {
-            self.scroll_top = self.cursor.0 + 1 - visible;
+        let mut top = self.scroll_top();
+        if self.cursor.0 < top {
+            top = self.cursor.0;
+        } else if self.cursor.0 >= top + visible {
+            top = self.cursor.0 + 1 - visible;
         }
+        self.set_scroll_top(top);
     }
 
     fn clamp_col(&mut self) {
@@ -248,7 +269,7 @@ impl TextEditor {
         for ch in text.chars() {
             match ch {
                 '\n' => self.insert_newline(),
-                '\r' => {} // CRLF: drop the CR, the LF triggers insert_newline
+                '\r' => {}
                 _ => self.insert_char(ch),
             }
         }
@@ -334,22 +355,35 @@ impl TextEditor {
         self.cursor.1 = self.lines[self.cursor.0].chars().count();
     }
 
-    /// Place the cursor at the click position using the per-line widths
-    /// cached on the most recent paint.
+    fn move_page(&mut self, delta_pages: i32) {
+        let visible = self.visible_rows() as usize;
+        let step = visible.saturating_sub(1).max(1);
+        let target = if delta_pages > 0 {
+            (self.cursor.0 + step * delta_pages as usize).min(self.lines.len().saturating_sub(1))
+        } else {
+            self.cursor
+                .0
+                .saturating_sub(step * (-delta_pages) as usize)
+        };
+        self.cursor.0 = target;
+        self.clamp_col();
+    }
+
     fn place_cursor_at(&mut self, pos: Point) {
         if self.lines.is_empty() {
             return;
         }
-        let local_y = (pos.y - self.rect.y - PADDING_Y).max(0);
+        let text = self.text_area();
+        let local_y = (pos.y - text.y - PADDING_Y).max(0);
         let row_offset = (local_y / LINE_HEIGHT) as usize;
-        let row = (self.scroll_top + row_offset).min(self.lines.len() - 1);
+        let row = (self.scroll_top() + row_offset).min(self.lines.len() - 1);
         self.cursor.0 = row;
 
-        let text_x = self.rect.x + PADDING_X;
+        let text_x = text.x + PADDING_X;
         let target = (pos.x - text_x).max(0);
         let widths = self
             .cumulative_widths
-            .get(row)
+            .get(&row)
             .cloned()
             .unwrap_or_else(|| vec![0]);
         let mut best_col = 0;
@@ -371,9 +405,28 @@ impl Widget for TextEditor {
     }
 
     fn paint(&mut self, painter: &mut Painter, theme: &Theme) {
-        // Rebuild cumulative widths against the monospace font.
+        self.sync_scrollbar();
+        let text = self.text_area();
+
+        // Sunken white field with 1-px black outer border around the whole
+        // widget (text area + scrollbar live inside).
+        painter.fill_rect(text, Color::WHITE);
+        painter.sunken_bevel(text, theme.highlight, theme.shadow);
+        painter.stroke_rect(text, theme.border);
+
+        let text_x = text.x + PADDING_X;
+        let text_y0 = text.y + PADDING_Y;
+        let visible = self.visible_rows() as usize;
+        let scroll_top = self.scroll_top();
+
+        // Rebuild cumulative widths only for visible rows.
         self.cumulative_widths.clear();
-        for line in &self.lines {
+        for row_offset in 0..visible {
+            let row = scroll_top + row_offset;
+            if row >= self.lines.len() {
+                break;
+            }
+            let line = &self.lines[row];
             let n = line.chars().count();
             let mut widths = Vec::with_capacity(n + 1);
             widths.push(0);
@@ -381,21 +434,12 @@ impl Widget for TextEditor {
                 let prefix: String = line.chars().take(col).collect();
                 widths.push(painter.measure_mono_text(&prefix, self.font_size).w);
             }
-            self.cumulative_widths.push(widths);
+            self.cumulative_widths.insert(row, widths);
         }
 
-        // Sunken white field with 1-px black outer border.
-        painter.fill_rect(self.rect, Color::WHITE);
-        painter.sunken_bevel(self.rect, theme.highlight, theme.shadow);
-        painter.stroke_rect(self.rect, theme.border);
-
-        let text_x = self.rect.x + PADDING_X;
-        let text_y0 = self.rect.y + PADDING_Y;
-        let visible = self.visible_rows() as usize;
         let selection = self.selection_range();
-
         for row_offset in 0..visible {
-            let row = self.scroll_top + row_offset;
+            let row = scroll_top + row_offset;
             if row >= self.lines.len() {
                 break;
             }
@@ -405,21 +449,37 @@ impl Widget for TextEditor {
 
         if self.focused {
             let (crow, ccol) = self.cursor;
-            if crow >= self.scroll_top && crow < self.scroll_top + visible {
+            if crow >= scroll_top && crow < scroll_top + visible {
                 let prefix_w = self
                     .cumulative_widths
-                    .get(crow)
+                    .get(&crow)
                     .and_then(|widths| widths.get(ccol))
                     .copied()
                     .unwrap_or(0);
                 let cx = text_x + prefix_w;
-                let cy = text_y0 + (crow - self.scroll_top) as i32 * LINE_HEIGHT;
+                let cy = text_y0 + (crow - scroll_top) as i32 * LINE_HEIGHT;
                 painter.v_line(cx, cy, LINE_HEIGHT, theme.text);
             }
         }
+
+        // Scrollbar last so it sits on top of the field's right edge.
+        self.v_scrollbar.paint(painter, theme);
     }
 
     fn event(&mut self, event: &Event, ctx: &mut EventCtx) {
+        // Once the scrollbar is dragging it gets every event until release.
+        if self.v_scrollbar.captures_pointer() {
+            self.v_scrollbar.event(event, ctx);
+            return;
+        }
+        // Otherwise route positional events that land in the scrollbar.
+        if let Some(pos) = event.position()
+            && self.v_scrollbar.rect().contains(pos)
+        {
+            self.v_scrollbar.event(event, ctx);
+            return;
+        }
+
         match event {
             Event::PointerDown {
                 pos,
@@ -463,7 +523,6 @@ impl Widget for TextEditor {
                 }
             }
             Event::KeyDown { key, modifiers } if self.focused => {
-                // Ctrl shortcuts take precedence over everything else.
                 if modifiers.control && let Key::Char(c) = key {
                     let consumed = match c.to_ascii_lowercase() {
                         'c' => {
@@ -545,6 +604,18 @@ impl Widget for TextEditor {
                         self.move_end();
                         ctx.request_paint();
                     }
+                    Key::Named(NamedKey::PageUp) => {
+                        self.before_move(modifiers.shift);
+                        self.move_page(-1);
+                        self.ensure_cursor_visible();
+                        ctx.request_paint();
+                    }
+                    Key::Named(NamedKey::PageDown) => {
+                        self.before_move(modifiers.shift);
+                        self.move_page(1);
+                        self.ensure_cursor_visible();
+                        ctx.request_paint();
+                    }
                     _ => {}
                 }
             }
@@ -553,7 +624,7 @@ impl Widget for TextEditor {
     }
 
     fn captures_pointer(&self) -> bool {
-        self.drag_active
+        self.drag_active || self.v_scrollbar.captures_pointer()
     }
 
     fn focusable(&self) -> bool {
@@ -566,13 +637,20 @@ impl Widget for TextEditor {
 
     fn layout(&mut self, bounds: Rect) {
         self.rect = bounds;
+        // Carve the rightmost column for the scrollbar; the rest is the
+        // text area.
+        let sb_rect = Rect::new(
+            bounds.right() - SCROLLBAR_THICKNESS,
+            bounds.y,
+            SCROLLBAR_THICKNESS,
+            bounds.h,
+        );
+        self.v_scrollbar.set_rect(sb_rect);
         self.ensure_cursor_visible();
     }
 }
 
 impl TextEditor {
-    /// Paint a single visible row: line text in the foreground color, with a
-    /// navy block + white text drawn over any selected substring.
     fn paint_line(
         &self,
         painter: &mut Painter,
@@ -585,7 +663,7 @@ impl TextEditor {
         let line = &self.lines[row];
         let widths = self
             .cumulative_widths
-            .get(row)
+            .get(&row)
             .map(|v| v.as_slice())
             .unwrap_or(&[]);
         let total_chars = line.chars().count();
@@ -599,15 +677,12 @@ impl TextEditor {
             if s == e { None } else { Some((s, e)) }
         });
 
-        // Selection band: a NAVY block under the selected glyphs. For rows
-        // strictly between the first and last lines of a multi-line
-        // selection we extend the band slightly past the line end so it
-        // looks continuous.
         if let Some((s, e)) = row_selection {
             let x0 = widths.get(s).copied().unwrap_or(0);
-            let x1 = widths.get(e).copied().unwrap_or_else(|| {
-                widths.last().copied().unwrap_or(0)
-            });
+            let x1 = widths
+                .get(e)
+                .copied()
+                .unwrap_or_else(|| widths.last().copied().unwrap_or(0));
             let extra = if let Some((_start, end)) = selection {
                 if row < end.0 { 6 } else { 0 }
             } else {
@@ -640,8 +715,6 @@ impl TextEditor {
     }
 }
 
-/// Convert a logical character index into a byte index inside a UTF-8 line.
-/// Saturates at the end of the line.
 fn char_to_byte(line: &str, char_idx: usize) -> usize {
     line.char_indices()
         .nth(char_idx)
