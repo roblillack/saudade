@@ -44,7 +44,7 @@ pub use font::Font;
 pub use geometry::{Color, Point, Rect, Size};
 pub use painter::Painter;
 pub use theme::Theme;
-pub use widget::{PopupRequest, Widget};
+pub use widget::{PopupKind, PopupRequest, Widget};
 pub use widgets::{
     Bevel, Button, Column, Container, Dialog, DialogIcon, Image, Label, Menu, MenuBar, MenuItem,
     Orientation, SCROLLBAR_THICKNESS, ScrollBar, TextEditor,

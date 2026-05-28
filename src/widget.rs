@@ -3,6 +3,24 @@ use crate::geometry::Rect;
 use crate::painter::Painter;
 use crate::theme::Theme;
 
+/// What kind of subordinate top-level a widget is asking the runtime to
+/// host. The runtime maps this onto different windowing-system objects:
+/// menus get override-redirect / xdg_popup chrome that's anchored to the
+/// parent surface, dialogs get a real top-level window with transient /
+/// modal hints and no fixed position.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PopupKind {
+    /// Borderless dropdown-style popup, anchored to a point inside the
+    /// parent surface. Used by [`MenuBar`](crate::widgets::MenuBar) and
+    /// other "floating chrome" widgets.
+    Popup,
+    /// Decorationless modal dialog window. The widget paints its own
+    /// chrome (title bar, border) and the runtime opens a real top-level
+    /// window transient to the parent — without override-redirect on X11
+    /// and as a regular `xdg_toplevel` on Wayland.
+    Dialog,
+}
+
 /// A widget asks the runtime to host its popup in a separate top-level
 /// window. The runtime polls `Widget::popup_request` after each event and
 /// matches the request against any existing popup window — opening,
@@ -11,8 +29,12 @@ use crate::theme::Theme;
 pub struct PopupRequest {
     /// Popup's logical bounds in the *root widget's* coordinate space.
     /// The runtime translates this into screen coordinates by adding the
-    /// main window's inner position and scaling by the current DPI.
+    /// main window's inner position and scaling by the current DPI for
+    /// [`PopupKind::Popup`]. For [`PopupKind::Dialog`] only the size is
+    /// significant — the WM / compositor decides the final placement.
     pub rect: Rect,
+    /// What kind of host window the widget needs.
+    pub kind: PopupKind,
 }
 
 /// The fundamental UI abstraction.

@@ -230,4 +230,7 @@ impl Widget for SharedDialog {
     fn layout(&mut self, bounds: Rect) {
         self.0.borrow_mut().layout(bounds);
     }
+    fn popup_request(&self) -> Option<PopupRequest> {
+        self.0.borrow().popup_request()
+    }
 }

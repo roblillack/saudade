@@ -6,7 +6,7 @@ use winit::dpi::{LogicalSize, PhysicalPosition, PhysicalSize};
 use winit::event::{ElementState, MouseButton as WinitMouseButton, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{Key as WKey, NamedKey as WNamedKey};
-use winit::window::{Window, WindowAttributes, WindowId};
+use winit::window::{Window, WindowAttributes, WindowButtons, WindowId};
 
 // X11 platform extensions. winit 0.30's generic `with_parent_window` is
 // not enough on X11 (it reparents into the main window, which then clips
@@ -29,7 +29,7 @@ use crate::font::Font;
 use crate::geometry::{Point, Rect, Size};
 use crate::painter::Painter;
 use crate::theme::Theme;
-use crate::widget::Widget;
+use crate::widget::{PopupKind, PopupRequest, Widget};
 
 pub struct WindowConfig {
     pub title: String,
@@ -499,9 +499,14 @@ impl AppHandler {
     /// Re-anchor the popup window to the main window's current screen
     /// position. Called when the main window emits `Moved`. No-op when
     /// there's no popup or when the platform doesn't support querying
-    /// the main window's inner position (e.g., Wayland).
+    /// the main window's inner position (e.g., Wayland). Dialog windows
+    /// are managed top-levels so the WM moves them on its own — we only
+    /// reposition popup-kind children.
     fn reposition_popup(&mut self) {
         let Some(popup) = self.popup.as_ref() else { return };
+        if popup.kind != PopupKind::Popup {
+            return;
+        }
         let Some(main_win) = self.main_win.as_ref() else { return };
         let Ok(inner) = main_win.inner_position() else { return };
         let px = inner.x + ((popup.anchor.x as f32) * self.scale).round() as i32;
@@ -516,16 +521,19 @@ impl AppHandler {
                 self.popup = None;
             }
             (Some(req), None) => {
-                if let Some(p) = self.open_popup(req.rect, event_loop) {
+                if let Some(p) = self.open_popup(req, event_loop) {
                     self.popup = Some(p);
                 }
             }
-            (Some(req), Some(existing)) if existing.anchor != req.rect => {
-                // Anchor moved (slide-over between top-level menus). Tear
-                // the child window down and rebuild — fastest reliable
-                // path that works the same on every backend.
+            (Some(req), Some(existing))
+                if existing.anchor != req.rect || existing.kind != req.kind =>
+            {
+                // Anchor moved (slide-over between top-level menus), or
+                // the widget switched between Popup and Dialog hosting.
+                // Tear the child window down and rebuild — fastest
+                // reliable path that works the same on every backend.
                 self.popup = None;
-                if let Some(p) = self.open_popup(req.rect, event_loop) {
+                if let Some(p) = self.open_popup(req, event_loop) {
                     self.popup = Some(p);
                 }
             }
@@ -533,50 +541,85 @@ impl AppHandler {
         }
     }
 
-    fn open_popup(&self, rect: Rect, event_loop: &ActiveEventLoop) -> Option<PopupWindow> {
+    fn open_popup(
+        &self,
+        request: PopupRequest,
+        event_loop: &ActiveEventLoop,
+    ) -> Option<PopupWindow> {
         let main_win = self.main_win.as_ref()?;
         let context = self.context.as_ref()?;
 
+        let rect = request.rect;
         let phys_w = ((rect.w as f32) * self.scale).round().max(1.0) as u32;
         let phys_h = ((rect.h as f32) * self.scale).round().max(1.0) as u32;
         let size = PhysicalSize::new(phys_w, phys_h);
 
         let mut attrs = WindowAttributes::default()
-            .with_title("retrogui popup")
-            .with_decorations(false)
             .with_resizable(false)
             .with_inner_size(size)
             .with_visible(false);
 
-        // X11: take the WM completely out of the loop. override-redirect
-        // makes this an unmanaged window — it sits at the exact screen
-        // position requested, at the exact requested size, and may
-        // extend past the main window's bounds. The DropdownMenu type
-        // hint helps WMs route it (e.g., place above the main window in
-        // stacking order). These attributes are silently ignored on
-        // other backends.
-        #[cfg(any(
-            target_os = "linux",
-            target_os = "dragonfly",
-            target_os = "freebsd",
-            target_os = "netbsd",
-            target_os = "openbsd",
-        ))]
-        {
-            attrs = attrs
-                .with_override_redirect(true)
-                .with_x11_window_type(vec![XWindowType::DropdownMenu]);
-        }
+        match request.kind {
+            PopupKind::Popup => {
+                attrs = attrs.with_title("retrogui popup").with_decorations(false);
 
-        // Absolute screen position = main window inner position + popup
-        // offset in physical pixels. On X11 with override-redirect this
-        // is honored exactly. On Wayland (no popup support yet) winit
-        // creates a top-level window and the compositor places it on
-        // its own — the position request is ignored.
-        if let Ok(inner) = main_win.inner_position() {
-            let px = inner.x + ((rect.x as f32) * self.scale).round() as i32;
-            let py = inner.y + ((rect.y as f32) * self.scale).round() as i32;
-            attrs = attrs.with_position(PhysicalPosition::new(px, py));
+                // X11: take the WM completely out of the loop.
+                // override-redirect makes this an unmanaged window — it
+                // sits at the exact screen position requested, at the
+                // exact requested size, and may extend past the main
+                // window's bounds. The DropdownMenu type hint helps WMs
+                // route it (e.g., place above the main window in
+                // stacking order). These attributes are silently ignored
+                // on other backends.
+                #[cfg(any(
+                    target_os = "linux",
+                    target_os = "dragonfly",
+                    target_os = "freebsd",
+                    target_os = "netbsd",
+                    target_os = "openbsd",
+                ))]
+                {
+                    attrs = attrs
+                        .with_override_redirect(true)
+                        .with_x11_window_type(vec![XWindowType::DropdownMenu]);
+                }
+
+                // Absolute screen position = main window inner position +
+                // popup offset in physical pixels. On X11 with
+                // override-redirect this is honored exactly. On Wayland
+                // (no popup support yet) winit creates a top-level window
+                // and the compositor places it on its own — the position
+                // request is ignored.
+                if let Ok(inner) = main_win.inner_position() {
+                    let px = inner.x + ((rect.x as f32) * self.scale).round() as i32;
+                    let py = inner.y + ((rect.y as f32) * self.scale).round() as i32;
+                    attrs = attrs.with_position(PhysicalPosition::new(px, py));
+                }
+            }
+            PopupKind::Dialog => {
+                // A real managed top-level dialog: server-side
+                // decorations (title bar + close button only), fixed
+                // size (already set via `with_resizable(false)`), no
+                // minimize / maximize controls. The WM places the
+                // window — we don't pass a position — and the Dialog
+                // window-type hint keeps it visually grouped with the
+                // main window.
+                attrs = attrs
+                    .with_title("retrogui dialog")
+                    .with_decorations(true)
+                    .with_enabled_buttons(WindowButtons::CLOSE);
+
+                #[cfg(any(
+                    target_os = "linux",
+                    target_os = "dragonfly",
+                    target_os = "freebsd",
+                    target_os = "netbsd",
+                    target_os = "openbsd",
+                ))]
+                {
+                    attrs = attrs.with_x11_window_type(vec![XWindowType::Dialog]);
+                }
+            }
         }
 
         let win = event_loop.create_window(attrs).ok()?;
@@ -592,6 +635,7 @@ impl AppHandler {
             win_id: id,
             surface,
             anchor: rect,
+            kind: request.kind,
             physical: actual,
             scale: self.scale,
             cursor: None,
@@ -608,6 +652,7 @@ struct PopupWindow {
     win_id: WindowId,
     surface: softbuffer::Surface<Rc<Window>, Rc<Window>>,
     anchor: Rect,
+    kind: PopupKind,
     physical: PhysicalSize<u32>,
     scale: f32,
     cursor: Option<Point>,

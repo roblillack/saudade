@@ -2,7 +2,7 @@ use crate::event::{Event, EventCtx, Key, MouseButton, NamedKey};
 use crate::geometry::{Color, Rect, Size};
 use crate::painter::Painter;
 use crate::theme::Theme;
-use crate::widget::Widget;
+use crate::widget::{PopupKind, PopupRequest, Widget};
 
 const TITLE_BAR_H: i32 = 18;
 const BUTTON_W: i32 = 70;
@@ -28,10 +28,14 @@ pub enum DialogIcon {
 /// `show_warning` / `show_info` to display it; a single OK button (or
 /// Enter / Escape) dismisses it.
 ///
-/// While open the dialog is modal: it asserts `captures_pointer` and
-/// `accepts_accelerators`, and a container with pre-emptive capture
-/// routing (`Column::push_overlay`) ensures every event lands here
-/// instead of the widgets below.
+/// When the dialog opens it reports a [`PopupRequest`] of kind
+/// [`PopupKind::Dialog`], so the runtime opens a real top-level window
+/// (transient to the main window) and the dialog paints itself into that
+/// window's surface — `paint_overlay` only draws while the popup-pass
+/// painter is active. Inside the widget tree the dialog still asserts
+/// `captures_pointer` and `accepts_accelerators`, so even events that
+/// somehow reach the main window are swallowed instead of leaking through
+/// to the widgets below.
 pub struct Dialog {
     size: Size,
     /// Parent bounds last passed to `layout`; we center inside these.
@@ -140,11 +144,18 @@ impl Widget for Dialog {
     }
 
     fn paint(&mut self, _painter: &mut Painter, _theme: &Theme) {
-        // Drawn in paint_overlay so we sit on top of normal siblings.
+        // Drawn in paint_overlay so we sit on top of normal siblings —
+        // and only into the popup-pass surface that the runtime opens
+        // for our top-level dialog window.
     }
 
     fn paint_overlay(&mut self, painter: &mut Painter, theme: &Theme) {
-        if !self.open {
+        // The dialog lives in its own top-level window. Skip the main
+        // window's overlay pass so the area under the dialog stays
+        // untouched — the runtime hosts our content in a separate popup
+        // surface that runs through this same routine with
+        // `is_popup_pass() == true`.
+        if !self.open || !painter.is_popup_pass() {
             return;
         }
 
@@ -264,6 +275,16 @@ impl Widget for Dialog {
 
     fn accepts_accelerators(&self) -> bool {
         self.open
+    }
+
+    fn popup_request(&self) -> Option<PopupRequest> {
+        if !self.open {
+            return None;
+        }
+        Some(PopupRequest {
+            rect: self.dialog_rect(),
+            kind: PopupKind::Dialog,
+        })
     }
 }
 

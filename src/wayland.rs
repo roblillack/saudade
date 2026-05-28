@@ -47,7 +47,7 @@ use crate::font::Font;
 use crate::geometry::{Point, Rect};
 use crate::painter::Painter;
 use crate::theme::Theme;
-use crate::widget::Widget;
+use crate::widget::{PopupKind, PopupRequest, Widget};
 
 pub(crate) fn run(app: App) {
     let (window_cfg, theme, root) = app.into_parts();
@@ -165,8 +165,32 @@ struct State {
     qh: QueueHandle<State>,
 }
 
+/// Wayland-side state for the subordinate window that hosts a widget
+/// `PopupRequest`. The variant carries the actual xdg object — a
+/// dropdown-style popup for menus, or a real top-level dialog window.
+enum ChildSurface {
+    Popup(Popup),
+    Dialog(XdgWindow),
+}
+
+impl ChildSurface {
+    fn wl_surface(&self) -> &wl_surface::WlSurface {
+        match self {
+            ChildSurface::Popup(p) => p.wl_surface(),
+            ChildSurface::Dialog(w) => w.wl_surface(),
+        }
+    }
+
+    fn kind(&self) -> PopupKind {
+        match self {
+            ChildSurface::Popup(_) => PopupKind::Popup,
+            ChildSurface::Dialog(_) => PopupKind::Dialog,
+        }
+    }
+}
+
 struct PopupState {
-    popup: Popup,
+    surface: ChildSurface,
     pool: SlotPool,
     anchor: Rect,
     /// Popup surface (logical) dimensions. Buffer is `surface_w * scale`
@@ -321,7 +345,7 @@ impl State {
         self.root.paint(&mut painter, &self.theme);
         painter.clear_clip();
 
-        let surface = p.popup.wl_surface();
+        let surface = p.surface.wl_surface();
         let _ = buffer.attach_to(surface);
         surface.damage_buffer(0, 0, buf_w, buf_h);
         surface.set_buffer_scale(scale);
@@ -334,54 +358,88 @@ impl State {
     /// `popup_request`. Opens, destroys, or repositions as needed.
     fn sync_popup(&mut self) {
         let request = self.root.popup_request();
-        let existing = self.popup.as_ref().map(|p| p.anchor);
+        let existing = self
+            .popup
+            .as_ref()
+            .map(|p| (p.anchor, p.surface.kind()));
         match (request, existing) {
             (None, Some(_)) => {
                 self.popup = None;
             }
             (Some(req), None) => {
-                self.open_popup(req.rect);
+                self.open_popup(req);
             }
-            (Some(req), Some(existing)) if existing != req.rect => {
-                // Anchor changed (slide-over). Easiest correct path:
-                // close + reopen with the new positioner.
+            (Some(req), Some((existing_anchor, existing_kind)))
+                if existing_anchor != req.rect || existing_kind != req.kind =>
+            {
+                // Anchor changed (slide-over), or the widget asked for a
+                // different host-window kind. Easiest correct path: close
+                // + reopen with the new positioner / toplevel.
                 self.popup = None;
-                self.open_popup(req.rect);
+                self.open_popup(req);
             }
             _ => {}
         }
     }
 
-    fn open_popup(&mut self, anchor: Rect) {
+    fn open_popup(&mut self, request: PopupRequest) {
+        let anchor = request.rect;
         // Buffer dimensions == surface dimensions (we don't set
         // buffer_scale). Anchor is already in surface coords.
         let phys_w = anchor.w.max(1) as u32;
         let phys_h = anchor.h.max(1) as u32;
 
-        // Build a positioner anchored to a 1×1 rect at the popup's
-        // top-left in the parent surface. Gravity goes BottomRight so
-        // the popup extends down/right from the anchor — same shape as
-        // a classic dropdown menu.
-        let positioner: XdgPositioner = self
-            .xdg_shell
-            .xdg_wm_base()
-            .create_positioner(&self.qh, ());
-        positioner.set_size(anchor.w.max(1), anchor.h.max(1));
-        positioner.set_anchor_rect(anchor.x, anchor.y, 1, 1);
-        positioner.set_anchor(Anchor::BottomLeft);
-        positioner.set_gravity(Gravity::BottomRight);
+        let surface = match request.kind {
+            PopupKind::Popup => {
+                // Build a positioner anchored to a 1×1 rect at the
+                // popup's top-left in the parent surface. Gravity goes
+                // BottomRight so the popup extends down/right from the
+                // anchor — same shape as a classic dropdown menu.
+                let positioner: XdgPositioner = self
+                    .xdg_shell
+                    .xdg_wm_base()
+                    .create_positioner(&self.qh, ());
+                positioner.set_size(anchor.w.max(1), anchor.h.max(1));
+                positioner.set_anchor_rect(anchor.x, anchor.y, 1, 1);
+                positioner.set_anchor(Anchor::BottomLeft);
+                positioner.set_gravity(Gravity::BottomRight);
 
-        let popup = match Popup::new(
-            self.window.xdg_surface(),
-            &positioner,
-            &self.qh,
-            &self.compositor,
-            &self.xdg_shell,
-        ) {
-            Ok(p) => p,
-            Err(_) => return,
+                let popup = match Popup::new(
+                    self.window.xdg_surface(),
+                    &positioner,
+                    &self.qh,
+                    &self.compositor,
+                    &self.xdg_shell,
+                ) {
+                    Ok(p) => p,
+                    Err(_) => return,
+                };
+                positioner.destroy();
+                ChildSurface::Popup(popup)
+            }
+            PopupKind::Dialog => {
+                // A modal dialog is a real top-level with server-side
+                // decorations: the compositor draws the title bar +
+                // close button, and we ask it to enforce a fixed size
+                // (set_min_size == set_max_size disables the resize
+                // affordances). `set_parent` makes the dialog transient
+                // to the main window so the compositor groups them and
+                // — on most compositors — also hides minimize /
+                // maximize controls on the dialog.
+                let dialog_surface = self.compositor.create_surface(&self.qh);
+                let dialog = self.xdg_shell.create_window(
+                    dialog_surface,
+                    WindowDecorations::RequestServer,
+                    &self.qh,
+                );
+                dialog.set_title("retrogui dialog");
+                dialog.set_parent(Some(&self.window));
+                dialog.set_min_size(Some((phys_w, phys_h)));
+                dialog.set_max_size(Some((phys_w, phys_h)));
+                dialog.commit();
+                ChildSurface::Dialog(dialog)
+            }
         };
-        positioner.destroy();
 
         // Pool sized for two buffers at the maximum DPI we might see
         // (popup might be rendered at scale 1 or 2). Doubling avoids
@@ -395,7 +453,7 @@ impl State {
         };
 
         self.popup = Some(PopupState {
-            popup,
+            surface,
             pool,
             anchor,
             surface_w: phys_w,
@@ -494,33 +552,76 @@ impl OutputHandler for State {
 }
 
 impl WindowHandler for State {
-    fn request_close(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &XdgWindow) {
-        self.exit = true;
+    fn request_close(&mut self, _: &Connection, _: &QueueHandle<Self>, window: &XdgWindow) {
+        if window.xdg_toplevel() == self.window.xdg_toplevel() {
+            self.exit = true;
+            return;
+        }
+        // Dialog window close-request: synthesize Escape so the dialog
+        // widget's dismiss path runs (which clears `open`, the next
+        // sync_popup tear-down then destroys the toplevel).
+        if let Some(p) = self.popup.as_ref()
+            && let ChildSurface::Dialog(dialog) = &p.surface
+            && dialog.xdg_toplevel() == window.xdg_toplevel()
+        {
+            let mods = self.modifiers;
+            self.dispatch(Event::KeyDown {
+                key: Key::Named(NamedKey::Escape),
+                modifiers: mods,
+            });
+        }
     }
 
     fn configure(
         &mut self,
         _conn: &Connection,
         _qh: &QueueHandle<Self>,
-        _window: &XdgWindow,
+        window: &XdgWindow,
         configure: WindowConfigure,
         _serial: u32,
     ) {
-        let w = configure
-            .new_size
-            .0
-            .map(|v| v.get())
-            .unwrap_or(self.surface_w.max(1));
-        let h = configure
-            .new_size
-            .1
-            .map(|v| v.get())
-            .unwrap_or(self.surface_h.max(1));
-        self.surface_w = w;
-        self.surface_h = h;
-        self.configured = true;
-        self.needs_redraw = true;
-        self.relayout();
+        if window.xdg_toplevel() == self.window.xdg_toplevel() {
+            let w = configure
+                .new_size
+                .0
+                .map(|v| v.get())
+                .unwrap_or(self.surface_w.max(1));
+            let h = configure
+                .new_size
+                .1
+                .map(|v| v.get())
+                .unwrap_or(self.surface_h.max(1));
+            self.surface_w = w;
+            self.surface_h = h;
+            self.configured = true;
+            self.needs_redraw = true;
+            self.relayout();
+            return;
+        }
+        // Dialog toplevel configure. We sized the window at open time
+        // and don't allow resizing (set_max_size == set_min_size), so
+        // the compositor normally echoes our requested size back. If it
+        // proposes something else, accept it but keep at least 1px on
+        // each axis.
+        if let Some(p) = self.popup.as_mut()
+            && let ChildSurface::Dialog(dialog) = &p.surface
+            && dialog.xdg_toplevel() == window.xdg_toplevel()
+        {
+            let w = configure
+                .new_size
+                .0
+                .map(|v| v.get())
+                .unwrap_or(p.surface_w.max(1));
+            let h = configure
+                .new_size
+                .1
+                .map(|v| v.get())
+                .unwrap_or(p.surface_h.max(1));
+            p.surface_w = w;
+            p.surface_h = h;
+            p.configured = true;
+            p.needs_redraw = true;
+        }
     }
 }
 
@@ -533,7 +634,8 @@ impl PopupHandler for State {
         configure: PopupConfigure,
     ) {
         if let Some(p) = self.popup.as_mut()
-            && p.popup.xdg_popup() == popup.xdg_popup()
+            && let ChildSurface::Popup(existing) = &p.surface
+            && existing.xdg_popup() == popup.xdg_popup()
         {
             p.surface_w = configure.width.max(1) as u32;
             p.surface_h = configure.height.max(1) as u32;
@@ -697,7 +799,7 @@ impl PointerHandler for State {
             let in_popup = self
                 .popup
                 .as_ref()
-                .map(|p| p.popup.wl_surface().id() == event.surface.id())
+                .map(|p| p.surface.wl_surface().id() == event.surface.id())
                 .unwrap_or(false);
             let pos = if in_popup {
                 let anchor = self.popup.as_ref().unwrap().anchor;

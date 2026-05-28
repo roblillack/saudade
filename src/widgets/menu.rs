@@ -2,7 +2,7 @@ use crate::event::{Event, EventCtx, Key, Modifiers, MouseButton, NamedKey};
 use crate::geometry::{Color, Point, Rect};
 use crate::painter::Painter;
 use crate::theme::Theme;
-use crate::widget::{PopupRequest, Widget};
+use crate::widget::{PopupKind, PopupRequest, Widget};
 
 const BAR_PADDING: i32 = 8;
 /// Top inset for the label baseline inside the bar. Tight enough that the
@@ -599,6 +599,7 @@ impl Widget for MenuBar {
                 popup.w + SHADOW_SIZE,
                 popup.h + SHADOW_SIZE,
             ),
+            kind: PopupKind::Popup,
         })
     }
 }
