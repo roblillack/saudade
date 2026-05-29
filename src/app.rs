@@ -647,7 +647,14 @@ impl AppHandler {
                 attrs = attrs
                     .with_title(request.title.as_deref().unwrap_or("Dialog"))
                     .with_decorations(true)
-                    .with_enabled_buttons(WindowButtons::CLOSE);
+                    .with_enabled_buttons(WindowButtons::CLOSE)
+                    // Pin min == max so the WM advertises a fixed size.
+                    // `with_resizable(false)` alone is unreliable on many
+                    // X11 WMs; equal min/max inner-size hints
+                    // (WM_NORMAL_HINTS) are honored far more consistently
+                    // — mirroring the Wayland backend's set_min/max_size.
+                    .with_min_inner_size(size)
+                    .with_max_inner_size(size);
 
                 #[cfg(any(
                     target_os = "linux",

@@ -82,11 +82,23 @@ pub(crate) fn run(app: App) {
         xdg_shell.create_window(surface, WindowDecorations::RequestServer, &qh);
     window.set_title(&window_cfg.title);
     window.set_app_id(format!("retrogui.{}", sanitize(&window_cfg.title)));
-    window.set_min_size(Some((100, 60)));
-    window.commit();
 
     let initial_w = window_cfg.size.w.max(1) as u32;
     let initial_h = window_cfg.size.h.max(1) as u32;
+
+    if window_cfg.resizable {
+        window.set_min_size(Some((100, 60)));
+    } else {
+        // Fixed-size window: min == max tells the compositor the surface
+        // is unresizable. Without the max hint, wlroots-based compositors
+        // (river, …) report `max=(0x0)` → `is_fixed_size=false` and still
+        // offer resize edges. Pinning both to the configured size mirrors
+        // the winit backend's `with_resizable(false)`.
+        window.set_min_size(Some((initial_w, initial_h)));
+        window.set_max_size(Some((initial_w, initial_h)));
+    }
+    window.commit();
+
     let pool = SlotPool::new((initial_w * initial_h * 4) as usize * 4, &shm)
         .expect("retrogui: slot pool init failed");
 
@@ -657,26 +669,19 @@ impl WindowHandler for State {
             return;
         }
         // Dialog toplevel configure. We sized the window at open time
-        // and don't allow resizing (set_max_size == set_min_size), so
-        // the compositor normally echoes our requested size back. If it
-        // proposes something else, accept it but keep at least 1px on
-        // each axis.
+        // and don't allow resizing. `set_min_size == set_max_size` is
+        // only a *hint* — compositors such as Mutter still send
+        // configures with user-dragged sizes and offer resize edges. We
+        // deliberately IGNORE the proposed size and keep committing our
+        // own fixed buffer (`surface_w`/`surface_h`, frozen at open
+        // time). Since a Wayland client owns its buffer dimensions, the
+        // window snaps back to our size and any resize drag has no
+        // effect.
         if let Some(p) = self.popup.as_mut()
             && let ChildSurface::Dialog { window: dialog, .. } = &p.surface
             && dialog.xdg_toplevel() == window.xdg_toplevel()
         {
-            let w = configure
-                .new_size
-                .0
-                .map(|v| v.get())
-                .unwrap_or(p.surface_w.max(1));
-            let h = configure
-                .new_size
-                .1
-                .map(|v| v.get())
-                .unwrap_or(p.surface_h.max(1));
-            p.surface_w = w;
-            p.surface_h = h;
+            // surface_w / surface_h left untouched on purpose.
             p.configured = true;
             p.needs_redraw = true;
         }
