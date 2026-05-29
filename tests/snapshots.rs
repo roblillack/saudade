@@ -10,8 +10,8 @@ mod common;
 use common::snapshot_at_all_scales;
 
 use retrogui::{
-    Bevel, Button, Color, Column, Container, Dialog, Image, Label, Menu, MenuBar, MenuItem,
-    Orientation, Rect, ScrollBar, TextEditor, Widget,
+    Bevel, Button, Color, Column, Container, Dialog, Image, Label, List, ListIcon, ListItem, Menu,
+    MenuBar, MenuItem, Orientation, Rect, ScrollBar, TextEditor, Widget,
 };
 
 // ---------------------------------------------------------------- Bevel
@@ -351,6 +351,80 @@ fn text_editor_scrolls() {
             Container::new(200, 100)
                 .with_background(Color::LIGHT_GRAY)
                 .add(editor),
+        )
+    });
+}
+
+// ---------------------------------------------------------------- List
+
+/// A small icon used in list-snapshot tests so we exercise icon rendering
+/// without depending on the file-browser example's specific glyphs.
+fn swatch_icon(color: Color) -> ListIcon {
+    let mut icon = ListIcon::new(10, 10);
+    icon.fill_rect(Rect::new(0, 0, 10, 10), Color::BLACK);
+    icon.fill_rect(Rect::new(1, 1, 8, 8), color);
+    icon
+}
+
+fn laid_out_list(rect: Rect, items: Vec<ListItem>) -> List {
+    let mut list = List::new(rect).with_items(items);
+    list.layout(rect);
+    list
+}
+
+#[test]
+fn list_basic() {
+    snapshot_at_all_scales("list_basic", 200, 100, || {
+        let list = laid_out_list(
+            Rect::new(8, 8, 184, 84),
+            vec![
+                ListItem::new("first").with_icon(swatch_icon(Color::RED)),
+                ListItem::new("second").with_icon(swatch_icon(Color::GREEN)),
+                ListItem::new("third").with_icon(swatch_icon(Color::NAVY)),
+                ListItem::new("plain (no icon)"),
+            ],
+        );
+        Box::new(
+            Container::new(200, 100)
+                .with_background(Color::LIGHT_GRAY)
+                .add(list),
+        )
+    });
+}
+
+#[test]
+fn list_selected_focused() {
+    snapshot_at_all_scales("list_selected_focused", 200, 100, || {
+        let mut list = laid_out_list(
+            Rect::new(8, 8, 184, 84),
+            vec![
+                ListItem::new("alpha").with_icon(swatch_icon(Color::RED)),
+                ListItem::new("beta").with_icon(swatch_icon(Color::GREEN)),
+                ListItem::new("gamma").with_icon(swatch_icon(Color::NAVY)),
+            ],
+        );
+        list.set_selected(Some(1));
+        list.set_focused(true);
+        Box::new(
+            Container::new(200, 100)
+                .with_background(Color::LIGHT_GRAY)
+                .add(list),
+        )
+    });
+}
+
+#[test]
+fn list_scrolls() {
+    snapshot_at_all_scales("list_scrolls", 200, 100, || {
+        let mut items = Vec::new();
+        for n in 1..=20 {
+            items.push(ListItem::new(format!("entry {:>2}", n)).with_icon(swatch_icon(Color::NAVY)));
+        }
+        let list = laid_out_list(Rect::new(8, 8, 184, 84), items);
+        Box::new(
+            Container::new(200, 100)
+                .with_background(Color::LIGHT_GRAY)
+                .add(list),
         )
     });
 }
