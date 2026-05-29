@@ -10,8 +10,9 @@ mod common;
 use common::snapshot_at_all_scales;
 
 use retrogui::{
-    Bevel, Button, Color, Column, Container, Dialog, Image, Label, List, ListIcon, ListItem, Menu,
-    MenuBar, MenuItem, Orientation, Rect, ScrollBar, TextEditor, Widget,
+    Bevel, Button, Color, Column, Container, Dialog, Event, Image, Key, Label, List, ListIcon,
+    ListItem, Menu, MenuBar, MenuItem, Modifiers, NamedKey, Orientation, Rect, ScrollBar,
+    TextEditor, Widget,
 };
 
 // ---------------------------------------------------------------- Bevel
@@ -69,6 +70,19 @@ fn button_default() {
             Container::new(120, 40)
                 .with_background(Color::LIGHT_GRAY)
                 .add(Button::new(Rect::new(20, 8, 80, 24), "OK").default(true)),
+        )
+    });
+}
+
+#[test]
+fn button_focused() {
+    snapshot_at_all_scales("button_focused", 120, 40, || {
+        let mut btn = Button::new(Rect::new(20, 8, 80, 24), "Press");
+        btn.set_focused(true);
+        Box::new(
+            Container::new(120, 40)
+                .with_background(Color::LIGHT_GRAY)
+                .add(btn),
         )
     });
 }
@@ -448,6 +462,236 @@ fn composite_about_box() {
                 .add(Button::new(Rect::new(90, 104, 80, 24), "OK").default(true)),
         )
     });
+}
+
+// ---------------------------------------------------------------- Focus
+
+/// A Tab press fires both `KeyDown(Tab)` and `Char('\t')` from the
+/// runtime. The container should treat the pair as a single focus move,
+/// not two — otherwise Tab from "A" lands on "C" instead of "B".
+#[test]
+fn tab_press_moves_focus_exactly_once() {
+    use retrogui::mock::MockBackend;
+    let mut container = Container::new(300, 60)
+        .add(Button::new(Rect::new(10, 10, 60, 24), "A"))
+        .add(Button::new(Rect::new(80, 10, 60, 24), "B"))
+        .add(Button::new(Rect::new(150, 10, 60, 24), "C"));
+    container.focus_first();
+    assert_eq!(container.focused_index(), Some(0));
+
+    let backend = MockBackend::new(300, 60).with_scale(1.0);
+    let tab = Event::KeyDown {
+        key: Key::Named(NamedKey::Tab),
+        modifiers: Modifiers::default(),
+    };
+    let tab_char = Event::Char {
+        ch: '\t',
+        modifiers: Modifiers::default(),
+    };
+
+    backend.dispatch(&mut container, &tab);
+    backend.dispatch(&mut container, &tab_char);
+    assert_eq!(container.focused_index(), Some(1), "first Tab press should land on B");
+
+    backend.dispatch(&mut container, &tab);
+    backend.dispatch(&mut container, &tab_char);
+    assert_eq!(container.focused_index(), Some(2), "second Tab press should land on C");
+
+    // Shift+Tab cycles backward.
+    let shift_tab = Event::KeyDown {
+        key: Key::Named(NamedKey::Tab),
+        modifiers: Modifiers {
+            shift: true,
+            ..Modifiers::default()
+        },
+    };
+    let shift_tab_char = Event::Char {
+        ch: '\t',
+        modifiers: Modifiers {
+            shift: true,
+            ..Modifiers::default()
+        },
+    };
+    backend.dispatch(&mut container, &shift_tab);
+    backend.dispatch(&mut container, &shift_tab_char);
+    assert_eq!(container.focused_index(), Some(1), "Shift+Tab should walk back to B");
+}
+
+/// Tab at an outer `Column` that has the inner `Container` as its only
+/// focusable child must not swallow the keystroke — it should propagate
+/// so the inner container can cycle among *its* focusable widgets. This
+/// is the situation the picker example sets up (Column → Container →
+/// List/OK/Cancel), so the test pins the contract.
+#[test]
+fn tab_propagates_through_single_child_outer_container() {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    use retrogui::mock::MockBackend;
+
+    // Each button records its own label when fired so the test can read
+    // back which one was activated by Enter.
+    let fired: Rc<RefCell<Option<String>>> = Rc::new(RefCell::new(None));
+    let make_btn = |x: i32, label: &'static str| {
+        let f = fired.clone();
+        Button::new(Rect::new(x, 10, 60, 24), label).on_click(move |_cx| {
+            *f.borrow_mut() = Some(label.to_string());
+        })
+    };
+
+    let inner = Container::new(300, 60)
+        .add(make_btn(10, "A"))
+        .add(make_btn(80, "B"))
+        .add(make_btn(150, "C"));
+    let mut outer = Column::new().add_fill(inner);
+    outer.layout(Rect::new(0, 0, 300, 60));
+    outer.focus_first();
+
+    let backend = MockBackend::new(300, 60).with_scale(1.0);
+    let tab = Event::KeyDown {
+        key: Key::Named(NamedKey::Tab),
+        modifiers: Modifiers::default(),
+    };
+    let tab_char = Event::Char {
+        ch: '\t',
+        modifiers: Modifiers::default(),
+    };
+    let enter = Event::KeyDown {
+        key: Key::Named(NamedKey::Enter),
+        modifiers: Modifiers::default(),
+    };
+
+    // Initial focus on A (Container.focus_first picks first focusable).
+    backend.dispatch(&mut outer, &enter);
+    assert_eq!(fired.borrow().as_deref(), Some("A"));
+
+    fired.borrow_mut().take();
+    backend.dispatch(&mut outer, &tab);
+    backend.dispatch(&mut outer, &tab_char);
+    backend.dispatch(&mut outer, &enter);
+    assert_eq!(
+        fired.borrow().as_deref(),
+        Some("B"),
+        "after one Tab, Enter should fire B"
+    );
+
+    fired.borrow_mut().take();
+    backend.dispatch(&mut outer, &tab);
+    backend.dispatch(&mut outer, &tab_char);
+    backend.dispatch(&mut outer, &enter);
+    assert_eq!(
+        fired.borrow().as_deref(),
+        Some("C"),
+        "after two Tabs, Enter should fire C"
+    );
+
+    fired.borrow_mut().take();
+    backend.dispatch(&mut outer, &tab);
+    backend.dispatch(&mut outer, &tab_char);
+    backend.dispatch(&mut outer, &enter);
+    assert_eq!(
+        fired.borrow().as_deref(),
+        Some("A"),
+        "Tab cycling should wrap back to A"
+    );
+}
+
+/// A default button fires on Enter regardless of which sibling holds
+/// focus — the classic Win 3.1 "OK is the Enter target in any dialog"
+/// behavior. Once it fires, the focused widget must not also see the
+/// Enter (otherwise a focused List would also activate its current
+/// item).
+#[test]
+fn default_button_fires_on_enter_from_any_focus() {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    use retrogui::mock::MockBackend;
+
+    let fired: Rc<RefCell<Vec<String>>> = Rc::new(RefCell::new(Vec::new()));
+    let make_btn = |x: i32, label: &'static str, default: bool| {
+        let f = fired.clone();
+        let mut b = Button::new(Rect::new(x, 40, 60, 24), label).on_click(move |_cx| {
+            f.borrow_mut().push(label.to_string());
+        });
+        if default {
+            b = b.default(true);
+        }
+        b
+    };
+
+    let mut list = List::new(Rect::new(10, 10, 200, 20))
+        .with_items(vec![ListItem::new("alpha"), ListItem::new("beta")]);
+    list.set_selected(Some(0));
+
+    let mut c = Container::new(300, 80)
+        .add(list)
+        .add(make_btn(10, "OK", true))
+        .add(make_btn(80, "Cancel", false));
+    c.layout(Rect::new(0, 0, 300, 80));
+    c.focus_first();
+    // List is the first focusable widget so it should hold focus initially.
+    assert_eq!(c.focused_index(), Some(0));
+
+    let backend = MockBackend::new(300, 80).with_scale(1.0);
+    let enter = Event::KeyDown {
+        key: Key::Named(NamedKey::Enter),
+        modifiers: Modifiers::default(),
+    };
+
+    // Enter while the list is focused fires the default button (OK), not
+    // the list's own Enter handler.
+    backend.dispatch(&mut c, &enter);
+    assert_eq!(*fired.borrow(), vec!["OK".to_string()]);
+
+    // Focus the Cancel button via Tab and confirm Enter still fires OK
+    // (default beats focused non-default per the explicit request).
+    fired.borrow_mut().clear();
+    let tab = Event::KeyDown {
+        key: Key::Named(NamedKey::Tab),
+        modifiers: Modifiers::default(),
+    };
+    let tab_char = Event::Char {
+        ch: '\t',
+        modifiers: Modifiers::default(),
+    };
+    // list -> OK -> Cancel
+    backend.dispatch(&mut c, &tab);
+    backend.dispatch(&mut c, &tab_char);
+    backend.dispatch(&mut c, &tab);
+    backend.dispatch(&mut c, &tab_char);
+    assert_eq!(c.focused_index(), Some(2), "Cancel should be focused");
+
+    backend.dispatch(&mut c, &enter);
+    assert_eq!(
+        *fired.borrow(),
+        vec!["OK".to_string()],
+        "Enter on focused Cancel should still fire default OK"
+    );
+
+    // Walk back from Cancel to OK with Shift+Tab and press Enter —
+    // the focused-button path must still fire exactly once (no double-
+    // fire via the accelerator pass).
+    fired.borrow_mut().clear();
+    let shift_tab = Event::KeyDown {
+        key: Key::Named(NamedKey::Tab),
+        modifiers: Modifiers {
+            shift: true,
+            ..Modifiers::default()
+        },
+    };
+    let shift_tab_char = Event::Char {
+        ch: '\t',
+        modifiers: Modifiers {
+            shift: true,
+            ..Modifiers::default()
+        },
+    };
+    backend.dispatch(&mut c, &shift_tab);
+    backend.dispatch(&mut c, &shift_tab_char);
+    assert_eq!(c.focused_index(), Some(1), "OK should be focused");
+    backend.dispatch(&mut c, &enter);
+    assert_eq!(*fired.borrow(), vec!["OK".to_string()]);
 }
 
 /// Sanity-check that the [`MockBackend`] API itself returns a

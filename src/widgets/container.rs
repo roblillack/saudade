@@ -3,6 +3,7 @@ use crate::geometry::{Color, Rect, Size};
 use crate::painter::Painter;
 use crate::theme::Theme;
 use crate::widget::{PopupRequest, Widget};
+use crate::widgets::{TabAction, tab_action};
 
 /// A flat collection of widgets at absolute positions inside a fixed-size area.
 ///
@@ -59,18 +60,12 @@ impl Container {
         self.children.push(Box::new(widget));
     }
 
-    /// Focus the first focusable child, if any. Call this at startup if you
-    /// want a window to begin with a particular widget keyboard-ready (e.g.
-    /// a Notepad window that should accept typing immediately).
-    pub fn focus_first(&mut self) {
-        for (idx, child) in self.children.iter_mut().enumerate() {
-            if child.focusable() {
-                child.set_focused(true);
-                self.focused = Some(idx);
-                return;
-            }
-        }
+    /// Index of the currently-focused child, or `None` if nothing has been
+    /// focused yet. Exposed mainly so tests can verify focus cycling.
+    pub fn focused_index(&self) -> Option<usize> {
+        self.focused
     }
+
 
     fn choose_target(&self, event: &Event) -> Option<usize> {
         if event.is_keyboard() {
@@ -99,10 +94,59 @@ impl Container {
         if let Some(new) = new_focus
             && let Some(child) = self.children.get_mut(new)
         {
-            child.set_focused(true);
+            // Use `focus_first` so wrapper widgets that delegate focus to a
+            // nested target get a chance to set up the right leaf, rather
+            // than just marking themselves focused.
+            child.focus_first();
         }
         self.focused = new_focus;
         ctx.request_paint();
+    }
+
+    fn focusable_count(&self) -> usize {
+        self.children.iter().filter(|c| c.focusable()).count()
+    }
+
+    /// Move focus to the next / previous focusable child. Wraps at either end
+    /// so Tab/Shift+Tab cycling stays inside the container. Returns `true`
+    /// only when focus actually moved — that way an outer container with a
+    /// single nested container as its only focusable child *doesn't*
+    /// consume Tab, letting the event propagate to the inner container
+    /// which can then cycle among its own children.
+    fn cycle_focus(&mut self, dir: i32, ctx: &mut EventCtx) -> bool {
+        let n = self.children.len();
+        if n == 0 {
+            return false;
+        }
+        let candidates: Vec<usize> = (0..n).filter(|&i| self.children[i].focusable()).collect();
+        if candidates.is_empty() {
+            return false;
+        }
+        let next = next_in_cycle(&candidates, self.focused, dir);
+        if Some(next) == self.focused {
+            return false;
+        }
+        self.change_focus(Some(next), ctx);
+        true
+    }
+}
+
+
+fn next_in_cycle(candidates: &[usize], current: Option<usize>, dir: i32) -> usize {
+    let n = candidates.len() as i32;
+    let cur_pos = current.and_then(|c| candidates.iter().position(|&i| i == c));
+    match cur_pos {
+        None => {
+            if dir > 0 {
+                candidates[0]
+            } else {
+                candidates[(n - 1) as usize]
+            }
+        }
+        Some(p) => {
+            let np = ((p as i32) + dir).rem_euclid(n) as usize;
+            candidates[np]
+        }
     }
 }
 
@@ -154,6 +198,9 @@ impl Widget for Container {
             for (idx, child) in self.children.iter_mut().enumerate() {
                 if child.accepts_accelerators() && Some(idx) != self.focused {
                     child.event(event, ctx);
+                    if ctx.is_consumed() {
+                        return;
+                    }
                     if child.captures_pointer() {
                         accelerator_blocking = true;
                     }
@@ -161,6 +208,25 @@ impl Widget for Container {
             }
             if accelerator_blocking {
                 return;
+            }
+
+            // Tab / Shift+Tab cycle focus between sibling focusable
+            // children before the event reaches whoever currently holds
+            // focus. The runtime fires both `KeyDown(Tab)` and the
+            // matching `Char('\t')` for a single press, so we cycle on
+            // the KeyDown and swallow the paired Char so it doesn't
+            // double-step focus or leak into the new widget. When this
+            // container has fewer than two focusable children it lets
+            // both events fall through — a lone `TextEditor` can then
+            // still receive `'\t'` and insert it as indentation.
+            match tab_action(event) {
+                Some(TabAction::Cycle(dir)) => {
+                    if self.cycle_focus(dir, ctx) {
+                        return;
+                    }
+                }
+                Some(TabAction::Swallow) if self.focusable_count() >= 2 => return,
+                _ => {}
             }
         }
 
@@ -198,6 +264,20 @@ impl Widget for Container {
 
     fn captures_pointer(&self) -> bool {
         self.captured.is_some()
+    }
+
+    fn focusable(&self) -> bool {
+        self.children.iter().any(|c| c.focusable())
+    }
+
+    fn focus_first(&mut self) -> bool {
+        for (idx, child) in self.children.iter_mut().enumerate() {
+            if child.focus_first() {
+                self.focused = Some(idx);
+                return true;
+            }
+        }
+        false
     }
 
     fn popup_request(&self) -> Option<PopupRequest> {

@@ -638,9 +638,16 @@ impl WindowHandler for State {
                 .unwrap_or(self.surface_h.max(1));
             self.surface_w = w;
             self.surface_h = h;
+            let first_configure = !self.configured;
             self.configured = true;
             self.needs_redraw = true;
             self.relayout();
+            if first_configure {
+                // Match the winit backend: auto-focus the first focusable
+                // widget on initial configure so single-widget roots react
+                // to keyboard input out of the box.
+                self.root.focus_first();
+            }
             return;
         }
         // Dialog toplevel configure. We sized the window at open time

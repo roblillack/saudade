@@ -17,12 +17,14 @@ assemble a Win 3.1 about box, a Notepad-style text editor, and similar
 single-window utilities. Scope is roughly that of NeXTSTEP's *WINGs*: a
 toolkit for utilities, not for full applications.
 
-Two reference apps live in the same workspace:
+Four reference apps live in the same workspace:
 
 | Crate       | What it shows                                            |
 |-------------|----------------------------------------------------------|
 | `retrofetch`| About-box dialog (`Container`, `Label`, `Button`, `Image`, `Bevel`). |
 | `notepad`   | Editor window with menu bar (`MenuBar`, `TextEditor`).   |
+| `filer`     | Filesystem browser using `List` with folder/file icons.  |
+| `picker`    | Pick-an-item dialog: `List` + buttons + `Dialog`, with Tab/Shift+Tab focus cycling. |
 
 
 ## At a glance
@@ -239,11 +241,12 @@ which is exactly what `Container`'s children want.
 
 ```rust
 // Notepad layout: menu bar pinned to the top, editor fills the rest.
-let mut root = Column::new()
+// The runtime auto-focuses the first focusable widget (the editor) at
+// startup, so the user can type immediately.
+let root = Column::new()
     .with_background(Color::WHITE)
     .add_fixed(menu_bar, MENU_BAR_H)
     .add_fill(text_editor);
-root.focus_first();
 ```
 
 `Column` also handles capture, focus, accelerator routing, and the
@@ -260,6 +263,11 @@ A flat collection of widgets at absolute positions. The container handles:
   and `MenuBar`);
 * **keyboard focus** — clicking a focusable child makes it the keyboard
   target; keyboard events route there only;
+* **focus cycling** — Tab and Shift+Tab walk forward / backward through
+  focusable children, wrapping at either end. The container looks at
+  each child's `focusable()` and calls `focus_first` on the new target,
+  so wrapper widgets that delegate focus to a nested leaf are handled
+  transparently;
 * **accelerator routing** — keyboard events also go to any child whose
   `accepts_accelerators()` returns true (used by `MenuBar` to catch
   Alt+letter combos while a sibling holds focus);
@@ -277,10 +285,12 @@ let root = Container::new(395, 305)        // size in logical pixels
 // imperatively:
 let mut root = Container::new(395, 305);
 root.push(Label::new(20, 20, "Hello"));
-
-// auto-focus the first focusable child (typically a TextEditor):
-root.focus_first();
 ```
+
+The runtime calls `Widget::focus_first` on the root once the window is
+ready, so a container that holds a `TextEditor` or `List` will hand it
+keyboard focus automatically. Override the trait method to choose a
+different initial target.
 
 Add order matters: later widgets paint on top and are hit-tested first.
 
@@ -312,6 +322,17 @@ Button::new(Rect::new(317, 16, 60, 22), "OK")
 Press behavior matches Windows: pressing inside arms the button,
 dragging out un-arms (sunken pops back up), dragging back in re-arms,
 releasing inside fires `on_click`, releasing outside cancels.
+
+Buttons are focusable: Tab/Shift+Tab cycle through them and the focused
+button draws a dotted focus rectangle inside its bevel. Enter or Space
+fires the button while it holds focus.
+
+A button created with `.default(true)` is also the **container's Enter
+accelerator**: pressing Enter anywhere inside the same `Container` or
+`Column` fires the default button, regardless of which sibling holds
+focus. The widget that consumed the event sets `EventCtx::consume_event`
+so the focused widget (e.g., a list whose Enter handler would otherwise
+activate the selected row) doesn't also react to the same keystroke.
 
 ### `Bevel`
 
@@ -542,6 +563,7 @@ pub trait Widget {
     fn set_focused(&mut self, _focused: bool) {}
     fn accepts_accelerators(&self) -> bool { false }
     fn layout(&mut self, _bounds: Rect) {}
+    fn focus_first(&mut self) -> bool { /* focus self if focusable */ }
     fn popup_request(&self) -> Option<PopupRequest> { None }
 }
 ```
@@ -564,6 +586,11 @@ pub trait Widget {
   the available rect changes. Widgets used in absolutely-positioned
   layouts ignore it; flexible widgets store the new rect and propagate
   it to their own children.
+* `focus_first` is called by the runtime on the root widget once the
+  window is configured. The default focuses `self` if `focusable()` is
+  true; `Container` and `Column` override it to walk their children and
+  delegate, so the first focusable widget in the tree becomes the
+  initial keyboard target without any manual wiring.
 * `popup_request` returns `Some` while the widget wants the runtime to
   host a popup (e.g., menubar dropdowns) in its own top-level window.
   Containers propagate it from their children; the runtime polls it
@@ -783,11 +810,10 @@ fn main() {
             ],
         ));
 
-    let mut root = Container::new(W, H)
+    let root = Container::new(W, H)
         .with_background(retrogui::Color::WHITE)
         .add(menu_bar)
         .add(SharedEditor(editor.clone()));
-    root.focus_first();
 
     App::new(WindowConfig::new("Notepad", W, H).resizable(true), root).run();
 }

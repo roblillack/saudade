@@ -22,6 +22,7 @@
 //! able to feed [`Event`](crate::event::Event)s into the same backend to
 //! drive widgets between renders.
 
+use crate::event::{Event, EventCtx};
 use crate::font::Font;
 use crate::geometry::{Rect, Size};
 use crate::painter::Painter;
@@ -84,6 +85,19 @@ impl MockBackend {
         let w = (self.logical_size.w as f32 * self.scale).round().max(1.0) as i32;
         let h = (self.logical_size.h as f32 * self.scale).round().max(1.0) as i32;
         Size::new(w, h)
+    }
+
+    /// Send a synthetic event to a widget tree, returning the
+    /// [`DispatchOutcome`] flags the widget set on its `EventCtx`. Used by
+    /// tests to drive focus / keyboard behavior without spinning up the
+    /// full winit / Wayland runtime.
+    pub fn dispatch(&self, root: &mut dyn Widget, event: &Event) -> DispatchOutcome {
+        let mut ctx = EventCtx::new();
+        root.event(event, &mut ctx);
+        DispatchOutcome {
+            paint_requested: ctx.paint_requested,
+            close_requested: ctx.close_requested,
+        }
     }
 
     /// Lay out the widget at the backend's logical size, paint into a
@@ -154,6 +168,15 @@ fn origin_centered(logical: Size, scale: f32, physical: Size) -> (i32, i32) {
     let ox = ((physical.w - content_w) / 2).max(0);
     let oy = ((physical.h - content_h) / 2).max(0);
     (ox, oy)
+}
+
+/// Flags a widget can set on its `EventCtx` after handling an event,
+/// surfaced for tests so they can confirm a button fired, focus moved,
+/// etc.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct DispatchOutcome {
+    pub paint_requested: bool,
+    pub close_requested: bool,
 }
 
 /// Result of [`MockBackend::render`]. Holds a physical-pixel ARGB32

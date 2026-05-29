@@ -130,8 +130,16 @@ impl Widget for FileBrowser {
         self.list.captures_pointer()
     }
 
+    // Focus is owned by the inner list — FileBrowser is just a wrapper.
+    // Delegating these three keeps focus handling transparent: parent
+    // containers see the wrapper as focusable, auto-focus reaches the list,
+    // and Tab cycling can drive into / out of the wrapper correctly.
     fn focusable(&self) -> bool {
-        true
+        self.list.focusable()
+    }
+
+    fn focus_first(&mut self) -> bool {
+        self.list.focus_first()
     }
 
     fn set_focused(&mut self, focused: bool) {

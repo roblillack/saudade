@@ -3,6 +3,7 @@ use crate::geometry::{Color, Rect};
 use crate::painter::Painter;
 use crate::theme::Theme;
 use crate::widget::{PopupRequest, Widget};
+use crate::widgets::{TabAction, tab_action};
 
 /// Vertical layout container. Each child is given a horizontal slice of the
 /// column's bounds: either a *fixed* height it asked for, or it shares the
@@ -99,15 +100,6 @@ impl Column {
         self.overlays.push(Box::new(widget));
     }
 
-    pub fn focus_first(&mut self) {
-        for (idx, child) in self.children.iter_mut().enumerate() {
-            if child.widget.focusable() {
-                child.widget.set_focused(true);
-                self.focused = Some(idx);
-                return;
-            }
-        }
-    }
 
     fn choose_target(&self, event: &Event) -> Option<usize> {
         if event.is_keyboard() {
@@ -144,10 +136,53 @@ impl Column {
         if let Some(new) = new_focus
             && let Some(c) = self.children.get_mut(new)
         {
-            c.widget.set_focused(true);
+            // Use `focus_first` so wrapper widgets that delegate focus to a
+            // nested target get a chance to set up the right leaf.
+            c.widget.focus_first();
         }
         self.focused = new_focus;
         ctx.request_paint();
+    }
+
+    fn focusable_count(&self) -> usize {
+        self.children.iter().filter(|c| c.widget.focusable()).count()
+    }
+
+    fn cycle_focus(&mut self, dir: i32, ctx: &mut EventCtx) -> bool {
+        let n = self.children.len();
+        if n == 0 {
+            return false;
+        }
+        let candidates: Vec<usize> = (0..n)
+            .filter(|&i| self.children[i].widget.focusable())
+            .collect();
+        if candidates.is_empty() {
+            return false;
+        }
+        let next = next_in_cycle(&candidates, self.focused, dir);
+        if Some(next) == self.focused {
+            return false;
+        }
+        self.change_focus(Some(next), ctx);
+        true
+    }
+}
+
+fn next_in_cycle(candidates: &[usize], current: Option<usize>, dir: i32) -> usize {
+    let n = candidates.len() as i32;
+    let cur_pos = current.and_then(|c| candidates.iter().position(|&i| i == c));
+    match cur_pos {
+        None => {
+            if dir > 0 {
+                candidates[0]
+            } else {
+                candidates[(n - 1) as usize]
+            }
+        }
+        Some(p) => {
+            let np = ((p as i32) + dir).rem_euclid(n) as usize;
+            candidates[np]
+        }
     }
 }
 
@@ -264,6 +299,9 @@ impl Widget for Column {
             for (idx, child) in self.children.iter_mut().enumerate() {
                 if child.widget.accepts_accelerators() && Some(idx) != self.focused {
                     child.widget.event(event, ctx);
+                    if ctx.is_consumed() {
+                        return;
+                    }
                     if child.widget.captures_pointer() {
                         accelerator_blocking = true;
                     }
@@ -271,6 +309,22 @@ impl Widget for Column {
             }
             if accelerator_blocking {
                 return;
+            }
+
+            // Tab / Shift+Tab cycle focus between sibling focusable
+            // children before the event reaches the focused widget. The
+            // matching `Char('\t')` is swallowed so a single Tab press
+            // doesn't move focus twice; when this column has fewer than
+            // two focusable children we let both events fall through so
+            // a sole `TextEditor` can still receive `'\t'`.
+            match tab_action(event) {
+                Some(TabAction::Cycle(dir)) => {
+                    if self.cycle_focus(dir, ctx) {
+                        return;
+                    }
+                }
+                Some(TabAction::Swallow) if self.focusable_count() >= 2 => return,
+                _ => {}
             }
         }
 
@@ -306,6 +360,21 @@ impl Widget for Column {
 
     fn captures_pointer(&self) -> bool {
         self.captured.is_some() || self.active_overlay().is_some()
+    }
+
+    fn focusable(&self) -> bool {
+        self.children.iter().any(|c| c.widget.focusable())
+            || self.overlays.iter().any(|o| o.focusable())
+    }
+
+    fn focus_first(&mut self) -> bool {
+        for (idx, child) in self.children.iter_mut().enumerate() {
+            if child.widget.focus_first() {
+                self.focused = Some(idx);
+                return true;
+            }
+        }
+        false
     }
 
     fn popup_request(&self) -> Option<PopupRequest> {

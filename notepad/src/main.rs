@@ -134,13 +134,13 @@ fn main() {
 
     // The Column layout makes the menu bar a fixed strip at the top spanning
     // the full window width, and lets the editor flex to fill the rest. The
-    // dialog floats on top as an overlay (no layout slot).
-    let mut root = Column::new()
+    // dialog floats on top as an overlay (no layout slot). The runtime
+    // auto-focuses the editor on startup.
+    let root = Column::new()
         .with_background(Color::WHITE)
         .add_fixed(menu_bar, MENU_BAR_H)
         .add_fill(SharedEditor(editor.clone()))
         .add_overlay(SharedDialog(dialog.clone()));
-    root.focus_first();
 
     App::new(
         WindowConfig::new("Notepad", WINDOW_W, WINDOW_H).resizable(true),

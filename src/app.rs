@@ -192,6 +192,10 @@ impl ApplicationHandler for AppHandler {
         self.scale = win.scale_factor() as f32;
         resize_surface(&mut surface, self.physical);
         relayout(&mut self.root, self.physical, self.scale, self.design_size);
+        // Give the first focusable widget in the tree keyboard focus by
+        // default so apps with a clear "primary" target (a text editor, a
+        // list) accept typing / arrow keys without manual setup.
+        self.root.focus_first();
 
         self.main_win = Some(win);
         self.main_id = Some(id);

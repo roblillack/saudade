@@ -1,0 +1,7 @@
+---
+source: retrogui/tests/common/mod.rs
+assertion_line: 63
+expression: snap.to_png()
+extension: png
+snapshot_kind: binary
+---

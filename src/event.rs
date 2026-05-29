@@ -95,6 +95,11 @@ pub struct EventCtx {
     pub(crate) close_requested: bool,
     pub(crate) focus_requested: bool,
     pub(crate) focus_released: bool,
+    /// Set by a widget that has fully handled an event and wants to stop
+    /// further routing. Parent containers check it after each dispatch
+    /// step (accelerator pass, focused dispatch, …) and bail out so the
+    /// event doesn't trigger a second action elsewhere in the tree.
+    pub(crate) consumed: bool,
 }
 
 impl EventCtx {
@@ -104,7 +109,23 @@ impl EventCtx {
             close_requested: false,
             focus_requested: false,
             focus_released: false,
+            consumed: false,
         }
+    }
+
+    /// Returns `true` if a widget has called [`Self::consume_event`] during
+    /// this dispatch. Used by parent containers to decide whether to keep
+    /// routing the event.
+    pub fn is_consumed(&self) -> bool {
+        self.consumed
+    }
+
+    /// Mark the current event as handled. Parent containers stop routing
+    /// once they see this flag, so the same keystroke doesn't fire two
+    /// actions (e.g., a default button's Enter accelerator stopping the
+    /// focused list from also reacting to the keypress).
+    pub fn consume_event(&mut self) {
+        self.consumed = true;
     }
 
     /// Mark the window dirty so the runtime repaints on the next idle tick.

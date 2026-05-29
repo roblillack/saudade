@@ -106,6 +106,27 @@ pub trait Widget {
         None
     }
 
+    /// Try to give keyboard focus to this widget or one of its descendants.
+    /// Returns `true` if a focusable target was located and now holds focus.
+    ///
+    /// The default implementation focuses `self` whenever
+    /// [`Widget::focusable`] is true, which covers leaf widgets (TextEditor,
+    /// List, …). Container widgets override this to walk their children and
+    /// delegate, so a deeply-nested tree can still be initialized with a
+    /// single top-level call.
+    ///
+    /// The runtime calls this on the root widget once after the first
+    /// layout, so apps no longer need to wire focus manually unless they
+    /// want a non-default initial target.
+    fn focus_first(&mut self) -> bool {
+        if self.focusable() {
+            self.set_focused(true);
+            true
+        } else {
+            false
+        }
+    }
+
     /// `true` if this widget needs periodic [`Event::Tick`](crate::event::Event::Tick)
     /// events to drive an animation. The runtime polls this after every
     /// dispatch and, while any widget in the tree wants ticks, fires
