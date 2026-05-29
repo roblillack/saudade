@@ -11,8 +11,8 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use retrogui::{
-    App, Button, Checkbox, Color, Column, Container, Dialog, Event, EventCtx, Label, List,
-    ListItem, Painter, PopupRequest, Rect, Theme, Widget, WindowConfig,
+    App, Button, Checkbox, Column, Container, Dialog, Event, EventCtx, Label, List, ListItem,
+    Painter, PopupRequest, Rect, Theme, Widget, WindowConfig,
 };
 
 const WINDOW_W: i32 = 280;
@@ -77,7 +77,6 @@ fn main() {
     });
 
     let content = Container::new(WINDOW_W, WINDOW_H)
-        .with_background(Color::LIGHT_GRAY)
         .add(Label::new(16, 12, "Pick an ingredient (Tab to cycle):"))
         .add(SharedList(list.clone()))
         .add(SharedCheckbox(favorite.clone()))
@@ -89,7 +88,6 @@ fn main() {
     // everything else and the runtime can host it in its own top-level
     // window via PopupRequest.
     let root = Column::new()
-        .with_background(Color::LIGHT_GRAY)
         .add_fill(content)
         .add_overlay(SharedDialog(dialog.clone()));
 

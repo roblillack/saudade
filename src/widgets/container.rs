@@ -33,7 +33,7 @@ impl Container {
     pub fn new(width: i32, height: i32) -> Self {
         Self {
             size: Size::new(width, height),
-            background: None,
+            background: Some(Color::WHITE),
             border: None,
             children: Vec::new(),
             captured: None,

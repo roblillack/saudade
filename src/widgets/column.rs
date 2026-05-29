@@ -47,7 +47,7 @@ impl Column {
     pub fn new() -> Self {
         Self {
             bounds: Rect::new(0, 0, 0, 0),
-            background: None,
+            background: Some(Color::WHITE),
             children: Vec::new(),
             overlays: Vec::new(),
             captured: None,

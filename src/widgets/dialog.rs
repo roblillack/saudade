@@ -199,11 +199,11 @@ impl Widget for Dialog {
 
         let dialog = self.dialog_rect();
 
-        // Solid face fill across the whole client area. The compositor /
-        // WM draws the surrounding decorations (title bar, close
-        // button), so we don't need a border or bevel here — the dialog
-        // body is just the face color.
-        painter.fill_rect(dialog, theme.face);
+        // Solid background fill across the whole client area. The compositor
+        // / WM draws the surrounding decorations (title bar, close button),
+        // so we don't need a border or bevel here — the dialog body is just
+        // the window background color.
+        painter.fill_rect(dialog, theme.background);
 
         // Body content: icon on the left, wrapped message lines on the
         // right.

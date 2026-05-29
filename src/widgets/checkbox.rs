@@ -81,11 +81,13 @@ impl Widget for Checkbox {
         let box_rect = self.box_rect();
         let pressed_visual = self.pressed && self.armed;
 
-        // Sunken etched frame: dark top/left, light bottom/right — like a
-        // text field. While the user is actively pressing the checkbox we
-        // tint the inner face gray to match Win 3.1 mouse feedback.
-        painter.fill_rect(box_rect, if pressed_visual { theme.face } else { theme.background });
-        painter.sunken_bevel(box_rect, theme.highlight, theme.shadow);
+        // 1px black outline around a flat field — enough to stay visible on a
+        // white window background without leaning on a sunken bevel.
+        painter.fill_rect(
+            box_rect.inset(1),
+            if pressed_visual { theme.face } else { theme.background },
+        );
+        painter.stroke_rect(box_rect, theme.border);
 
         if self.checked {
             draw_check(painter, box_rect, theme.text);
