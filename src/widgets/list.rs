@@ -287,15 +287,19 @@ impl Widget for List {
             }
             let y = text_y0 + row_offset as i32 * ROW_HEIGHT;
             let selected = self.selected == Some(row);
-            let (text_color, draw_bg) = if selected {
-                (theme.highlight_text, true)
+            // Active focus → navy/white; inactive (focus elsewhere) → muted
+            // gray/black, matching the CUA convention so the user can still
+            // see what's picked without the row competing for attention.
+            let (text_color, bg_color) = if self.focused {
+                (theme.highlight_text, theme.highlight_bg)
             } else {
-                (theme.text, false)
+                (theme.text, theme.face)
             };
-            if draw_bg {
+            let text_color = if selected { text_color } else { theme.text };
+            if selected {
                 painter.fill_rect(
                     Rect::new(text_x, y, row_w.max(0), ROW_HEIGHT),
-                    theme.highlight_bg,
+                    bg_color,
                 );
             }
 
