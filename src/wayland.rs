@@ -987,7 +987,10 @@ fn map_keysym(keysym: Keysym) -> Option<Key> {
         K::Return | K::KP_Enter => NamedKey::Enter,
         K::BackSpace => NamedKey::Backspace,
         K::Delete | K::KP_Delete => NamedKey::Delete,
-        K::Tab => NamedKey::Tab,
+        // ISO_Left_Tab is what xkb produces for Shift+Tab — without this
+        // alias the focus-cycling layer never sees a Tab key event when
+        // the user wants to walk focus backwards.
+        K::Tab | K::ISO_Left_Tab => NamedKey::Tab,
         K::Escape => NamedKey::Escape,
         K::space => NamedKey::Space,
         K::Left | K::KP_Left => NamedKey::Left,
