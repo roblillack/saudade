@@ -15,7 +15,7 @@ use std::time::Duration;
 
 use smithay_client_toolkit::compositor::{CompositorHandler, CompositorState};
 use smithay_client_toolkit::output::{OutputHandler, OutputState};
-use smithay_client_toolkit::reexports::calloop::EventLoop as CalloopLoop;
+use smithay_client_toolkit::reexports::calloop::{EventLoop as CalloopLoop, LoopHandle};
 use smithay_client_toolkit::reexports::calloop_wayland_source::WaylandSource;
 use smithay_client_toolkit::registry::{ProvidesRegistryState, RegistryState};
 use smithay_client_toolkit::seat::keyboard::{
@@ -120,6 +120,7 @@ pub(crate) fn run(app: App) {
 
         popup: None,
         qh: qh.clone(),
+        loop_handle: event_loop.handle(),
     };
     drop(conn);
 
@@ -176,6 +177,11 @@ struct State {
 
     popup: Option<PopupState>,
     qh: QueueHandle<State>,
+    /// Calloop handle, captured during startup so the keyboard-acquire
+    /// path in `new_capability` can hand it to SCTK's `get_keyboard_with_repeat`
+    /// — that's what arms the timer that turns held keys into repeated
+    /// `KeyDown` / `Char` events.
+    loop_handle: LoopHandle<'static, State>,
 }
 
 /// Wayland-side state for the subordinate window that hosts a widget
@@ -720,9 +726,22 @@ impl SeatHandler for State {
         capability: Capability,
     ) {
         if capability == Capability::Keyboard && self.keyboard.is_none() {
+            // Use the repeat-aware constructor so SCTK arms a calloop timer
+            // based on the compositor's RepeatInfo. The callback fires once
+            // per repeat tick with the same KeyEvent the original press
+            // produced — we route it through `handle_key` so it walks the
+            // same KeyDown / Char dispatch path as a fresh press.
             self.keyboard = self
                 .seat_state
-                .get_keyboard(qh, &seat, None)
+                .get_keyboard_with_repeat(
+                    qh,
+                    &seat,
+                    None,
+                    self.loop_handle.clone(),
+                    Box::new(|state: &mut State, _kbd, event| {
+                        state.handle_key(event, true);
+                    }),
+                )
                 .ok();
         }
         if capability == Capability::Pointer && self.pointer.is_none() {

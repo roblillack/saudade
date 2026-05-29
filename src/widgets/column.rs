@@ -390,4 +390,9 @@ impl Widget for Column {
         }
         None
     }
+
+    fn wants_ticks(&self) -> bool {
+        self.children.iter().any(|c| c.widget.wants_ticks())
+            || self.overlays.iter().any(|o| o.wants_ticks())
+    }
 }

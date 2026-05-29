@@ -48,4 +48,5 @@ pub use widget::{PopupKind, PopupRequest, Widget};
 pub use widgets::{
     Bevel, Button, Checkbox, Column, Container, Dialog, DialogIcon, Image, Label, List, ListIcon,
     ListItem, Menu, MenuBar, MenuItem, Orientation, SCROLLBAR_THICKNESS, ScrollBar, TextEditor,
+    TextInput,
 };

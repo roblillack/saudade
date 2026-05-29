@@ -10,6 +10,7 @@ mod list;
 mod menu;
 mod scrollbar;
 mod text_editor;
+mod text_input;
 
 use crate::event::{Event, Key, NamedKey};
 
@@ -59,3 +60,4 @@ pub use list::{List, ListIcon, ListItem};
 pub use menu::{Menu, MenuBar, MenuItem};
 pub use scrollbar::{Orientation, ScrollBar, SCROLLBAR_THICKNESS};
 pub use text_editor::TextEditor;
+pub use text_input::TextInput;

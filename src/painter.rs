@@ -11,6 +11,11 @@ use crate::theme::Theme;
 /// always share an exact physical-pixel boundary, which keeps Win 3.1 chrome
 /// crisp at every DPI. Text is rasterized once at its final physical size via
 /// fontdue — no resampling, no smudge.
+/// Opaque clip-stack token returned by [`Painter::push_clip`]. Pass it back
+/// to [`Painter::restore_clip`] to pop the clip the caller installed.
+#[derive(Clone, Copy)]
+pub struct SavedClip(Option<(i32, i32, i32, i32)>);
+
 pub struct Painter<'a> {
     pixels: &'a mut [u32],
     /// Physical buffer width in pixels.
@@ -100,6 +105,31 @@ impl<'a> Painter<'a> {
 
     pub fn clear_clip(&mut self) {
         self.clip = None;
+    }
+
+    /// Restrict subsequent draws to the intersection of `rect` (in logical
+    /// pixels) and any clip already in effect. Returns the previous clip
+    /// state — pass it to [`Painter::restore_clip`] when done. Widget code
+    /// uses this to keep overflow text from leaking past its field edges
+    /// without having to know its own physical-pixel placement.
+    pub fn push_clip(&mut self, rect: Rect) -> SavedClip {
+        let prev = SavedClip(self.clip);
+        let x0 = self.origin_x + self.snap(rect.x);
+        let y0 = self.origin_y + self.snap(rect.y);
+        let x1 = self.origin_x + self.snap(rect.x + rect.w);
+        let y1 = self.origin_y + self.snap(rect.y + rect.h);
+        let combined = match self.clip {
+            Some((px0, py0, px1, py1)) => {
+                (x0.max(px0), y0.max(py0), x1.min(px1), y1.min(py1))
+            }
+            None => (x0, y0, x1, y1),
+        };
+        self.clip = Some(combined);
+        prev
+    }
+
+    pub fn restore_clip(&mut self, saved: SavedClip) {
+        self.clip = saved.0;
     }
 
     fn clip_bounds(&self) -> (i32, i32, i32, i32) {
