@@ -1,5 +1,6 @@
 use std::num::NonZeroU32;
 use std::rc::Rc;
+use std::time::{Duration, Instant};
 
 use winit::application::ApplicationHandler;
 use winit::dpi::{LogicalSize, PhysicalPosition, PhysicalSize};
@@ -129,7 +130,15 @@ struct AppHandler {
     modifiers: Modifiers,
     needs_redraw: bool,
     popup: Option<PopupWindow>,
+    /// Last `Event::Tick` we dispatched. `None` until the first tick is
+    /// fired. The runtime uses this to pace ticks while a widget
+    /// reports `wants_ticks()`.
+    last_tick: Option<Instant>,
 }
+
+/// Target interval between [`Event::Tick`](crate::event::Event::Tick)
+/// dispatches when a widget is animating — roughly 60 Hz.
+const TICK_INTERVAL: Duration = Duration::from_millis(16);
 
 impl AppHandler {
     fn new(app: App) -> Self {
@@ -151,6 +160,7 @@ impl AppHandler {
             modifiers: Modifiers::default(),
             needs_redraw: true,
             popup: None,
+            last_tick: None,
         }
     }
 }
@@ -207,6 +217,7 @@ impl ApplicationHandler for AppHandler {
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
         self.sync_popup(event_loop);
+        self.pump_ticks(event_loop);
 
         if self.needs_redraw
             && let Some(win) = self.main_win.as_ref()
@@ -382,6 +393,30 @@ impl AppHandler {
         if ctx.close_requested {
             event_loop.exit();
         }
+    }
+
+    /// Drive animation ticks: if any widget in the tree wants ticks,
+    /// dispatch [`Event::Tick`] when the interval has elapsed and ask
+    /// the event loop to wake us up again at the next deadline.
+    /// Otherwise revert to a plain `Wait` so the process stays idle
+    /// when nothing is animating.
+    fn pump_ticks(&mut self, event_loop: &ActiveEventLoop) {
+        if !self.root.wants_ticks() {
+            self.last_tick = None;
+            event_loop.set_control_flow(ControlFlow::Wait);
+            return;
+        }
+        let now = Instant::now();
+        let due = match self.last_tick {
+            None => true,
+            Some(prev) => now.duration_since(prev) >= TICK_INTERVAL,
+        };
+        if due {
+            self.last_tick = Some(now);
+            self.dispatch(&Event::Tick, event_loop);
+        }
+        let next = self.last_tick.unwrap_or(now) + TICK_INTERVAL;
+        event_loop.set_control_flow(ControlFlow::WaitUntil(next));
     }
 
     fn dispatch_key(&mut self, key: &winit::event::KeyEvent, event_loop: &ActiveEventLoop) {

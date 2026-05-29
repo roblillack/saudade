@@ -239,6 +239,13 @@ impl State {
     fn tick(&mut self) {
         self.sync_popup();
 
+        // Animation: while any widget asks for ticks, fan one out each
+        // loop iteration (~60 Hz). Idle widgets ignore the event, so
+        // the cost is a single function call per widget per frame.
+        if self.root.wants_ticks() {
+            self.dispatch(Event::Tick);
+        }
+
         if self.configured && self.needs_redraw {
             self.draw_main();
             self.needs_redraw = false;

@@ -105,4 +105,13 @@ pub trait Widget {
     fn popup_request(&self) -> Option<PopupRequest> {
         None
     }
+
+    /// `true` if this widget needs periodic [`Event::Tick`](crate::event::Event::Tick)
+    /// events to drive an animation. The runtime polls this after every
+    /// dispatch and, while any widget in the tree wants ticks, fires
+    /// `Tick` at roughly 60 Hz. Container widgets propagate from
+    /// children. Default: no animation.
+    fn wants_ticks(&self) -> bool {
+        false
+    }
 }

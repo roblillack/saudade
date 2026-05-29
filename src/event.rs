@@ -63,6 +63,9 @@ pub enum Event {
     /// A character produced by the user's keyboard. Backspace, arrow keys etc.
     /// arrive as `KeyDown` only; this event is for inserting visible text.
     Char { ch: char, modifiers: Modifiers },
+    /// Periodic animation tick, fired by the runtime at roughly 60 Hz while
+    /// any widget in the tree returns `wants_ticks() == true`.
+    Tick,
 }
 
 impl Event {

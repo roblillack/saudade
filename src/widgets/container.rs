@@ -208,4 +208,8 @@ impl Widget for Container {
         }
         None
     }
+
+    fn wants_ticks(&self) -> bool {
+        self.children.iter().any(|c| c.wants_ticks())
+    }
 }
