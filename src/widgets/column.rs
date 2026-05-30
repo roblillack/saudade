@@ -100,6 +100,29 @@ impl Column {
         self.overlays.push(Box::new(widget));
     }
 
+    /// Direct keyboard focus to a specific child by index (its position among
+    /// all children — fixed and fill — in add order). Clears any previous
+    /// focus and delegates into the child via `focus_first`, so wrapper
+    /// widgets pick the right nested leaf. Returns `true` if the index named a
+    /// focusable child. Use it to choose a non-default initial focus target
+    /// (e.g. focus a content list rather than a leading toolbar field).
+    pub fn focus_child(&mut self, index: usize) -> bool {
+        if self.children.get(index).map(|c| c.widget.focusable()) != Some(true) {
+            return false;
+        }
+        if let Some(old) = self.focused
+            && old != index
+            && let Some(c) = self.children.get_mut(old)
+        {
+            c.widget.set_focused(false);
+        }
+        let focused = self.children[index].widget.focus_first();
+        if focused {
+            self.focused = Some(index);
+        }
+        focused
+    }
+
 
     fn choose_target(&self, event: &Event) -> Option<usize> {
         if event.is_keyboard() {
