@@ -252,6 +252,18 @@ let root = Column::new()
 `Column` also handles capture, focus, accelerator routing, and the
 overlay pass — same contract as `Container`.
 
+* **`Row`** — the horizontal sibling of `Column`. Same `add_fixed(widget,
+  width)` / `add_fill(widget)` API, laying children left-to-right across the
+  full height, with the same capture / focus / accelerator / Tab handling.
+  Unlike `Column` it carries no overlay layer — keep modal dialogs on the
+  top-level container so there's a single overlay owner.
+
+Both `Column` and `Row` expose `focus_child(index)` to choose a non-default
+initial focus target (e.g. focus a content list instead of a leading toolbar
+field). Custom container widgets outside the crate can reuse retrogui's focus
+protocol via `EventCtx::is_focus_requested` / `is_focus_released` /
+`clear_focus_flags`.
+
 ### `Container`
 
 A flat collection of widgets at absolute positions. The container handles:
@@ -853,8 +865,8 @@ your head.
 
 Things that would fit retrogui's spirit but aren't there yet:
 
-* `Row` and `Grid` containers (sibling to the existing `Column`)
-* `Checkbox`, `RadioButton`, single-line `TextBox`, `ListBox`
+* `Grid` container (the horizontal `Row` sibling of `Column` now exists)
+* `RadioButton` (single-line `TextInput`, `Checkbox` and `List` now exist)
 * Horizontal scrolling in `TextEditor` (a horizontal `ScrollBar` is
   already implemented; the editor just doesn't ride it yet)
 * Mouse-wheel scroll events
