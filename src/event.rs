@@ -138,6 +138,27 @@ impl EventCtx {
         self.close_requested = true;
     }
 
+    /// `true` if a widget called [`Self::request_focus`] during this dispatch.
+    /// Custom container widgets (outside retrogui) read this after forwarding
+    /// an event to a child to learn the child wants focus, then call
+    /// [`Self::clear_focus_flags`] and move focus to it — the same protocol the
+    /// built-in `Container` / `Column` use internally.
+    pub fn is_focus_requested(&self) -> bool {
+        self.focus_requested
+    }
+
+    /// `true` if a widget called [`Self::release_focus`] during this dispatch.
+    pub fn is_focus_released(&self) -> bool {
+        self.focus_released
+    }
+
+    /// Reset both focus-change flags after a custom container has acted on
+    /// them.
+    pub fn clear_focus_flags(&mut self) {
+        self.focus_requested = false;
+        self.focus_released = false;
+    }
+
     /// The widget asks to become the keyboard-focused widget. Parent
     /// containers observe this flag during pointer dispatch and route
     /// subsequent keyboard events here.
