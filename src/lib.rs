@@ -34,6 +34,7 @@ mod geometry;
 pub mod mock;
 mod painter;
 mod theme;
+#[cfg(all(unix, not(target_os = "macos")))]
 mod wayland;
 mod widget;
 mod widgets;

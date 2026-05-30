@@ -51,6 +51,8 @@ impl Container {
         self
     }
 
+    // `add` is an intentional builder-style method name, not an arithmetic op.
+    #[allow(clippy::should_implement_trait)]
     pub fn add(mut self, widget: impl Widget + 'static) -> Self {
         self.push(widget);
         self
@@ -74,9 +76,7 @@ impl Container {
         if let Some(idx) = self.captured {
             return Some(idx);
         }
-        let Some(pos) = event.position() else {
-            return None;
-        };
+        let pos = event.position()?;
         (0..self.children.len())
             .rev()
             .find(|&i| self.children[i].bounds().contains(pos))
@@ -220,11 +220,10 @@ impl Widget for Container {
             // both events fall through — a lone `TextEditor` can then
             // still receive `'\t'` and insert it as indentation.
             match tab_action(event) {
-                Some(TabAction::Cycle(dir)) => {
-                    if self.cycle_focus(dir, ctx) {
+                Some(TabAction::Cycle(dir))
+                    if self.cycle_focus(dir, ctx) => {
                         return;
                     }
-                }
                 Some(TabAction::Swallow) if self.focusable_count() >= 2 => return,
                 _ => {}
             }

@@ -49,6 +49,7 @@ pub struct Painter<'a> {
 }
 
 impl<'a> Painter<'a> {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         pixels: &'a mut [u32],
         width: i32,
@@ -67,6 +68,7 @@ impl<'a> Painter<'a> {
     /// Like [`Painter::new`] but explicitly marks the painter as running
     /// in a popup top-level window. Use this from the runtime when
     /// rendering a separate popup surface.
+    #[allow(clippy::too_many_arguments)]
     pub fn with_popup_pass(
         pixels: &'a mut [u32],
         width: i32,
@@ -341,6 +343,7 @@ impl<'a> Painter<'a> {
     /// the logical→physical snap. Useful for fine alignment tweaks (e.g.
     /// nudging menu-bar labels down a single physical pixel) that don't
     /// correspond cleanly to any whole logical-pixel value.
+    #[allow(clippy::too_many_arguments)]
     pub fn text_with_phys_offset(
         &mut self,
         x: i32,

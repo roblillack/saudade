@@ -1,0 +1,60 @@
+name: CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  ci:
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # Linux builds the SCTK Wayland backend + softbuffer's Wayland backend,
+      # which link libwayland and libxkbcommon. X11 is loaded via dlopen at
+      # runtime, so no X11 dev packages are needed here. macOS/Windows need none.
+      - name: Install Linux system dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwayland-dev libxkbcommon-dev pkg-config
+
+      - name: Set up Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Cache cargo build
+        uses: Swatinem/rust-cache@v2
+
+      - name: Lint (clippy)
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+
+      - name: Test
+        run: |
+          cargo test --workspace --all-targets --all-features
+          cargo test --workspace --doc
+
+      # If a snapshot mismatches on this OS, the test dumps the rendered frame
+      # next to its baseline; upload those so the diff can be inspected (and a
+      # per-platform baseline regenerated if rendering legitimately differs).
+      - name: Upload snapshot diffs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: snapshot-diffs-${{ matrix.os }}
+          path: retrogui/tests/snapshots/*.snap.actual.png
+          if-no-files-found: ignore
+
+      - name: Build (release)
+        run: cargo build --workspace --release

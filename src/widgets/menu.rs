@@ -502,8 +502,8 @@ impl Widget for MenuBar {
                 // Released somewhere else (dragged outside, then released):
                 // just disarm and leave the menu in its current state.
             }
-            Event::PointerMove { pos } => {
-                if self.open.is_some() {
+            Event::PointerMove { pos }
+                if self.open.is_some() => {
                     let item = self.hit_item(*pos);
                     if item != self.hovered_item {
                         self.hovered_item = item;
@@ -517,7 +517,6 @@ impl Widget for MenuBar {
                         ctx.request_paint();
                     }
                 }
-            }
             Event::KeyDown { key, modifiers } => match key {
                 Key::Named(NamedKey::Escape) if self.open.is_some() => {
                     self.open = None;
@@ -552,20 +551,18 @@ impl Widget for MenuBar {
                         ctx.request_paint();
                     }
                 }
-                Key::Char(ch) => {
-                    if self.handle_mnemonic(*ch, *modifiers, ctx) {
+                Key::Char(ch)
+                    if self.handle_mnemonic(*ch, *modifiers, ctx) => {
                         // consumed
                     }
-                }
                 _ => {}
             },
-            Event::Char { ch, modifiers } => {
+            Event::Char { ch, modifiers }
                 // Some platforms route mnemonic characters through Char with
                 // Alt held; treat the same way.
-                if modifiers.alt {
+                if modifiers.alt => {
                     self.handle_mnemonic(*ch, *modifiers, ctx);
                 }
-            }
             _ => {}
         }
     }

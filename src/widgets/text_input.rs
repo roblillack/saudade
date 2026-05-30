@@ -528,26 +528,24 @@ impl Widget for TextInput {
                 self.reset_blink();
                 ctx.request_paint();
             }
-            Event::PointerMove { pos } => {
-                if self.drag_active {
+            Event::PointerMove { pos }
+                if self.drag_active => {
                     let local_x = pos.x - self.rect.x;
                     self.cursor = self.char_index_at_x(local_x);
                     self.reset_blink();
                     ctx.request_paint();
                 }
-            }
             Event::PointerUp {
                 button: MouseButton::Left,
                 ..
-            } => {
-                if self.drag_active {
+            }
+                if self.drag_active => {
                     self.drag_active = false;
                     if self.selection_anchor == Some(self.cursor) {
                         self.selection_anchor = None;
                     }
                     ctx.request_paint();
                 }
-            }
             Event::Char { ch, modifiers } if !modifiers.has_command() => {
                 if !self.focused {
                     return;
@@ -649,7 +647,7 @@ impl Widget for TextInput {
                     return;
                 }
                 let elapsed_ms = self.blink_since.elapsed().as_millis() as u64;
-                let on = (elapsed_ms / BLINK_HALF_MS) % 2 == 0;
+                let on = (elapsed_ms / BLINK_HALF_MS).is_multiple_of(2);
                 if on != self.blink_on {
                     self.blink_on = on;
                     ctx.request_paint();

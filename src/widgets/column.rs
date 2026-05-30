@@ -131,9 +131,7 @@ impl Column {
         if let Some(idx) = self.captured {
             return Some(idx);
         }
-        let Some(pos) = event.position() else {
-            return None;
-        };
+        let pos = event.position()?;
         (0..self.children.len())
             .rev()
             .find(|&i| self.children[i].widget.bounds().contains(pos))
@@ -341,11 +339,10 @@ impl Widget for Column {
             // two focusable children we let both events fall through so
             // a sole `TextEditor` can still receive `'\t'`.
             match tab_action(event) {
-                Some(TabAction::Cycle(dir)) => {
-                    if self.cycle_focus(dir, ctx) {
+                Some(TabAction::Cycle(dir))
+                    if self.cycle_focus(dir, ctx) => {
                         return;
                     }
-                }
                 Some(TabAction::Swallow) if self.focusable_count() >= 2 => return,
                 _ => {}
             }

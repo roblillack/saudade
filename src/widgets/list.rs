@@ -233,7 +233,7 @@ impl List {
         if self.items.is_empty() {
             return;
         }
-        let visible = self.visible_rows() as i32;
+        let visible = self.visible_rows();
         let step = (visible - 1).max(1);
         self.move_selection(delta_pages * step);
     }

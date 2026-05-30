@@ -1,1 +1,5 @@
 /target
+
+# Rendered frames dumped by snapshot tests on failure (see
+# retrogui/tests/common/mod.rs); inspect locally / via CI artifacts.
+*.snap.actual.png

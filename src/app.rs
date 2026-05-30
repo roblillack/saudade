@@ -16,13 +16,7 @@ use winit::window::{Window, WindowAttributes, WindowButtons, WindowId};
 // override-redirect + the DropdownMenu window type hint to get proper
 // instant-popup behavior on X11. Wayland keeps the top-level fallback
 // until winit adds real popup support.
-#[cfg(any(
-    target_os = "linux",
-    target_os = "dragonfly",
-    target_os = "freebsd",
-    target_os = "netbsd",
-    target_os = "openbsd",
-))]
+#[cfg(all(unix, not(target_os = "macos")))]
 use winit::platform::x11::{WindowAttributesExtX11, WindowType as XWindowType};
 
 use crate::event::{Event, EventCtx, Key, Modifiers, MouseButton, NamedKey};
@@ -77,9 +71,12 @@ impl App {
     }
 
     pub fn run(self) {
-        if is_wayland_session() {
-            crate::wayland::run(self);
-            return;
+        #[cfg(all(unix, not(target_os = "macos")))]
+        {
+            if is_wayland_session() {
+                crate::wayland::run(self);
+                return;
+            }
         }
         self.run_winit();
     }
@@ -94,11 +91,13 @@ impl App {
             .expect("retrogui: event loop error");
     }
 
+    #[cfg(all(unix, not(target_os = "macos")))]
     pub(crate) fn into_parts(self) -> (WindowConfig, Theme, Box<dyn Widget>) {
         (self.window, self.theme, self.root)
     }
 }
 
+#[cfg(all(unix, not(target_os = "macos")))]
 fn is_wayland_session() -> bool {
     std::env::var_os("WAYLAND_DISPLAY")
         .map(|v| !v.is_empty())
@@ -610,13 +609,7 @@ impl AppHandler {
                 // route it (e.g., place above the main window in
                 // stacking order). These attributes are silently ignored
                 // on other backends.
-                #[cfg(any(
-                    target_os = "linux",
-                    target_os = "dragonfly",
-                    target_os = "freebsd",
-                    target_os = "netbsd",
-                    target_os = "openbsd",
-                ))]
+                #[cfg(all(unix, not(target_os = "macos")))]
                 {
                     attrs = attrs
                         .with_override_redirect(true)
@@ -656,13 +649,7 @@ impl AppHandler {
                     .with_min_inner_size(size)
                     .with_max_inner_size(size);
 
-                #[cfg(any(
-                    target_os = "linux",
-                    target_os = "dragonfly",
-                    target_os = "freebsd",
-                    target_os = "netbsd",
-                    target_os = "openbsd",
-                ))]
+                #[cfg(all(unix, not(target_os = "macos")))]
                 {
                     attrs = attrs.with_x11_window_type(vec![XWindowType::Dialog]);
                 }

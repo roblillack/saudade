@@ -1,9 +1,10 @@
 //! Pixel-snapshot tests for every retrogui widget.
 //!
-//! Each test renders a small fixed-size widget tree through [`MockBackend`]
-//! at 1.0x, 1.25x, 1.5x, and 2.0x, then compares the resulting PNG bytes
-//! to a checked-in baseline via `insta::assert_binary_snapshot!`. Review
-//! diffs visually with `cargo insta review`.
+//! Each test renders a small fixed-size widget tree through `MockBackend`
+//! at 1.0x, 1.25x, 1.5x, and 2.0x, then compares the result to a checked-in
+//! baseline PNG with a small pixel tolerance (see `common::snapshot_at_all_scales`).
+//! Regenerate baselines after an intentional change with
+//! `UPDATE_SNAPSHOTS=1 cargo test -p retrogui`.
 
 mod common;
 

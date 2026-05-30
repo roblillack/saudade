@@ -265,21 +265,19 @@ impl Widget for ScrollBar {
                 self.handle_press(*pos);
                 ctx.request_paint();
             }
-            Event::PointerMove { pos } => {
-                if self.drag_offset.is_some() {
+            Event::PointerMove { pos }
+                if self.drag_offset.is_some() => {
                     self.handle_drag(*pos);
                     ctx.request_paint();
                 }
-            }
             Event::PointerUp {
                 button: MouseButton::Left,
                 ..
-            } => {
-                if self.drag_offset.is_some() {
+            }
+                if self.drag_offset.is_some() => {
                     self.drag_offset = None;
                     ctx.request_paint();
                 }
-            }
             _ => {}
         }
     }

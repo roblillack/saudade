@@ -247,28 +247,26 @@ impl Widget for Dialog {
             Event::PointerDown {
                 pos,
                 button: MouseButton::Left,
-            } => {
-                if btn.contains(*pos) {
+            }
+                if btn.contains(*pos) => {
                     self.button_pressed = true;
                     self.button_armed = true;
                     ctx.request_paint();
                 }
                 // Clicks anywhere else on the dialog are swallowed — modal.
-            }
-            Event::PointerMove { pos } => {
-                if self.button_pressed {
+            Event::PointerMove { pos }
+                if self.button_pressed => {
                     let in_btn = btn.contains(*pos);
                     if in_btn != self.button_armed {
                         self.button_armed = in_btn;
                         ctx.request_paint();
                     }
                 }
-            }
             Event::PointerUp {
                 pos,
                 button: MouseButton::Left,
-            } => {
-                if self.button_pressed {
+            }
+                if self.button_pressed => {
                     let fire = self.button_armed && btn.contains(*pos);
                     self.button_pressed = false;
                     self.button_armed = false;
@@ -277,7 +275,6 @@ impl Widget for Dialog {
                         self.fire(ctx);
                     }
                 }
-            }
             Event::KeyDown {
                 key: Key::Named(NamedKey::Enter | NamedKey::Escape | NamedKey::Space),
                 ..

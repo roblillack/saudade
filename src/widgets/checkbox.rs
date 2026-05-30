@@ -117,28 +117,26 @@ impl Widget for Checkbox {
             Event::PointerDown {
                 pos,
                 button: MouseButton::Left,
-            } => {
-                if self.rect.contains(*pos) {
+            }
+                if self.rect.contains(*pos) => {
                     self.pressed = true;
                     self.armed = true;
                     ctx.request_focus();
                     ctx.request_paint();
                 }
-            }
-            Event::PointerMove { pos } => {
-                if self.pressed {
+            Event::PointerMove { pos }
+                if self.pressed => {
                     let armed_now = self.rect.contains(*pos);
                     if armed_now != self.armed {
                         self.armed = armed_now;
                         ctx.request_paint();
                     }
                 }
-            }
             Event::PointerUp {
                 pos,
                 button: MouseButton::Left,
-            } => {
-                if self.pressed {
+            }
+                if self.pressed => {
                     let fire = self.armed && self.rect.contains(*pos);
                     self.pressed = false;
                     self.armed = false;
@@ -147,13 +145,11 @@ impl Widget for Checkbox {
                         self.toggle(ctx);
                     }
                 }
-            }
-            Event::PointerLeave => {
-                if self.armed {
+            Event::PointerLeave
+                if self.armed => {
                     self.armed = false;
                     ctx.request_paint();
                 }
-            }
             Event::KeyDown { key, modifiers }
                 if self.focused
                     && !modifiers.has_command()

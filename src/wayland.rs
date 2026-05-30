@@ -272,10 +272,8 @@ impl State {
             self.popup.as_ref(),
             Some(p) if p.configured && p.needs_redraw
         );
-        if popup_should_draw && self.draw_popup() {
-            if let Some(p) = self.popup.as_mut() {
-                p.needs_redraw = false;
-            }
+        if popup_should_draw && self.draw_popup() && let Some(p) = self.popup.as_mut() {
+            p.needs_redraw = false;
         }
     }
 
@@ -897,10 +895,8 @@ impl PointerHandler for State {
                         self.cursor = Some(pos);
                     }
                     self.dispatch(Event::PointerMove { pos });
-                    if in_popup {
-                        if let Some(p) = self.popup.as_mut() {
-                            p.needs_redraw = true;
-                        }
+                    if in_popup && let Some(p) = self.popup.as_mut() {
+                        p.needs_redraw = true;
                     }
                 }
                 PointerEventKind::Leave { .. } => {

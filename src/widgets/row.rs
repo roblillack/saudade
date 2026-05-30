@@ -275,11 +275,10 @@ impl Widget for Row {
             }
 
             match tab_action(event) {
-                Some(TabAction::Cycle(dir)) => {
-                    if self.cycle_focus(dir, ctx) {
+                Some(TabAction::Cycle(dir))
+                    if self.cycle_focus(dir, ctx) => {
                         return;
                     }
-                }
                 Some(TabAction::Swallow) if self.focusable_count() >= 2 => return,
                 _ => {}
             }
