@@ -234,10 +234,12 @@ retrogui ships with two top-level container styles:
   pinned to the top and a text editor below it grows with the window.
 
 Widgets opt into layout by overriding `Widget::layout(&mut self, bounds:
-Rect)`. The built-in `MenuBar` and `TextEditor` both override it (they
-store the new rect and rebuild any cached geometry). Widgets that don't
-override `layout` keep the position they were given at construction —
-which is exactly what `Container`'s children want.
+Rect)`. Most interactive widgets do — `MenuBar`, `TextEditor`, `List`,
+`ScrollBar`, `Row`, `Button` and `Checkbox` all store the new rect (and
+rebuild any cached geometry), so they reflow inside a `Column`/`Row` or any
+container that propagates `layout`. Widgets that don't override `layout`
+(e.g. `Label`) keep the position they were given at construction — which is
+exactly what `Container`'s children want.
 
 ```rust
 // Notepad layout: menu bar pinned to the top, editor fills the rest.
