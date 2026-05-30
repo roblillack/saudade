@@ -11,7 +11,7 @@ use common::snapshot_at_all_scales;
 
 use retrogui::{
     Bevel, Button, Color, Column, Container, Dialog, Event, Image, Key, Label, List, ListIcon,
-    ListItem, Menu, MenuBar, MenuItem, Modifiers, NamedKey, Orientation, Rect, ScrollBar,
+    ListItem, Menu, MenuBar, MenuItem, Modifiers, NamedKey, Orientation, Rect, Row, ScrollBar,
     TextEditor, Widget,
 };
 
@@ -713,4 +713,42 @@ fn snapshot_facility_smoke_test() {
     assert_eq!(snap.width(), 40);
     assert_eq!(snap.height(), 20);
     assert!(!snap.to_png().is_empty());
+}
+
+// ---------------------------------------------------------------- Row
+
+/// A `Row` with a fixed-width child on the left and a fill child taking the
+/// rest — the horizontal counterpart to the `Column` layout tests.
+#[test]
+fn row_fixed_and_fill() {
+    snapshot_at_all_scales("row_fixed_and_fill", 240, 70, || {
+        let left = List::new(Rect::new(0, 0, 0, 0))
+            .with_items(vec![ListItem::new("A"), ListItem::new("B")]);
+        let right = List::new(Rect::new(0, 0, 0, 0)).with_items(vec![
+            ListItem::new("one"),
+            ListItem::new("two"),
+            ListItem::new("three"),
+        ]);
+        Box::new(
+            Row::new()
+                .with_background(Color::LIGHT_GRAY)
+                .add_fixed(left, 80)
+                .add_fill(right),
+        )
+    });
+}
+
+/// Two equal fill children split the row in half.
+#[test]
+fn row_two_fills() {
+    snapshot_at_all_scales("row_two_fills", 200, 60, || {
+        let a = List::new(Rect::new(0, 0, 0, 0)).with_items(vec![ListItem::new("left")]);
+        let b = List::new(Rect::new(0, 0, 0, 0)).with_items(vec![ListItem::new("right")]);
+        Box::new(
+            Row::new()
+                .with_background(Color::LIGHT_GRAY)
+                .add_fill(a)
+                .add_fill(b),
+        )
+    });
 }
