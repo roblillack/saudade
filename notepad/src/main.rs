@@ -196,6 +196,9 @@ impl Widget for SharedEditor {
     fn set_focused(&mut self, focused: bool) {
         self.0.borrow_mut().set_focused(focused);
     }
+    fn wants_ticks(&self) -> bool {
+        self.0.borrow().wants_ticks()
+    }
     fn layout(&mut self, bounds: Rect) {
         self.0.borrow_mut().layout(bounds);
     }

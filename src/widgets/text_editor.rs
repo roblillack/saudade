@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::time::{Duration, Instant};
 
 use crate::event::{Event, EventCtx, Key, MouseButton, NamedKey};
 use crate::geometry::{Color, Point, Rect};
@@ -10,6 +11,10 @@ use crate::widgets::scrollbar::{SCROLLBAR_THICKNESS, ScrollBar};
 const PADDING_X: i32 = 4;
 const PADDING_Y: i32 = 2;
 const LINE_HEIGHT: i32 = 14;
+const MULTI_CLICK_MS: u64 = 400;
+const MULTI_CLICK_SLOP: i32 = 3;
+/// How long each half of the caret blink lasts while the widget is focused.
+const BLINK_HALF_MS: u64 = 500;
 
 /// A minimal multi-line text editor — sunken white field, monospace text,
 /// cursor, selection with cut/copy/paste, and a built-in vertical scrollbar.
@@ -31,8 +36,16 @@ pub struct TextEditor {
     /// populated so big files stay cheap.
     cumulative_widths: HashMap<usize, Vec<i32>>,
     drag_active: bool,
+    last_click: Option<(Instant, Point)>,
+    click_count: u32,
     clipboard: Option<arboard::Clipboard>,
     v_scrollbar: ScrollBar,
+    /// When the current half of the blink cycle started. Reset on every
+    /// user action so the caret stays visible (and "on") while the user is
+    /// actively typing.
+    blink_since: Instant,
+    /// Cached on/off state of the focused caret. Updated by `Event::Tick`.
+    blink_on: bool,
 }
 
 impl TextEditor {
@@ -46,8 +59,12 @@ impl TextEditor {
             focused: false,
             cumulative_widths: HashMap::new(),
             drag_active: false,
+            last_click: None,
+            click_count: 0,
             clipboard: None,
             v_scrollbar: ScrollBar::vertical(Rect::new(0, 0, 0, 0)),
+            blink_since: Instant::now(),
+            blink_on: true,
         }
     }
 
@@ -347,6 +364,99 @@ impl TextEditor {
         }
     }
 
+    fn is_word_char(ch: char) -> bool {
+        ch.is_alphanumeric() || ch == '_'
+    }
+
+    /// Skip whitespace/punct, then the current word — Ctrl+Left semantics.
+    /// At the start of a line this steps to the end of the previous line,
+    /// mirroring a plain left-arrow's line wrap.
+    fn move_word_left(&mut self) {
+        if self.cursor.1 == 0 {
+            self.move_left();
+            return;
+        }
+        let chars: Vec<char> = self.lines[self.cursor.0].chars().collect();
+        let mut i = self.cursor.1;
+        while i > 0 && !Self::is_word_char(chars[i - 1]) {
+            i -= 1;
+        }
+        while i > 0 && Self::is_word_char(chars[i - 1]) {
+            i -= 1;
+        }
+        self.cursor.1 = i;
+    }
+
+    fn move_word_right(&mut self) {
+        let chars: Vec<char> = self.lines[self.cursor.0].chars().collect();
+        let n = chars.len();
+        if self.cursor.1 >= n {
+            self.move_right();
+            return;
+        }
+        let mut i = self.cursor.1;
+        while i < n && Self::is_word_char(chars[i]) {
+            i += 1;
+        }
+        while i < n && !Self::is_word_char(chars[i]) {
+            i += 1;
+        }
+        self.cursor.1 = i;
+    }
+
+    /// Word boundaries around a caret column on `row`, matching how a
+    /// double-click expands selection — runs of word characters and runs of
+    /// non-word characters are each their own "word".
+    fn word_bounds_at(&self, row: usize, col: usize) -> (usize, usize) {
+        let chars: Vec<char> = self.lines[row].chars().collect();
+        if chars.is_empty() {
+            return (0, 0);
+        }
+        // A caret at len has no glyph to its right; look at the one to the left.
+        let target = if col >= chars.len() {
+            chars.len() - 1
+        } else {
+            col
+        };
+        let is_word = Self::is_word_char(chars[target]);
+        let mut start = target;
+        let mut end = target + 1;
+        while start > 0 && Self::is_word_char(chars[start - 1]) == is_word {
+            start -= 1;
+        }
+        while end < chars.len() && Self::is_word_char(chars[end]) == is_word {
+            end += 1;
+        }
+        (start, end)
+    }
+
+    /// Bump the multi-click counter on a fresh left-button press. Returns the
+    /// run length: 1 for a regular click, 2 for double, 3 for triple. Any
+    /// further click resets back to 1.
+    fn register_click(&mut self, pos: Point) -> u32 {
+        let now = Instant::now();
+        let threshold = Duration::from_millis(MULTI_CLICK_MS);
+        let continues = self.last_click.is_some_and(|(t, p)| {
+            now.duration_since(t) <= threshold
+                && (p.x - pos.x).abs() <= MULTI_CLICK_SLOP
+                && (p.y - pos.y).abs() <= MULTI_CLICK_SLOP
+        });
+        self.click_count = if continues {
+            (self.click_count + 1).min(3)
+        } else {
+            1
+        };
+        self.last_click = Some((now, pos));
+        self.click_count
+    }
+
+    /// Keep the caret visible while the user is actively interacting — every
+    /// edit / movement restarts the blink cycle from its "on" phase.
+    fn reset_blink(&mut self) {
+        self.blink_since = Instant::now();
+        self.blink_on = true;
+    }
+
     fn move_home(&mut self) {
         self.cursor.1 = 0;
     }
@@ -447,18 +557,24 @@ impl Widget for TextEditor {
             self.paint_line(painter, theme, row, text_x, y, selection);
         }
 
-        if self.focused {
-            let (crow, ccol) = self.cursor;
-            if crow >= scroll_top && crow < scroll_top + visible {
-                let prefix_w = self
-                    .cumulative_widths
-                    .get(&crow)
-                    .and_then(|widths| widths.get(ccol))
-                    .copied()
-                    .unwrap_or(0);
-                let cx = text_x + prefix_w;
-                let cy = text_y0 + (crow - scroll_top) as i32 * LINE_HEIGHT;
-                painter.v_line(cx, cy, LINE_HEIGHT, theme.text);
+        let (crow, ccol) = self.cursor;
+        if crow >= scroll_top && crow < scroll_top + visible {
+            let prefix_w = self
+                .cumulative_widths
+                .get(&crow)
+                .and_then(|widths| widths.get(ccol))
+                .copied()
+                .unwrap_or(0);
+            let cx = text_x + prefix_w;
+            let cy = text_y0 + (crow - scroll_top) as i32 * LINE_HEIGHT;
+            if self.focused {
+                if self.blink_on {
+                    painter.v_line(cx, cy, LINE_HEIGHT, theme.text);
+                }
+            } else {
+                // Unfocused: a small wedge at the bottom of the line marks
+                // where the caret would land if the user clicked back in.
+                draw_unfocused_caret(painter, cx, cy + LINE_HEIGHT - 2, theme.text);
             }
         }
 
@@ -486,14 +602,30 @@ impl Widget for TextEditor {
                 button: MouseButton::Left,
             } => {
                 ctx.request_focus();
+                let clicks = self.register_click(*pos);
                 self.place_cursor_at(*pos);
-                self.selection_anchor = Some(self.cursor);
-                self.drag_active = true;
+                match clicks {
+                    1 => {
+                        self.selection_anchor = Some(self.cursor);
+                        self.drag_active = true;
+                    }
+                    2 => {
+                        let row = self.cursor.0;
+                        let (s, e) = self.word_bounds_at(row, self.cursor.1);
+                        self.selection_anchor = Some((row, s));
+                        self.cursor = (row, e);
+                    }
+                    _ => {
+                        self.select_all();
+                    }
+                }
+                self.reset_blink();
                 ctx.request_paint();
             }
             Event::PointerMove { pos } => {
                 if self.drag_active {
                     self.place_cursor_at(*pos);
+                    self.reset_blink();
                     ctx.request_paint();
                 }
             }
@@ -519,6 +651,7 @@ impl Widget for TextEditor {
                     }
                     self.insert_char(*ch);
                     self.ensure_cursor_visible();
+                    self.reset_blink();
                     ctx.request_paint();
                 }
             }
@@ -546,6 +679,7 @@ impl Widget for TextEditor {
                         _ => false,
                     };
                     if consumed {
+                        self.reset_blink();
                         ctx.request_paint();
                         return;
                     }
@@ -558,65 +692,95 @@ impl Widget for TextEditor {
                         }
                         self.insert_newline();
                         self.ensure_cursor_visible();
+                        self.reset_blink();
                         ctx.request_paint();
                     }
                     Key::Named(NamedKey::Backspace) => {
                         self.backspace();
                         self.ensure_cursor_visible();
+                        self.reset_blink();
                         ctx.request_paint();
                     }
                     Key::Named(NamedKey::Delete) => {
                         self.delete_forward();
                         self.ensure_cursor_visible();
+                        self.reset_blink();
                         ctx.request_paint();
                     }
                     Key::Named(NamedKey::Left) => {
                         self.before_move(modifiers.shift);
-                        self.move_left();
+                        if modifiers.control {
+                            self.move_word_left();
+                        } else {
+                            self.move_left();
+                        }
                         self.ensure_cursor_visible();
+                        self.reset_blink();
                         ctx.request_paint();
                     }
                     Key::Named(NamedKey::Right) => {
                         self.before_move(modifiers.shift);
-                        self.move_right();
+                        if modifiers.control {
+                            self.move_word_right();
+                        } else {
+                            self.move_right();
+                        }
                         self.ensure_cursor_visible();
+                        self.reset_blink();
                         ctx.request_paint();
                     }
                     Key::Named(NamedKey::Up) => {
                         self.before_move(modifiers.shift);
                         self.move_up();
                         self.ensure_cursor_visible();
+                        self.reset_blink();
                         ctx.request_paint();
                     }
                     Key::Named(NamedKey::Down) => {
                         self.before_move(modifiers.shift);
                         self.move_down();
                         self.ensure_cursor_visible();
+                        self.reset_blink();
                         ctx.request_paint();
                     }
                     Key::Named(NamedKey::Home) => {
                         self.before_move(modifiers.shift);
                         self.move_home();
+                        self.reset_blink();
                         ctx.request_paint();
                     }
                     Key::Named(NamedKey::End) => {
                         self.before_move(modifiers.shift);
                         self.move_end();
+                        self.reset_blink();
                         ctx.request_paint();
                     }
                     Key::Named(NamedKey::PageUp) => {
                         self.before_move(modifiers.shift);
                         self.move_page(-1);
                         self.ensure_cursor_visible();
+                        self.reset_blink();
                         ctx.request_paint();
                     }
                     Key::Named(NamedKey::PageDown) => {
                         self.before_move(modifiers.shift);
                         self.move_page(1);
                         self.ensure_cursor_visible();
+                        self.reset_blink();
                         ctx.request_paint();
                     }
                     _ => {}
+                }
+            }
+            Event::Tick => {
+                if !self.focused {
+                    return;
+                }
+                let elapsed_ms = self.blink_since.elapsed().as_millis() as u64;
+                let on = (elapsed_ms / BLINK_HALF_MS) % 2 == 0;
+                if on != self.blink_on {
+                    self.blink_on = on;
+                    ctx.request_paint();
                 }
             }
             _ => {}
@@ -632,7 +796,24 @@ impl Widget for TextEditor {
     }
 
     fn set_focused(&mut self, focused: bool) {
+        let was_focused = self.focused;
         self.focused = focused;
+        if focused {
+            if !was_focused {
+                self.reset_blink();
+            }
+        } else {
+            // Don't carry a stale click history across focus losses — that
+            // would let a re-entry click count as a "double" even though the
+            // intervening focus change broke the user's gesture.
+            self.last_click = None;
+            self.click_count = 0;
+            self.drag_active = false;
+        }
+    }
+
+    fn wants_ticks(&self) -> bool {
+        self.focused
     }
 
     fn layout(&mut self, bounds: Rect) {
@@ -677,6 +858,16 @@ impl TextEditor {
             if s == e { None } else { Some((s, e)) }
         });
 
+        // An unfocused field still draws its selection so the user can see
+        // what's selected when keyboard focus is elsewhere — but in the muted
+        // "inactive" palette (black-on-gray) rather than the active
+        // navy-on-white, matching CUA convention.
+        let (sel_bg, sel_text) = if self.focused {
+            (theme.highlight_bg, theme.highlight_text)
+        } else {
+            (theme.face, theme.text)
+        };
+
         if let Some((s, e)) = row_selection {
             let x0 = widths.get(s).copied().unwrap_or(0);
             let x1 = widths
@@ -690,7 +881,7 @@ impl TextEditor {
             };
             painter.fill_rect(
                 Rect::new(text_x + x0, y, x1 - x0 + extra, LINE_HEIGHT),
-                theme.highlight_bg,
+                sel_bg,
             );
         }
 
@@ -705,7 +896,7 @@ impl TextEditor {
                 y,
                 &middle,
                 self.font_size,
-                theme.highlight_text,
+                sel_text,
             );
             let after_x = text_x + widths.get(e).copied().unwrap_or(0);
             painter.mono_text(after_x, y, &after, self.font_size, theme.text);
@@ -720,4 +911,13 @@ fn char_to_byte(line: &str, char_idx: usize) -> usize {
         .nth(char_idx)
         .map(|(b, _)| b)
         .unwrap_or(line.len())
+}
+
+/// Small upward wedge: a one-pixel apex with a three-pixel base, with `cx`
+/// as the horizontal center and `top_y` the row that holds the apex.
+fn draw_unfocused_caret(painter: &mut Painter, cx: i32, top_y: i32, color: Color) {
+    painter.pixel(cx, top_y, color);
+    painter.pixel(cx - 1, top_y + 1, color);
+    painter.pixel(cx, top_y + 1, color);
+    painter.pixel(cx + 1, top_y + 1, color);
 }
