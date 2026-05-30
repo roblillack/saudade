@@ -174,6 +174,10 @@ impl Widget for Button {
         self.focused = focused;
     }
 
+    fn layout(&mut self, bounds: Rect) {
+        self.rect = bounds;
+    }
+
     /// A default button doubles as an Enter accelerator for the entire
     /// container — pressing Enter while any non-button widget holds focus
     /// fires the default action. We piggyback on the existing accelerator

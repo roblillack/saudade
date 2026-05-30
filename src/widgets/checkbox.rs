@@ -177,6 +177,10 @@ impl Widget for Checkbox {
     fn set_focused(&mut self, focused: bool) {
         self.focused = focused;
     }
+
+    fn layout(&mut self, bounds: Rect) {
+        self.rect = bounds;
+    }
 }
 
 /// Draw the classic Win 3.1 check glyph — two strokes that form a "✓" inside
