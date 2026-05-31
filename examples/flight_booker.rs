@@ -138,7 +138,6 @@ fn main() {
     });
 
     let content = Container::new(W, H)
-        .with_background(Color::WHITE)
         .add(SharedTextInput(start.clone()))
         .add(SharedTextInput(back.clone()))
         .add(SharedLabel(start_err.clone()))

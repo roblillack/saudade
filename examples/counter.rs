@@ -11,9 +11,7 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use saudade::{
-    App, Bevel, Button, Color, Container, Label, Painter, Rect, Theme, Widget, WindowConfig,
-};
+use saudade::{App, Bevel, Button, Container, Label, Painter, Rect, Theme, Widget, WindowConfig};
 
 const W: i32 = 220;
 const H: i32 = 64;
@@ -35,7 +33,6 @@ fn main() {
         });
 
     let root = Container::new(W, H)
-        .with_background(Color::WHITE)
         .add(Bevel::sunken(Rect::new(16, 18, 88, 28)))
         .add(SharedLabel(display.clone()))
         .add(button);

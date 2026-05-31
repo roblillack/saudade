@@ -36,8 +36,8 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use saudade::{
-    App, Button, Color, Container, Event, EventCtx, Label, List, ListItem, Painter, Rect,
-    TextInput, Theme, Widget, WindowConfig,
+    App, Button, Container, Event, EventCtx, Label, List, ListItem, Painter, Rect, TextInput,
+    Theme, Widget, WindowConfig,
 };
 
 const W: i32 = 420;
@@ -164,7 +164,6 @@ fn main() {
     );
 
     let root = Container::new(W, H)
-        .with_background(Color::LIGHT_GRAY)
         .add(Label::new(Rect::new(12, 18, 90, 16), "Filter prefix:"))
         .add(filter)
         .add(SharedList(list.clone()))

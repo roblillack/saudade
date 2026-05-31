@@ -13,11 +13,19 @@ use crate::widget::Widget;
 /// vertically — is clipped to its bounds, so a label never paints outside
 /// the rectangle it was given. Color and size are inherited from the active
 /// [`Theme`] unless overridden.
+///
+/// A label is transparent by default — handy now that windows can carry a
+/// background pattern — but [`with_background`](Label::with_background) fills
+/// its rectangle first, giving the text a clean opaque slab to sit on.
 pub struct Label {
     pub rect: Rect,
     pub text: String,
     pub size: Option<f32>,
     pub color: Option<Color>,
+    /// Optional fill painted across `rect` before the text. `None` leaves the
+    /// label transparent, so whatever is behind it (a sibling, the window
+    /// background pattern) shows through.
+    pub background: Option<Color>,
 }
 
 impl Label {
@@ -27,6 +35,7 @@ impl Label {
             text: text.into(),
             size: None,
             color: None,
+            background: None,
         }
     }
 
@@ -37,6 +46,14 @@ impl Label {
 
     pub fn with_size(mut self, size: f32) -> Self {
         self.size = Some(size);
+        self
+    }
+
+    /// Paint a solid fill across the label's rectangle before the text. Use
+    /// this to keep a label legible over a busy background (e.g. a window
+    /// background pattern) without wrapping it in a `Container`.
+    pub fn with_background(mut self, color: Color) -> Self {
+        self.background = Some(color);
         self
     }
 }
@@ -100,6 +117,9 @@ impl Widget for Label {
     }
 
     fn paint(&mut self, painter: &mut Painter, theme: &Theme) {
+        if let Some(bg) = self.background {
+            painter.fill_rect(self.rect, bg);
+        }
         let size = self.size.unwrap_or(theme.font_size);
         let color = self.color.unwrap_or(theme.text);
         // Em height with a little leading; identical for every line, so any

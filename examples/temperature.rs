@@ -14,8 +14,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use saudade::{
-    App, Color, Container, Event, EventCtx, Label, Painter, Rect, TextInput, Theme, Widget,
-    WindowConfig,
+    App, Container, Event, EventCtx, Label, Painter, Rect, TextInput, Theme, Widget, WindowConfig,
 };
 
 const W: i32 = 320;
@@ -46,7 +45,6 @@ fn main() {
     });
 
     let root = Container::new(W, H)
-        .with_background(Color::WHITE)
         .add(SharedTextInput(celsius.clone()))
         .add(Label::new(Rect::new(94, 29, 72, 16), "Celsius ="))
         .add(SharedTextInput(fahrenheit.clone()))

@@ -1,3 +1,4 @@
+use crate::background::BackgroundPattern;
 use crate::font::Font;
 use crate::geometry::{Color, Rect, Size};
 use crate::theme::Theme;
@@ -170,6 +171,58 @@ impl<'a> Painter<'a> {
     /// Fill the whole physical buffer with a solid color.
     pub fn fill(&mut self, color: Color) {
         self.pixels.fill(color.0);
+    }
+
+    /// Paint a regular top-level window's background: flood the whole buffer
+    /// with `base`, then stamp `pattern` on top in `fg`. The pattern grid is
+    /// anchored to the logical origin (so it doesn't crawl when the window is
+    /// resized or letterboxed) and its spacing scales with the DPI so the
+    /// texture keeps its proportions. [`BackgroundPattern::None`] is a plain
+    /// `base` fill; [`BackgroundPattern::Solid`] is a plain `fg` fill.
+    pub fn fill_pattern(&mut self, base: Color, pattern: BackgroundPattern, fg: Color) {
+        self.fill(base);
+        match pattern {
+            BackgroundPattern::None => return,
+            BackgroundPattern::Solid => {
+                self.fill(fg);
+                return;
+            }
+            _ => {}
+        }
+        // Grid spacing + feature thickness in physical pixels. `near` is the
+        // tight 4px grid (dots, lines, hatching); `far` is the looser 8px one.
+        let near = (4.0 * self.scale).round().max(1.0) as i32;
+        let far = (8.0 * self.scale).round().max(1.0) as i32;
+        let thick = self.scale.round().max(1.0) as i32;
+        let fg = fg.0;
+        for y in 0..self.height {
+            // Offset by the logical origin so the grid stays put regardless of
+            // letterboxing; `rem_euclid` keeps it stable for negative offsets.
+            let ay = y - self.origin_y;
+            let row = (y * self.width) as usize;
+            for x in 0..self.width {
+                let ax = x - self.origin_x;
+                let on = match pattern {
+                    BackgroundPattern::Dots => {
+                        ax.rem_euclid(near) < thick && ay.rem_euclid(near) < thick
+                    }
+                    BackgroundPattern::Dots2 => {
+                        ax.rem_euclid(far) < thick && ay.rem_euclid(far) < thick
+                    }
+                    BackgroundPattern::Lines => ay.rem_euclid(near) < thick,
+                    BackgroundPattern::DiagonalForward => (ax + ay).rem_euclid(near) < thick,
+                    BackgroundPattern::DiagonalBack => (ax - ay).rem_euclid(near) < thick,
+                    BackgroundPattern::CrossStitch => {
+                        (ax + ay).rem_euclid(near) < thick || (ax - ay).rem_euclid(near) < thick
+                    }
+                    // Handled above with an early return.
+                    BackgroundPattern::None | BackgroundPattern::Solid => false,
+                };
+                if on {
+                    self.pixels[row + x as usize] = fg;
+                }
+            }
+        }
     }
 
     /// Solid-fill a physical-pixel rectangle. Used internally after logical
@@ -396,5 +449,71 @@ impl<'a> Painter<'a> {
         };
         let (w, h) = font.measure(text, size);
         Size::new(w.ceil() as i32, h.ceil() as i32)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::background::BackgroundPattern;
+
+    /// Paint `pattern` into a fresh `w × h` buffer at scale 1 and hand the
+    /// pixels back for inspection.
+    fn render(w: i32, h: i32, pattern: BackgroundPattern, fg: Color) -> Vec<u32> {
+        let mut pixels = vec![0u32; (w * h) as usize];
+        {
+            let mut p = Painter::new(&mut pixels, w, h, 1.0, 0, 0, None, None);
+            p.fill_pattern(Color::WHITE, pattern, fg);
+        }
+        pixels
+    }
+
+    #[test]
+    fn none_pattern_is_a_plain_base_fill() {
+        let px = render(8, 8, BackgroundPattern::None, Color::BLACK);
+        assert!(px.iter().all(|&c| c == Color::WHITE.0));
+    }
+
+    #[test]
+    fn solid_pattern_floods_with_foreground() {
+        let px = render(8, 8, BackgroundPattern::Solid, Color::BLACK);
+        assert!(px.iter().all(|&c| c == Color::BLACK.0));
+    }
+
+    #[test]
+    fn dots_land_on_the_grid_only() {
+        let px = render(8, 8, BackgroundPattern::Dots, Color::BLACK);
+        let at = |x: i32, y: i32| px[(y * 8 + x) as usize];
+        // Dots sit on the 4px grid corners...
+        assert_eq!(at(0, 0), Color::BLACK.0);
+        assert_eq!(at(4, 0), Color::BLACK.0);
+        assert_eq!(at(0, 4), Color::BLACK.0);
+        assert_eq!(at(4, 4), Color::BLACK.0);
+        // ...and nowhere between them.
+        assert_eq!(at(1, 1), Color::WHITE.0);
+        assert_eq!(at(2, 3), Color::WHITE.0);
+        assert_eq!(at(3, 4), Color::WHITE.0);
+    }
+
+    #[test]
+    fn lines_fill_whole_rows() {
+        let px = render(8, 8, BackgroundPattern::Lines, Color::BLACK);
+        let at = |x: i32, y: i32| px[(y * 8 + x) as usize];
+        for x in 0..8 {
+            assert_eq!(at(x, 0), Color::BLACK.0, "row 0 should be a line");
+            assert_eq!(at(x, 4), Color::BLACK.0, "row 4 should be a line");
+            assert_eq!(at(x, 1), Color::WHITE.0, "row 1 should be blank");
+        }
+    }
+
+    #[test]
+    fn cross_stitch_is_the_union_of_both_diagonals() {
+        let fwd = render(8, 8, BackgroundPattern::DiagonalForward, Color::BLACK);
+        let back = render(8, 8, BackgroundPattern::DiagonalBack, Color::BLACK);
+        let cross = render(8, 8, BackgroundPattern::CrossStitch, Color::BLACK);
+        for i in 0..(8 * 8) {
+            let lit = fwd[i] == Color::BLACK.0 || back[i] == Color::BLACK.0;
+            assert_eq!(cross[i] == Color::BLACK.0, lit);
+        }
     }
 }

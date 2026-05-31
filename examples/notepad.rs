@@ -5,8 +5,8 @@ use std::path::PathBuf;
 use std::rc::Rc;
 
 use saudade::{
-    App, Color, Column, Dialog, Event, EventCtx, Menu, MenuBar, MenuItem, Painter, PopupRequest,
-    Rect, TextEditor, Theme, Widget, WindowConfig,
+    App, Column, Dialog, Event, EventCtx, Menu, MenuBar, MenuItem, Painter, PopupRequest, Rect,
+    TextEditor, Theme, Widget, WindowConfig,
 };
 
 const WINDOW_W: i32 = 520;
@@ -137,7 +137,6 @@ fn main() {
     // dialog floats on top as an overlay (no layout slot). The runtime
     // auto-focuses the editor on startup.
     let root = Column::new()
-        .with_background(Color::WHITE)
         .add_fixed(menu_bar, MENU_BAR_H)
         .add_fill(SharedEditor(editor.clone()))
         .add_overlay(SharedDialog(dialog.clone()));

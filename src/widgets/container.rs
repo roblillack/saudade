@@ -33,7 +33,12 @@ impl Container {
     pub fn new(width: i32, height: i32) -> Self {
         Self {
             size: Size::new(width, height),
-            background: Some(Color::WHITE),
+            // Transparent by default: the runtime already fills the window
+            // with `theme.background`, so an opaque white here would just
+            // repaint it. Set one explicitly (`with_background`) only when the
+            // interior should differ from whatever sits behind the container —
+            // e.g. a gray card, or to mask the window's background pattern.
+            background: None,
             border: None,
             children: Vec::new(),
             captured: None,

@@ -19,6 +19,7 @@ use winit::window::{Window, WindowAttributes, WindowButtons, WindowId};
 #[cfg(all(unix, not(target_os = "macos")))]
 use winit::platform::x11::{WindowAttributesExtX11, WindowType as XWindowType};
 
+use crate::background::BackgroundState;
 use crate::event::{Event, EventCtx, Key, Modifiers, MouseButton, NamedKey};
 use crate::font::Font;
 use crate::geometry::{Point, Rect, Size};
@@ -128,6 +129,9 @@ struct AppHandler {
     cursor: Option<Point>,
     modifiers: Modifiers,
     needs_redraw: bool,
+    /// Background pattern + color for the main window, toggled with the
+    /// `p` / `c` debug keys. Popups/dialogs ignore it and stay white.
+    bg: BackgroundState,
     popup: Option<PopupWindow>,
     /// Last `Event::Tick` we dispatched. `None` until the first tick is
     /// fired. The runtime uses this to pace ticks while a widget
@@ -158,6 +162,7 @@ impl AppHandler {
             cursor: None,
             modifiers: Modifiers::default(),
             needs_redraw: true,
+            bg: BackgroundState::new(),
             popup: None,
             last_tick: None,
         }
@@ -423,6 +428,19 @@ impl AppHandler {
     }
 
     fn dispatch_key(&mut self, key: &winit::event::KeyEvent, event_loop: &ActiveEventLoop) {
+        // Global debug hotkeys: `p` cycles the window background pattern, `c`
+        // cycles its color. Handled here, ahead of the widget tree, so they
+        // work in any application — and consumed (early return) so the letter
+        // doesn't also leak into a focused text field.
+        if key.state == ElementState::Pressed
+            && !self.modifiers.has_command()
+            && let WKey::Character(s) = &key.logical_key
+            && let Some(ch) = s.chars().next()
+            && self.bg.handle_key(ch)
+        {
+            self.needs_redraw = true;
+            return;
+        }
         let mapped = map_key(&key.logical_key);
         match key.state {
             ElementState::Pressed => {
@@ -497,7 +515,7 @@ impl AppHandler {
             self.mono_font.as_ref(),
             false,
         );
-        painter.fill(self.theme.background);
+        painter.fill_pattern(self.theme.background, self.bg.pattern, self.bg.color());
         self.root.paint(&mut painter, &self.theme);
         surface_buf
             .present()

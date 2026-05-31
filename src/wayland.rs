@@ -44,6 +44,7 @@ use wayland_protocols::xdg::dialog::v1::client::xdg_wm_dialog_v1::XdgWmDialogV1;
 use wayland_protocols::xdg::shell::client::xdg_positioner::{Anchor, Gravity, XdgPositioner};
 
 use crate::app::App;
+use crate::background::BackgroundState;
 use crate::event::{Event, EventCtx, Key, Modifiers, MouseButton, NamedKey};
 use crate::font::Font;
 use crate::geometry::{Point, Rect};
@@ -127,6 +128,7 @@ pub(crate) fn run(app: App) {
         keyboard: None,
         pointer: None,
         modifiers: Modifiers::default(),
+        bg: BackgroundState::new(),
         cursor: None,
 
         popup: None,
@@ -180,6 +182,9 @@ struct State {
     keyboard: Option<wl_keyboard::WlKeyboard>,
     pointer: Option<wl_pointer::WlPointer>,
     modifiers: Modifiers,
+    /// Background pattern + color for the main window, toggled with the
+    /// `p` / `c` debug keys. Popups/dialogs ignore it and stay white.
+    bg: BackgroundState,
     /// Cursor position in *widget-tree logical coordinates* — i.e., the
     /// coordinates the widget tree expects (already converted from
     /// pointer pixels, and translated by the popup anchor when the
@@ -339,7 +344,7 @@ impl State {
             self.mono_font.as_ref(),
             false,
         );
-        painter.fill(self.theme.background);
+        painter.fill_pattern(self.theme.background, self.bg.pattern, self.bg.color());
         self.root.paint(&mut painter, &self.theme);
 
         let surface = self.window.wl_surface();
@@ -837,6 +842,17 @@ impl State {
         let modifiers = self.modifiers;
         let mapped = map_keysym(event.keysym);
         if pressed {
+            // Global debug hotkeys: `p` cycles the window background pattern,
+            // `c` cycles its color. Handled ahead of the widget tree (so they
+            // work in any application) and consumed so the letter doesn't also
+            // leak into a focused text field.
+            if !modifiers.has_command()
+                && let Some(Key::Char(ch)) = mapped
+                && self.bg.handle_key(ch)
+            {
+                self.needs_redraw = true;
+                return;
+            }
             if let Some(mapped) = mapped {
                 self.dispatch(Event::KeyDown {
                     key: mapped,
