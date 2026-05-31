@@ -100,6 +100,7 @@ pub struct List {
     items: Vec<ListItem>,
     selected: Option<usize>,
     focused: bool,
+    enabled: bool,
     v_scrollbar: ScrollBar,
     activated: Option<usize>,
     last_click: Option<(usize, Instant)>,
@@ -112,6 +113,7 @@ impl List {
             items: Vec::new(),
             selected: None,
             focused: false,
+            enabled: true,
             v_scrollbar: ScrollBar::vertical(Rect::new(0, 0, 0, 0)),
             activated: None,
             last_click: None,
@@ -121,6 +123,22 @@ impl List {
     pub fn with_items(mut self, items: Vec<ListItem>) -> Self {
         self.set_items(items);
         self
+    }
+
+    pub fn with_enabled(mut self, enabled: bool) -> Self {
+        self.set_enabled(enabled);
+        self
+    }
+
+    pub fn is_enabled(&self) -> bool {
+        self.enabled
+    }
+
+    /// Enable or disable the list. A disabled list paints its rows greyed with
+    /// no selection band, can't take focus, and ignores mouse and keyboard
+    /// input (including its scrollbar).
+    pub fn set_enabled(&mut self, enabled: bool) {
+        self.enabled = enabled;
     }
 
     /// Replace every row. Resets the scroll position and clears any pending
@@ -307,7 +325,12 @@ impl Widget for List {
                 (theme.text, theme.face)
             };
             let text_color = if selected { text_color } else { theme.text };
-            if selected {
+            let text_color = if self.enabled {
+                text_color
+            } else {
+                theme.disabled_text
+            };
+            if selected && self.enabled {
                 painter.fill_rect(Rect::new(text_x, y, row_w.max(0), ROW_HEIGHT), bg_color);
             }
 
@@ -325,6 +348,7 @@ impl Widget for List {
         }
 
         if self.focused
+            && self.enabled
             && let Some(idx) = self.selected
             && idx >= scroll_top
             && idx < scroll_top + visible
@@ -341,6 +365,9 @@ impl Widget for List {
     }
 
     fn event(&mut self, event: &Event, ctx: &mut EventCtx) {
+        if !self.enabled {
+            return;
+        }
         if self.v_scrollbar.captures_pointer() {
             self.v_scrollbar.event(event, ctx);
             return;
@@ -412,7 +439,7 @@ impl Widget for List {
     }
 
     fn focusable(&self) -> bool {
-        true
+        self.enabled
     }
 
     fn set_focused(&mut self, focused: bool) {

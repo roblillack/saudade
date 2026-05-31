@@ -30,6 +30,7 @@ pub struct TextEditor {
     cursor: (usize, usize),
     selection_anchor: Option<(usize, usize)>,
     focused: bool,
+    enabled: bool,
     /// Per-visible-row cumulative pixel widths, keyed by absolute row index.
     /// `widths[col]` is the x-offset (in logical px) where the caret sits
     /// at character index `col`. Rebuilt every paint; only visible rows are
@@ -57,6 +58,7 @@ impl TextEditor {
             cursor: (0, 0),
             selection_anchor: None,
             focused: false,
+            enabled: true,
             cumulative_widths: HashMap::new(),
             drag_active: false,
             last_click: None,
@@ -76,6 +78,27 @@ impl TextEditor {
     pub fn with_font_size(mut self, size: f32) -> Self {
         self.font_size = size;
         self
+    }
+
+    pub fn with_enabled(mut self, enabled: bool) -> Self {
+        self.set_enabled(enabled);
+        self
+    }
+
+    pub fn is_enabled(&self) -> bool {
+        self.enabled
+    }
+
+    /// Enable or disable the editor. A disabled editor paints on the grey
+    /// button face with greyed text, hides its caret, can't take focus, and
+    /// ignores all input.
+    pub fn set_enabled(&mut self, enabled: bool) {
+        self.enabled = enabled;
+        if !enabled {
+            self.drag_active = false;
+            self.last_click = None;
+            self.click_count = 0;
+        }
     }
 
     pub fn text(&self) -> String {
@@ -523,9 +546,15 @@ impl Widget for TextEditor {
         self.sync_scrollbar();
         let text = self.text_area();
 
-        // Sunken white field with 1-px black outer border around the whole
-        // widget (text area + scrollbar live inside).
-        painter.fill_rect(text, Color::WHITE);
+        // Sunken field with 1-px black outer border around the whole widget
+        // (text area + scrollbar live inside) — white when live, grey when
+        // disabled.
+        let field_bg = if self.enabled {
+            Color::WHITE
+        } else {
+            theme.face
+        };
+        painter.fill_rect(text, field_bg);
         painter.sunken_bevel(text, theme.highlight, theme.shadow);
         painter.stroke_rect(text, theme.border);
 
@@ -559,11 +588,22 @@ impl Widget for TextEditor {
                 break;
             }
             let y = text_y0 + row_offset as i32 * LINE_HEIGHT;
-            self.paint_line(painter, theme, row, text_x, y, selection);
+            if self.enabled {
+                self.paint_line(painter, theme, row, text_x, y, selection);
+            } else {
+                // Disabled: plain greyed text, no selection band.
+                painter.mono_text(
+                    text_x,
+                    y,
+                    &self.lines[row],
+                    self.font_size,
+                    theme.disabled_text,
+                );
+            }
         }
 
         let (crow, ccol) = self.cursor;
-        if crow >= scroll_top && crow < scroll_top + visible {
+        if self.enabled && crow >= scroll_top && crow < scroll_top + visible {
             let prefix_w = self
                 .cumulative_widths
                 .get(&crow)
@@ -588,6 +628,9 @@ impl Widget for TextEditor {
     }
 
     fn event(&mut self, event: &Event, ctx: &mut EventCtx) {
+        if !self.enabled {
+            return;
+        }
         // Once the scrollbar is dragging it gets every event until release.
         if self.v_scrollbar.captures_pointer() {
             self.v_scrollbar.event(event, ctx);
@@ -795,7 +838,7 @@ impl Widget for TextEditor {
     }
 
     fn focusable(&self) -> bool {
-        true
+        self.enabled
     }
 
     fn set_focused(&mut self, focused: bool) {
@@ -816,7 +859,7 @@ impl Widget for TextEditor {
     }
 
     fn wants_ticks(&self) -> bool {
-        self.focused
+        self.focused && self.enabled
     }
 
     fn layout(&mut self, bounds: Rect) {

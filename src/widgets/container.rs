@@ -185,13 +185,25 @@ impl Widget for Container {
             return;
         }
 
+        // A focused child that's itself capturing the pointer — an open
+        // `Dropdown`, for instance — owns the keyboard while it's up. Skip the
+        // accelerator pass (so a sibling default button's Enter can't pre-empt
+        // it) and Tab cycling; the focused dispatch below still delivers the
+        // key. This mirrors the menu case (handled via `accelerator_blocking`
+        // below), but for a popup that *holds focus* rather than floating
+        // beside it.
+        let focused_capturing = self
+            .focused
+            .and_then(|i| self.children.get(i))
+            .is_some_and(|c| c.captures_pointer());
+
         // Keyboard events first go to every accelerator-accepting child
         // (e.g. a MenuBar listening for Alt+letter). If any of those is
         // *actively capturing* — typically a menubar with an open menu —
         // the focused widget below is locked out: the menu owns the user's
         // attention until it closes. This is what stops keystrokes from
         // leaking into an editor while a menu is up.
-        if event.is_keyboard() {
+        if event.is_keyboard() && !focused_capturing {
             let mut accelerator_blocking = false;
             for (idx, child) in self.children.iter_mut().enumerate() {
                 if child.accepts_accelerators() && Some(idx) != self.focused {

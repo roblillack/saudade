@@ -315,7 +315,17 @@ impl Widget for Column {
             return;
         }
 
-        if event.is_keyboard() {
+        // A focused child that's itself capturing the pointer — an open
+        // `Dropdown`, or a `Container` whose open dropdown it forwards — owns
+        // the keyboard while it's up. Skip the accelerator pass (so a sibling
+        // default button's Enter can't pre-empt it) and Tab cycling; the
+        // focused dispatch below still delivers the key.
+        let focused_capturing = self
+            .focused
+            .and_then(|i| self.children.get(i))
+            .is_some_and(|c| c.widget.captures_pointer());
+
+        if event.is_keyboard() && !focused_capturing {
             let mut accelerator_blocking = false;
             for (idx, child) in self.children.iter_mut().enumerate() {
                 if child.widget.accepts_accelerators() && Some(idx) != self.focused {

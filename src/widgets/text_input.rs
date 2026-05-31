@@ -26,6 +26,7 @@ pub struct TextInput {
     cursor: usize,
     selection_anchor: Option<usize>,
     focused: bool,
+    enabled: bool,
     /// Cumulative pixel widths for the current text: `widths[i]` is the caret
     /// x-offset (in logical px) at character index `i`. Rebuilt every paint
     /// and reused by event handlers to map pointer x ↔ char index.
@@ -53,6 +54,7 @@ impl TextInput {
             cursor: 0,
             selection_anchor: None,
             focused: false,
+            enabled: true,
             cumulative_widths: vec![0],
             scroll_x: 0,
             drag_active: false,
@@ -112,6 +114,28 @@ impl TextInput {
 
     pub fn is_focused(&self) -> bool {
         self.focused
+    }
+
+    pub fn with_enabled(mut self, enabled: bool) -> Self {
+        self.set_enabled(enabled);
+        self
+    }
+
+    pub fn is_enabled(&self) -> bool {
+        self.enabled
+    }
+
+    /// Enable or disable the field. A disabled field paints on the grey button
+    /// face with greyed text, hides its caret, can't take focus, and ignores
+    /// all input. Used by the 7GUIs flight booker to grey out the return-date
+    /// field for one-way flights.
+    pub fn set_enabled(&mut self, enabled: bool) {
+        self.enabled = enabled;
+        if !enabled {
+            self.drag_active = false;
+            self.last_click = None;
+            self.click_count = 0;
+        }
     }
 
     fn font_size_for(&self, theme: &Theme) -> f32 {
@@ -438,7 +462,12 @@ impl Widget for TextInput {
     fn paint(&mut self, painter: &mut Painter, theme: &Theme) {
         let font_size = self.font_size_for(theme);
 
-        painter.fill_rect(self.rect, Color::WHITE);
+        let field_bg = if self.enabled {
+            Color::WHITE
+        } else {
+            theme.face
+        };
+        painter.fill_rect(self.rect, field_bg);
         painter.sunken_bevel(self.rect, theme.highlight, theme.shadow);
         painter.stroke_rect(self.rect, theme.border);
 
@@ -457,6 +486,18 @@ impl Widget for TextInput {
         // don't leak past the field's chrome when the content is wider than
         // the field (horizontal scroll) or the caret is right at an edge.
         let saved_clip = painter.push_clip(inner);
+
+        // Disabled: just the plain text in the greyed color — no selection
+        // band, no caret. (Returns early so the enabled path below is
+        // untouched.)
+        if !self.enabled {
+            if !self.chars.is_empty() {
+                let text: String = self.chars.iter().collect();
+                painter.text(text_x0, text_y, &text, font_size, theme.disabled_text);
+            }
+            painter.restore_clip(saved_clip);
+            return;
+        }
 
         // An unfocused field still draws its selection so the user can see
         // what's selected when keyboard focus is elsewhere — but in the
@@ -509,6 +550,9 @@ impl Widget for TextInput {
     }
 
     fn event(&mut self, event: &Event, ctx: &mut EventCtx) {
+        if !self.enabled {
+            return;
+        }
         match event {
             Event::PointerDown {
                 pos,
@@ -673,7 +717,7 @@ impl Widget for TextInput {
     }
 
     fn focusable(&self) -> bool {
-        true
+        self.enabled
     }
 
     fn set_focused(&mut self, focused: bool) {
@@ -694,7 +738,7 @@ impl Widget for TextInput {
     }
 
     fn wants_ticks(&self) -> bool {
-        self.focused
+        self.focused && self.enabled
     }
 
     fn layout(&mut self, bounds: Rect) {

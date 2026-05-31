@@ -30,6 +30,7 @@ pub struct Slider {
     step: i32,
     focused: bool,
     dragging: bool,
+    enabled: bool,
     on_change: Option<ChangeHandler>,
 }
 
@@ -44,6 +45,7 @@ impl Slider {
             step: 1,
             focused: false,
             dragging: false,
+            enabled: true,
             on_change: None,
         }
     }
@@ -51,6 +53,24 @@ impl Slider {
     pub fn with_value(mut self, value: i32) -> Self {
         self.set_value(value);
         self
+    }
+
+    pub fn with_enabled(mut self, enabled: bool) -> Self {
+        self.set_enabled(enabled);
+        self
+    }
+
+    pub fn is_enabled(&self) -> bool {
+        self.enabled
+    }
+
+    /// Enable or disable the slider. A disabled slider can't take focus and
+    /// ignores clicks, drags, and arrow keys.
+    pub fn set_enabled(&mut self, enabled: bool) {
+        self.enabled = enabled;
+        if !enabled {
+            self.dragging = false;
+        }
     }
 
     /// Set the per-keystroke increment used by the arrow keys (clamped to at
@@ -173,12 +193,15 @@ impl Widget for Slider {
         // Raised thumb, same chrome as a (small) button.
         let thumb = self.thumb_rect();
         painter.button(thumb, theme, false, false);
-        if self.focused {
+        if self.focused && self.enabled {
             draw_focus_rect(painter, thumb.inset(3), theme.text);
         }
     }
 
     fn event(&mut self, event: &Event, ctx: &mut EventCtx) {
+        if !self.enabled {
+            return;
+        }
         match event {
             Event::PointerDown {
                 pos,
@@ -229,7 +252,7 @@ impl Widget for Slider {
     }
 
     fn focusable(&self) -> bool {
-        true
+        self.enabled
     }
 
     fn set_focused(&mut self, focused: bool) {

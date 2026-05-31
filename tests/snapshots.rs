@@ -11,9 +11,9 @@ mod common;
 use common::snapshot_at_all_scales;
 
 use saudade::{
-    Bevel, Button, Color, Column, Container, Dialog, Event, Image, Key, Label, List, ListIcon,
-    ListItem, Menu, MenuBar, MenuItem, Modifiers, NamedKey, Orientation, ProgressBar, Rect, Row,
-    ScrollBar, Slider, TextEditor, Widget,
+    Bevel, Button, Color, Column, Container, Dialog, Dropdown, Event, Image, Key, Label, List,
+    ListIcon, ListItem, Menu, MenuBar, MenuItem, Modifiers, NamedKey, Orientation, ProgressBar,
+    Rect, Row, ScrollBar, Slider, TextEditor, Widget,
 };
 
 // ---------------------------------------------------------------- Bevel
@@ -84,6 +84,17 @@ fn button_focused() {
             Container::new(120, 40)
                 .with_background(Color::LIGHT_GRAY)
                 .add(btn),
+        )
+    });
+}
+
+#[test]
+fn button_disabled() {
+    snapshot_at_all_scales("button_disabled", 120, 40, || {
+        Box::new(
+            Container::new(120, 40)
+                .with_background(Color::LIGHT_GRAY)
+                .add(Button::new(Rect::new(20, 8, 80, 24), "Book").with_enabled(false)),
         )
     });
 }
@@ -328,6 +339,78 @@ fn slider_focused() {
             Container::new(160, 32)
                 .with_background(Color::LIGHT_GRAY)
                 .add(slider),
+        )
+    });
+}
+
+#[test]
+fn slider_disabled() {
+    snapshot_at_all_scales("slider_disabled", 160, 32, || {
+        Box::new(
+            Container::new(160, 32)
+                .with_background(Color::LIGHT_GRAY)
+                .add(
+                    Slider::new(Rect::new(8, 4, 144, 24), 0, 100)
+                        .with_value(50)
+                        .with_enabled(false),
+                ),
+        )
+    });
+}
+
+// ---------------------------------------------------------------- Dropdown
+
+fn flight_dropdown(rect: Rect) -> Dropdown {
+    Dropdown::new(rect).with_items(["one-way flight", "return flight"])
+}
+
+#[test]
+fn dropdown_closed() {
+    snapshot_at_all_scales("dropdown_closed", 200, 40, || {
+        Box::new(
+            Container::new(200, 40)
+                .with_background(Color::LIGHT_GRAY)
+                .add(flight_dropdown(Rect::new(16, 8, 168, 24))),
+        )
+    });
+}
+
+#[test]
+fn dropdown_focused() {
+    snapshot_at_all_scales("dropdown_focused", 200, 40, || {
+        let mut dd = flight_dropdown(Rect::new(16, 8, 168, 24));
+        dd.set_focused(true);
+        Box::new(
+            Container::new(200, 40)
+                .with_background(Color::LIGHT_GRAY)
+                .add(dd),
+        )
+    });
+}
+
+#[test]
+fn dropdown_disabled() {
+    snapshot_at_all_scales("dropdown_disabled", 200, 40, || {
+        Box::new(
+            Container::new(200, 40)
+                .with_background(Color::LIGHT_GRAY)
+                .add(flight_dropdown(Rect::new(16, 8, 168, 24)).with_enabled(false)),
+        )
+    });
+}
+
+/// Open list — the popup is composited below the closed field, exactly as the
+/// runtime hosts it in a separate window. The window is tall enough to hold the
+/// dropped-down rows so the snapshot stays a single self-contained image.
+#[test]
+fn dropdown_open() {
+    snapshot_at_all_scales("dropdown_open", 200, 84, || {
+        let mut dd = flight_dropdown(Rect::new(16, 8, 168, 24));
+        dd.open();
+        Box::new(
+            Container::new(200, 84)
+                .with_background(Color::LIGHT_GRAY)
+                .add(dd),
         )
     });
 }
@@ -600,6 +683,27 @@ fn list_scrolls() {
     });
 }
 
+#[test]
+fn list_disabled() {
+    snapshot_at_all_scales("list_disabled", 200, 100, || {
+        let mut list = laid_out_list(
+            Rect::new(8, 8, 184, 84),
+            vec![
+                ListItem::new("alpha").with_icon(swatch_icon(Color::RED)),
+                ListItem::new("beta").with_icon(swatch_icon(Color::GREEN)),
+                ListItem::new("gamma").with_icon(swatch_icon(Color::NAVY)),
+            ],
+        );
+        list.set_selected(Some(1));
+        list.set_enabled(false);
+        Box::new(
+            Container::new(200, 100)
+                .with_background(Color::LIGHT_GRAY)
+                .add(list),
+        )
+    });
+}
+
 // ---------------------------------------------------------------- Composite
 
 /// A small dialog-style layout that exercises Container, Label, Bevel,
@@ -864,6 +968,150 @@ fn default_button_fires_on_enter_from_any_focus() {
     assert_eq!(c.focused_index(), Some(1), "OK should be focused");
     backend.dispatch(&mut c, &enter);
     assert_eq!(*fired.borrow(), vec!["OK".to_string()]);
+}
+
+/// Drive a `Dropdown` through both input paths: a click opens the list and a
+/// click on a row selects it; while focused, Space opens, the arrows move the
+/// highlight, and Enter commits. `on_change` must fire exactly on real changes.
+#[test]
+fn dropdown_open_select_and_keyboard() {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    use saudade::mock::MockBackend;
+
+    let changes: Rc<RefCell<Vec<usize>>> = Rc::new(RefCell::new(Vec::new()));
+    let mut dd = Dropdown::new(Rect::new(0, 0, 100, 24)).with_items(["a", "b", "c"]);
+    dd.set_on_change({
+        let changes = changes.clone();
+        move |_cx, idx| changes.borrow_mut().push(idx)
+    });
+    assert_eq!(dd.selected_index(), Some(0));
+
+    let backend = MockBackend::new(100, 100).with_scale(1.0);
+    let down = |x, y| Event::PointerDown {
+        pos: saudade::Point::new(x, y),
+        button: saudade::MouseButton::Left,
+    };
+    let key = |k| Event::KeyDown {
+        key: Key::Named(k),
+        modifiers: Modifiers::default(),
+    };
+
+    // Click the field to open; popup rows sit flush below it.
+    backend.dispatch(&mut dd, &down(50, 12));
+    assert!(dd.is_open());
+    // Row 2 ("c"): popup top = 24, pad 2, row height 18 → row 2 spans y 62..80.
+    backend.dispatch(&mut dd, &down(50, 70));
+    assert_eq!(dd.selected_index(), Some(2));
+    assert!(!dd.is_open(), "selecting a row closes the list");
+
+    // Keyboard: focus, Space to open, Up to highlight "b", Enter to commit.
+    dd.set_focused(true);
+    backend.dispatch(&mut dd, &key(NamedKey::Space));
+    assert!(dd.is_open());
+    backend.dispatch(&mut dd, &key(NamedKey::Up));
+    backend.dispatch(&mut dd, &key(NamedKey::Enter));
+    assert_eq!(dd.selected_index(), Some(1));
+    assert!(!dd.is_open());
+
+    // Escape leaves the selection untouched.
+    backend.dispatch(&mut dd, &key(NamedKey::Space));
+    backend.dispatch(&mut dd, &key(NamedKey::Down));
+    backend.dispatch(&mut dd, &key(NamedKey::Escape));
+    assert_eq!(
+        dd.selected_index(),
+        Some(1),
+        "Escape cancels without committing"
+    );
+    assert!(!dd.is_open());
+
+    assert_eq!(
+        *changes.borrow(),
+        vec![2, 1],
+        "on_change fires once per real change"
+    );
+}
+
+/// A disabled `Dropdown` accepts no focus and ignores clicks.
+#[test]
+fn dropdown_disabled_is_inert() {
+    use saudade::mock::MockBackend;
+
+    let mut dd = Dropdown::new(Rect::new(0, 0, 100, 24))
+        .with_items(["a", "b"])
+        .with_enabled(false);
+    assert!(!dd.focusable());
+
+    let backend = MockBackend::new(100, 100).with_scale(1.0);
+    backend.dispatch(
+        &mut dd,
+        &Event::PointerDown {
+            pos: saudade::Point::new(50, 12),
+            button: saudade::MouseButton::Left,
+        },
+    );
+    assert!(!dd.is_open(), "a disabled dropdown does not open on click");
+}
+
+/// An open dropdown owns the keyboard even beside a default button: Enter
+/// commits the highlighted row instead of firing the default action. Once the
+/// list closes, Enter books as usual. Pins the container's accelerator
+/// suppression for a focused, capturing child.
+#[test]
+fn open_dropdown_blocks_default_button_enter() {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    use saudade::mock::MockBackend;
+
+    let booked = Rc::new(RefCell::new(0u32));
+    let changes: Rc<RefCell<Vec<usize>>> = Rc::new(RefCell::new(Vec::new()));
+
+    let mut dd = Dropdown::new(Rect::new(10, 10, 120, 24)).with_items(["a", "b", "c"]);
+    dd.set_on_change({
+        let changes = changes.clone();
+        move |_cx, idx| changes.borrow_mut().push(idx)
+    });
+    let book = Button::new(Rect::new(10, 50, 80, 24), "Book")
+        .default(true)
+        .on_click({
+            let booked = booked.clone();
+            move |_cx| *booked.borrow_mut() += 1
+        });
+
+    let mut container = Container::new(160, 90).add(dd).add(book);
+    container.layout(Rect::new(0, 0, 160, 90));
+    container.focus_first(); // the dropdown is the first focusable child
+
+    let backend = MockBackend::new(160, 90).with_scale(1.0);
+    let down = |x, y| Event::PointerDown {
+        pos: saudade::Point::new(x, y),
+        button: saudade::MouseButton::Left,
+    };
+    let key = |k| Event::KeyDown {
+        key: Key::Named(k),
+        modifiers: Modifiers::default(),
+    };
+
+    // Click the field to open, move the highlight to "b", then Enter.
+    backend.dispatch(&mut container, &down(20, 20));
+    backend.dispatch(&mut container, &key(NamedKey::Down));
+    backend.dispatch(&mut container, &key(NamedKey::Enter));
+    assert_eq!(
+        *changes.borrow(),
+        vec![1],
+        "Enter commits the open dropdown"
+    );
+    assert_eq!(
+        *booked.borrow(),
+        0,
+        "the default button must not fire while the list is open"
+    );
+
+    // List closed now → Enter fires the default Book button.
+    backend.dispatch(&mut container, &key(NamedKey::Enter));
+    assert_eq!(*booked.borrow(), 1, "Enter books once the list is closed");
 }
 
 /// Sanity-check that the [`MockBackend`] API itself returns a

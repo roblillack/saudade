@@ -47,7 +47,7 @@ pub use painter::Painter;
 pub use theme::Theme;
 pub use widget::{PopupKind, PopupRequest, Widget};
 pub use widgets::{
-    Bevel, Button, Checkbox, Column, Container, Dialog, DialogIcon, Image, Label, List, ListIcon,
-    ListItem, Menu, MenuBar, MenuItem, Orientation, ProgressBar, Row, SCROLLBAR_THICKNESS,
-    ScrollBar, Slider, TextEditor, TextInput,
+    Bevel, Button, Checkbox, Column, Container, Dialog, DialogIcon, Dropdown, Image, Label, List,
+    ListIcon, ListItem, Menu, MenuBar, MenuItem, Orientation, ProgressBar, Row,
+    SCROLLBAR_THICKNESS, ScrollBar, Slider, TextEditor, TextInput,
 };
