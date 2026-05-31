@@ -39,7 +39,7 @@ fn main() {
     let root = Container::new(220, 100)
         .with_background(Color::WHITE)
         .with_border(Color::BLACK)
-        .add(Label::new(20, 20, "Hello, saudade!"))
+        .add(Label::new(Rect::new(20, 20, 180, 16), "Hello, saudade!"))
         .add(
             Button::new(Rect::new(70, 60, 80, 24), "OK")
                 .default(true)
@@ -238,12 +238,12 @@ saudade ships with two top-level container styles:
   pinned to the top and a text editor below it grows with the window.
 
 Widgets opt into layout by overriding `Widget::layout(&mut self, bounds:
-Rect)`. Most interactive widgets do — `MenuBar`, `TextEditor`, `List`,
-`ScrollBar`, `Row`, `Button` and `Checkbox` all store the new rect (and
-rebuild any cached geometry), so they reflow inside a `Column`/`Row` or any
-container that propagates `layout`. Widgets that don't override `layout`
-(e.g. `Label`) keep the position they were given at construction — which is
-exactly what `Container`'s children want.
+Rect)`. Most box-shaped widgets do — `MenuBar`, `TextEditor`, `List`,
+`ScrollBar`, `Row`, `Button`, `Checkbox` and `Label` all store the new rect
+(and rebuild any cached geometry), so they reflow inside a `Column`/`Row` or
+any container that propagates `layout`. Widgets that don't override `layout`
+(e.g. `Bevel`, `Image`) keep the position they were given at construction —
+which is exactly what `Container`'s children want.
 
 ```rust
 // Notepad layout: menu bar pinned to the top, editor fills the rest.
@@ -297,12 +297,12 @@ A flat collection of widgets at absolute positions. The container handles:
 let root = Container::new(395, 305)        // size in logical pixels
     .with_background(Color::WHITE)         // optional fill
     .with_border(Color::BLACK)             // optional 1-px outer border
-    .add(Label::new(20, 20, "Hello"))
+    .add(Label::new(Rect::new(20, 20, 120, 16), "Hello"))
     .add(Button::new(Rect::new(150, 50, 80, 24), "OK"));
 
 // imperatively:
 let mut root = Container::new(395, 305);
-root.push(Label::new(20, 20, "Hello"));
+root.push(Label::new(Rect::new(20, 20, 120, 16), "Hello"));
 ```
 
 The runtime calls `Widget::focus_first` on the root once the window is
@@ -314,31 +314,32 @@ Add order matters: later widgets paint on top and are hit-tested first.
 
 ### `Label`
 
-A run of text positioned by its top-left corner. Inherits color and size
-from the active `Theme` unless overridden.
+A box of text. A `Label` always occupies a rectangle; text is laid out from
+the box's top-left corner. Inherits color and size from the active `Theme`
+unless overridden.
 
 ```rust
-Label::new(10, 10, "Plain label");
-Label::new(10, 30, "Smaller").with_size(8.0);
-Label::new(10, 50, "Red").with_color(Color::RED);
+Label::new(Rect::new(10, 10, 120, 16), "Plain label");
+Label::new(Rect::new(10, 30, 120, 14), "Smaller").with_size(8.0);
+Label::new(Rect::new(10, 50, 120, 16), "Red").with_color(Color::RED);
 ```
 
-Labels are multi-line: an explicit `\n` in the text always starts a new
-line, stacked at the font's natural line height.
+Text is multi-line and word-wrapped to the box automatically — no wrap
+points to specify by hand. Explicit `\n` characters always start a new line,
+and any line too wide for the box breaks at whitespace (a single word wider
+than the box overflows rather than being split mid-word). Lines stack at the
+font's natural line height.
 
 ```rust
-Label::new(10, 10, "First line\nSecond line");
+Label::new(Rect::new(10, 10, 200, 60),
+    "A longer paragraph that wraps across several lines, plus an\nexplicit break.");
 ```
 
-Call `.wrap(max_width)` to also word-wrap to a maximum line width (in
-logical pixels). Lines are split on `\n` first, then each is wrapped at
-whitespace to fit; a word wider than the limit overflows on its own line
-rather than being broken mid-word.
-
-```rust
-Label::new(10, 10, "A longer paragraph that wraps across several lines.")
-    .wrap(180);
-```
+Anything that extends past the box — horizontally or vertically — is clipped
+to its bounds, so a label never paints outside the rectangle it was given.
+Placed in a `Column` or `Row`, a label adopts its slot and wraps/clips to
+that; placed at an absolute position in a `Container`, it keeps the
+rectangle it was constructed with.
 
 ### `Button`
 

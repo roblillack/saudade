@@ -96,7 +96,7 @@ fn label_default() {
         Box::new(
             Container::new(140, 30)
                 .with_background(Color::WHITE)
-                .add(Label::new(8, 8, "Hello, world!")),
+                .add(Label::new(Rect::new(8, 8, 124, 16), "Hello, world!")),
         )
     });
 }
@@ -108,7 +108,7 @@ fn label_styled() {
             Container::new(140, 30)
                 .with_background(Color::WHITE)
                 .add(
-                    Label::new(8, 6, "Big Red")
+                    Label::new(Rect::new(8, 6, 124, 22), "Big Red")
                         .with_color(Color::RED)
                         .with_size(16.0),
                 ),
@@ -122,7 +122,10 @@ fn label_multiline() {
         Box::new(
             Container::new(140, 60)
                 .with_background(Color::WHITE)
-                .add(Label::new(8, 8, "First line\nSecond line\nThird line")),
+                .add(Label::new(
+                    Rect::new(8, 8, 124, 48),
+                    "First line\nSecond line\nThird line",
+                )),
         )
     });
 }
@@ -133,14 +136,10 @@ fn label_wrapped() {
         Box::new(
             Container::new(140, 80)
                 .with_background(Color::WHITE)
-                .add(
-                    Label::new(
-                        8,
-                        8,
-                        "The quick brown fox jumps over the lazy dog.",
-                    )
-                    .wrap(124),
-                ),
+                .add(Label::new(
+                    Rect::new(8, 8, 124, 64),
+                    "The quick brown fox jumps over the lazy dog.",
+                )),
         )
     });
 }
@@ -151,14 +150,26 @@ fn label_wrapped_with_breaks() {
         Box::new(
             Container::new(160, 100)
                 .with_background(Color::WHITE)
-                .add(
-                    Label::new(
-                        8,
-                        8,
-                        "Paragraph one wraps across several lines.\n\nParagraph two follows a blank line.",
-                    )
-                    .wrap(144),
-                ),
+                .add(Label::new(
+                    Rect::new(8, 8, 144, 88),
+                    "Paragraph one wraps across several lines.\n\nParagraph two follows a blank line.",
+                )),
+        )
+    });
+}
+
+#[test]
+fn label_clipped() {
+    // The box is too small for the text: it wraps to the box width and
+    // everything below the box's bottom edge is clipped away.
+    snapshot_at_all_scales("label_clipped", 160, 50, || {
+        Box::new(
+            Container::new(160, 50)
+                .with_background(Color::WHITE)
+                .add(Label::new(
+                    Rect::new(8, 8, 80, 20),
+                    "This text is wider and taller than its small box.",
+                )),
         )
     });
 }
@@ -503,10 +514,10 @@ fn composite_about_box() {
         Box::new(
             Container::new(260, 140)
                 .with_background(Color::LIGHT_GRAY)
-                .add(Label::new(16, 16, "Retrogui Demo").with_size(14.0))
-                .add(Label::new(16, 40, "Version 0.1.0"))
+                .add(Label::new(Rect::new(16, 16, 228, 20), "Retrogui Demo").with_size(14.0))
+                .add(Label::new(Rect::new(16, 40, 228, 16), "Version 0.1.0"))
                 .add(Bevel::etched_line(16, 64, 228))
-                .add(Label::new(16, 76, "(c) Nobody in particular"))
+                .add(Label::new(Rect::new(16, 76, 228, 16), "(c) Nobody in particular"))
                 .add(Button::new(Rect::new(90, 104, 80, 24), "OK").default(true)),
         )
     });
@@ -751,7 +762,7 @@ fn snapshot_facility_smoke_test() {
     let mut root: Box<dyn Widget> = Box::new(
         Container::new(40, 20)
             .with_background(Color::WHITE)
-            .add(Label::new(2, 2, "ok")),
+            .add(Label::new(Rect::new(2, 2, 36, 16), "ok")),
     );
     let backend = MockBackend::new(40, 20)
         .with_scale(1.0)

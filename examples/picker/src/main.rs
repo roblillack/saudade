@@ -89,9 +89,12 @@ fn main() {
     });
 
     let content = Container::new(WINDOW_W, WINDOW_H)
-        .add(Label::new(16, 12, "Pick an ingredient (Tab to cycle):"))
+        .add(Label::new(
+            Rect::new(16, 12, WINDOW_W - 32, 16),
+            "Pick an ingredient (Tab to cycle):",
+        ))
         .add(SharedList(list.clone()))
-        .add(Label::new(16, 172, "Name:"))
+        .add(Label::new(Rect::new(16, 172, 60, 16), "Name:"))
         .add(SharedTextInput(name.clone()))
         .add(SharedCheckbox(favorite.clone()))
         .add(ok)

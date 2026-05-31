@@ -3,37 +3,30 @@ use crate::painter::Painter;
 use crate::theme::Theme;
 use crate::widget::Widget;
 
-/// A run of text positioned at an absolute point.
+/// A box of text.
 ///
-/// A `Label` renders one or more lines. Explicit `\n` characters always
-/// start a new line. When a wrap width is set via [`Label::wrap`], each line
-/// is additionally word-wrapped to fit within that many logical pixels —
-/// long lines break at whitespace, and a word wider than the limit overflows
-/// on its own line rather than being split mid-word.
+/// A `Label` occupies a fixed rectangle. Text is laid out from the box's
+/// top-left corner and word-wrapped to the box width: explicit `\n`
+/// characters start a new line, and any line too wide for the box breaks at
+/// whitespace (a single word wider than the box overflows rather than being
+/// split mid-word). Anything that extends past the box — horizontally or
+/// vertically — is clipped to its bounds, so a label never paints outside
+/// the rectangle it was given. Color and size are inherited from the active
+/// [`Theme`] unless overridden.
 pub struct Label {
-    pub x: i32,
-    pub y: i32,
+    pub rect: Rect,
     pub text: String,
     pub size: Option<f32>,
     pub color: Option<Color>,
-    /// Maximum line width in logical pixels for word wrapping. `None`
-    /// disables wrapping; lines are then only broken on explicit `\n`.
-    wrap_width: Option<i32>,
-    /// Total rendered height in logical pixels, cached on each paint so
-    /// [`Widget::bounds`] can report an accurate box. Zero until first paint.
-    measured_height: i32,
 }
 
 impl Label {
-    pub fn new(x: i32, y: i32, text: impl Into<String>) -> Self {
+    pub fn new(rect: Rect, text: impl Into<String>) -> Self {
         Self {
-            x,
-            y,
+            rect,
             text: text.into(),
             size: None,
             color: None,
-            wrap_width: None,
-            measured_height: 0,
         }
     }
 
@@ -46,31 +39,23 @@ impl Label {
         self.size = Some(size);
         self
     }
+}
 
-    /// Word-wrap the text to at most `max_width` logical pixels per line.
-    /// Lines are still split on explicit `\n` first, then each is wrapped at
-    /// whitespace to fit the width.
-    pub fn wrap(mut self, max_width: i32) -> Self {
-        self.wrap_width = Some(max_width);
-        self
-    }
-
-    /// Break `text` into the lines that will actually be drawn: split on
-    /// explicit newlines, then greedily word-wrap each paragraph to the wrap
-    /// width (if one is set). `painter` is only used to measure candidate
-    /// lines, so this stays correct at any DPI.
-    fn layout_lines(&self, painter: &Painter, size: f32) -> Vec<String> {
-        let mut lines = Vec::new();
-        for paragraph in self.text.split('\n') {
-            match self.wrap_width {
-                Some(max_width) if max_width > 0 => {
-                    wrap_paragraph(painter, paragraph, size, max_width, &mut lines)
-                }
-                _ => lines.push(paragraph.to_string()),
-            }
+/// Break `text` into the lines that will actually be drawn: split on
+/// explicit newlines, then greedily word-wrap each paragraph to `max_width`
+/// logical pixels. `painter` is only used to measure candidate lines, so this
+/// stays correct at any DPI. A non-positive `max_width` (a degenerate box)
+/// skips wrapping — the clip rectangle hides the overflow anyway.
+fn layout_lines(painter: &Painter, text: &str, size: f32, max_width: i32) -> Vec<String> {
+    let mut lines = Vec::new();
+    for paragraph in text.split('\n') {
+        if max_width > 0 {
+            wrap_paragraph(painter, paragraph, size, max_width, &mut lines);
+        } else {
+            lines.push(paragraph.to_string());
         }
-        lines
     }
+    lines
 }
 
 /// Greedily pack the words of `paragraph` into lines no wider than
@@ -103,12 +88,15 @@ fn wrap_paragraph(
 
 impl Widget for Label {
     fn bounds(&self) -> Rect {
-        Rect::new(
-            self.x,
-            self.y,
-            self.wrap_width.unwrap_or(0),
-            self.measured_height,
-        )
+        self.rect
+    }
+
+    /// Adopt the slot a layout container (`Column`, `Row`) hands us, so the
+    /// text wraps to and is clipped against that slot. Labels placed at
+    /// absolute positions in a `Container` are never laid out and keep the
+    /// rectangle they were constructed with.
+    fn layout(&mut self, bounds: Rect) {
+        self.rect = bounds;
     }
 
     fn paint(&mut self, painter: &mut Painter, theme: &Theme) {
@@ -118,12 +106,14 @@ impl Widget for Label {
         // sample string gives the same value.
         let line_height = painter.measure_text("", size).h.max(1);
 
-        let lines = self.layout_lines(painter, size);
-        let mut y = self.y;
+        let lines = layout_lines(painter, &self.text, size, self.rect.w);
+
+        let saved = painter.push_clip(self.rect);
+        let mut y = self.rect.y;
         for line in &lines {
-            painter.text(self.x, y, line, size, color);
+            painter.text(self.rect.x, y, line, size, color);
             y += line_height;
         }
-        self.measured_height = lines.len() as i32 * line_height;
+        painter.restore_clip(saved);
     }
 }
