@@ -12,8 +12,8 @@ use common::snapshot_at_all_scales;
 
 use saudade::{
     Bevel, Button, Color, Column, Container, Dialog, Event, Image, Key, Label, List, ListIcon,
-    ListItem, Menu, MenuBar, MenuItem, Modifiers, NamedKey, Orientation, Rect, Row, ScrollBar,
-    TextEditor, Widget,
+    ListItem, Menu, MenuBar, MenuItem, Modifiers, NamedKey, Orientation, ProgressBar, Rect, Row,
+    ScrollBar, Slider, TextEditor, Widget,
 };
 
 // ---------------------------------------------------------------- Bevel
@@ -231,6 +231,105 @@ fn scrollbar_horizontal_mid() {
             Container::new(160, 20)
                 .with_background(Color::WHITE)
                 .add(sb),
+        )
+    });
+}
+
+// ---------------------------------------------------------------- ProgressBar
+
+#[test]
+fn progressbar_empty() {
+    snapshot_at_all_scales("progressbar_empty", 160, 28, || {
+        Box::new(
+            Container::new(160, 28)
+                .with_background(Color::LIGHT_GRAY)
+                .add(ProgressBar::new(Rect::new(8, 6, 144, 16))),
+        )
+    });
+}
+
+#[test]
+fn progressbar_mid() {
+    snapshot_at_all_scales("progressbar_mid", 160, 28, || {
+        Box::new(
+            Container::new(160, 28)
+                .with_background(Color::LIGHT_GRAY)
+                .add(ProgressBar::new(Rect::new(8, 6, 144, 16)).with_fraction(0.45)),
+        )
+    });
+}
+
+#[test]
+fn progressbar_full() {
+    snapshot_at_all_scales("progressbar_full", 160, 28, || {
+        Box::new(
+            Container::new(160, 28)
+                .with_background(Color::LIGHT_GRAY)
+                .add(ProgressBar::new(Rect::new(8, 6, 144, 16)).with_fraction(1.0)),
+        )
+    });
+}
+
+/// Grey fill with the rounded percentage drawn centered over the bar.
+#[test]
+fn progressbar_percentage() {
+    snapshot_at_all_scales("progressbar_percentage", 160, 28, || {
+        Box::new(
+            Container::new(160, 28)
+                .with_background(Color::LIGHT_GRAY)
+                .add(
+                    ProgressBar::new(Rect::new(8, 6, 144, 16))
+                        .with_fraction(0.6)
+                        .with_percentage(true),
+                ),
+        )
+    });
+}
+
+// ---------------------------------------------------------------- Slider
+
+#[test]
+fn slider_min() {
+    snapshot_at_all_scales("slider_min", 160, 32, || {
+        Box::new(
+            Container::new(160, 32)
+                .with_background(Color::LIGHT_GRAY)
+                .add(Slider::new(Rect::new(8, 4, 144, 24), 0, 100)),
+        )
+    });
+}
+
+#[test]
+fn slider_mid() {
+    snapshot_at_all_scales("slider_mid", 160, 32, || {
+        Box::new(
+            Container::new(160, 32)
+                .with_background(Color::LIGHT_GRAY)
+                .add(Slider::new(Rect::new(8, 4, 144, 24), 0, 100).with_value(50)),
+        )
+    });
+}
+
+#[test]
+fn slider_max() {
+    snapshot_at_all_scales("slider_max", 160, 32, || {
+        Box::new(
+            Container::new(160, 32)
+                .with_background(Color::LIGHT_GRAY)
+                .add(Slider::new(Rect::new(8, 4, 144, 24), 0, 100).with_value(100)),
+        )
+    });
+}
+
+#[test]
+fn slider_focused() {
+    snapshot_at_all_scales("slider_focused", 160, 32, || {
+        let mut slider = Slider::new(Rect::new(8, 4, 144, 24), 0, 100).with_value(50);
+        slider.set_focused(true);
+        Box::new(
+            Container::new(160, 32)
+                .with_background(Color::LIGHT_GRAY)
+                .add(slider),
         )
     });
 }

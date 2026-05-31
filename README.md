@@ -20,14 +20,17 @@ toolkit for utilities, not for full applications.
 Three reference apps live under `examples/`. Run any of them with
 `cargo run --example <name>`:
 
-| Example   | What it shows                                            |
-|-----------|----------------------------------------------------------|
-| `notepad` | Editor window with menu bar (`MenuBar`, `TextEditor`).   |
-| `filer`   | Filesystem browser using `List` with folder/file icons.  |
-| `picker`  | Pick-an-item dialog: `List` + buttons + `Dialog`, with Tab/Shift+Tab focus cycling. |
+| Example       | What it shows                                            |
+|---------------|----------------------------------------------------------|
+| `notepad`     | Editor window with menu bar (`MenuBar`, `TextEditor`).   |
+| `filer`       | Filesystem browser using `List` with folder/file icons.  |
+| `picker`      | Pick-an-item dialog: `List` + buttons + `Dialog`, with Tab/Shift+Tab focus cycling. |
+| `counter`     | [7GUIs](https://eugenkiss.github.io/7guis/) task 1 — a `Label` field and a `Button`. |
+| `temperature` | 7GUIs task 2 — two `TextInput`s converting Celsius ↔ Fahrenheit live. |
+| `timer`       | 7GUIs task 4 — a `ProgressBar` gauge, a duration `Slider`, and a reset `Button`. |
 
 ```console
-$ cargo run --example notepad        # or: filer, picker
+$ cargo run --example notepad        # or: filer, picker, counter, temperature, timer
 ```
 
 saudade was extracted from *retrofetch*, whose about-box dialog
@@ -96,7 +99,7 @@ to an object-oriented UI framework.
 | painter   | `Painter` — drawing primitives + Win 3.1 chrome helpers         |
 | font      | `Font` — system font lookup + glyph rasterization               |
 | widget    | `Widget` trait (paint / event / focus / overlay hooks)          |
-| widgets   | `Container`, `Column`, `Label`, `Button`, `Bevel`, `Image`, `MenuBar`, `Menu`, `MenuItem`, `ScrollBar`, `TextEditor` |
+| widgets   | `Container`, `Column`, `Row`, `Label`, `Button`, `Checkbox`, `Bevel`, `Image`, `MenuBar`, `Menu`, `MenuItem`, `ScrollBar`, `Slider`, `ProgressBar`, `List`, `Dialog`, `TextInput`, `TextEditor` |
 | app       | `App`, `WindowConfig` — runtime entry point                     |
 
 Everything user-facing is re-exported from the crate root; you generally
@@ -512,6 +515,60 @@ Interaction:
 The thumb is sized as `track_extent × viewport / (viewport + max)` with a
 sane minimum so it stays grabbable even on huge documents. Use
 `SCROLLBAR_THICKNESS` (16 logical pixels) to lay siblings out around it.
+
+### `Slider`
+
+A Win 3.1 trackbar: a thin sunken groove with a raised, draggable thumb that
+picks an integer value in an inclusive `[min, max]` range. Unlike `ScrollBar`
+(which models a *scroll position* over a viewport), a `Slider` is a plain value
+control — use it to dial a number.
+
+```rust
+let slider = Slider::new(Rect::new(16, 16, 200, 24), 0, 100)
+    .with_value(40)
+    .with_step(5)                       // arrow-key increment (default 1)
+    .on_change(|cx, value| {
+        // fires on every change, including continuously during a drag
+        cx.request_paint();
+    });
+
+let v: i32 = slider.value();
+```
+
+Interaction:
+
+| Input                | Effect                                            |
+|----------------------|---------------------------------------------------|
+| click / drag         | move the thumb to the cursor (fires `on_change` live) |
+| ← / ↓                | decrease by `step`                                |
+| → / ↑                | increase by `step`                                |
+| PageUp / PageDown    | jump by a tenth of the range                      |
+| Home / End           | snap to `min` / `max`                             |
+
+The slider is focusable and draws a dotted focus rectangle inside the thumb
+when focused. `on_change` fires *during* a drag, not just on release, so a
+gauge or label bound to it updates as the user moves the thumb. Use
+`set_on_change` to install the handler after construction (when the slider is
+held behind an `Rc<RefCell<…>>`).
+
+### `ProgressBar`
+
+A sunken white field that fills from the left with a solid grey bar in
+proportion to its `fraction` (0.0–1.0). The fill is a neutral grey, not the
+selection navy used by lists and text fields — a progress bar isn't "focused,"
+so it shouldn't borrow that color's meaning. Purely presentational — no events,
+no focus, no built-in animation: drive it by calling `set_fraction` from
+whatever owns the underlying progress.
+
+```rust
+let mut bar = ProgressBar::new(Rect::new(16, 16, 200, 16))
+    .with_percentage(true);             // draw the rounded % over the bar
+bar.set_fraction(0.6);                  // 60% full
+```
+
+With `with_percentage(true)` the bar draws the rounded percentage centered over
+the field in the normal text color, which stays legible over both the empty and
+filled halves.
 
 ### `TextEditor`
 

@@ -83,6 +83,19 @@ impl TextInput {
         self
     }
 
+    /// Install (or replace) the change handler after construction. Useful when
+    /// two inputs reference each other (e.g. the 7GUIs temperature converter,
+    /// where editing Celsius updates Fahrenheit and vice versa): build both
+    /// behind an `Rc<RefCell<…>>` first, then wire the handlers once both
+    /// exist. `set_text` never fires the handler, so the two fields can update
+    /// each other without looping.
+    pub fn set_on_change<F>(&mut self, handler: F)
+    where
+        F: FnMut(&mut EventCtx, &str) + 'static,
+    {
+        self.on_change = Some(Box::new(handler));
+    }
+
     pub fn text(&self) -> String {
         self.chars.iter().collect()
     }
