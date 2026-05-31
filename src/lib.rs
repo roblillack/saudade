@@ -17,7 +17,7 @@
 //!
 //! let root = Container::new(200, 80)
 //!     .with_background(Color::WHITE)
-//!     .add(Label::new(10, 10, "Hello, world!"))
+//!     .add(Label::new(Rect::new(10, 10, 180, 16), "Hello, world!"))
 //!     .add(
 //!         Button::new(Rect::new(60, 40, 80, 24), "OK")
 //!             .default(true)

@@ -12,7 +12,7 @@
 //!
 //! let mut root = Container::new(120, 40)
 //!     .with_background(Color::WHITE)
-//!     .add(Label::new(10, 12, "Hi"));
+//!     .add(Label::new(Rect::new(10, 12, 100, 16), "Hi"));
 //!
 //! let snap = MockBackend::new(120, 40).with_scale(2.0).render(&mut root);
 //! let png_bytes = snap.to_png();
