@@ -19,9 +19,7 @@ fn main() {
         .map(PathBuf::from)
         .or_else(|| std::env::current_dir().ok())
         .unwrap_or_else(|| PathBuf::from("/"));
-    let start = start
-        .canonicalize()
-        .unwrap_or_else(|_| PathBuf::from("/"));
+    let start = start.canonicalize().unwrap_or_else(|_| PathBuf::from("/"));
 
     let browser = FileBrowser::new(start);
 
@@ -92,7 +90,9 @@ impl FileBrowser {
     }
 
     fn handle_activation(&mut self, ctx: &mut EventCtx) {
-        let Some(idx) = self.list.take_activated() else { return };
+        let Some(idx) = self.list.take_activated() else {
+            return;
+        };
         let name = self.list.items().get(idx).map(|i| i.label.clone());
         if let Some(name) = name {
             self.descend(&name);

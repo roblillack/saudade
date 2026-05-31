@@ -113,7 +113,12 @@ impl TextEditor {
         } else {
             0
         };
-        Rect::new(self.rect.x, self.rect.y, (self.rect.w - sb_w).max(0), self.rect.h)
+        Rect::new(
+            self.rect.x,
+            self.rect.y,
+            (self.rect.w - sb_w).max(0),
+            self.rect.h,
+        )
     }
 
     // ---------------------------------------------------------------- selection
@@ -209,7 +214,9 @@ impl TextEditor {
     }
 
     pub fn paste(&mut self) {
-        let Some(text) = self.clipboard_get() else { return };
+        let Some(text) = self.clipboard_get() else {
+            return;
+        };
         if self.has_selection() {
             self.delete_selection();
         }
@@ -471,9 +478,7 @@ impl TextEditor {
         let target = if delta_pages > 0 {
             (self.cursor.0 + step * delta_pages as usize).min(self.lines.len().saturating_sub(1))
         } else {
-            self.cursor
-                .0
-                .saturating_sub(step * (-delta_pages) as usize)
+            self.cursor.0.saturating_sub(step * (-delta_pages) as usize)
         };
         self.cursor.0 = target;
         self.clamp_col();
@@ -622,23 +627,21 @@ impl Widget for TextEditor {
                 self.reset_blink();
                 ctx.request_paint();
             }
-            Event::PointerMove { pos }
-                if self.drag_active => {
-                    self.place_cursor_at(*pos);
-                    self.reset_blink();
-                    ctx.request_paint();
-                }
+            Event::PointerMove { pos } if self.drag_active => {
+                self.place_cursor_at(*pos);
+                self.reset_blink();
+                ctx.request_paint();
+            }
             Event::PointerUp {
                 button: MouseButton::Left,
                 ..
-            }
-                if self.drag_active => {
-                    self.drag_active = false;
-                    if self.selection_anchor == Some(self.cursor) {
-                        self.selection_anchor = None;
-                    }
-                    ctx.request_paint();
+            } if self.drag_active => {
+                self.drag_active = false;
+                if self.selection_anchor == Some(self.cursor) {
+                    self.selection_anchor = None;
                 }
+                ctx.request_paint();
+            }
             Event::Char { ch, modifiers } if !modifiers.has_command() => {
                 if !self.focused {
                     return;
@@ -654,7 +657,9 @@ impl Widget for TextEditor {
                 }
             }
             Event::KeyDown { key, modifiers } if self.focused => {
-                if modifiers.control && let Key::Char(c) = key {
+                if modifiers.control
+                    && let Key::Char(c) = key
+                {
                     let consumed = match c.to_ascii_lowercase() {
                         'c' => {
                             self.copy();
@@ -889,13 +894,7 @@ impl TextEditor {
             let after: String = line.chars().skip(e).collect();
             painter.mono_text(text_x, y, &before, self.font_size, theme.text);
             let middle_x = text_x + widths.get(s).copied().unwrap_or(0);
-            painter.mono_text(
-                middle_x,
-                y,
-                &middle,
-                self.font_size,
-                sel_text,
-            );
+            painter.mono_text(middle_x, y, &middle, self.font_size, sel_text);
             let after_x = text_x + widths.get(e).copied().unwrap_or(0);
             painter.mono_text(after_x, y, &after, self.font_size, theme.text);
         } else {

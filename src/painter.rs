@@ -121,9 +121,7 @@ impl<'a> Painter<'a> {
         let x1 = self.origin_x + self.snap(rect.x + rect.w);
         let y1 = self.origin_y + self.snap(rect.y + rect.h);
         let combined = match self.clip {
-            Some((px0, py0, px1, py1)) => {
-                (x0.max(px0), y0.max(py0), x1.min(px1), y1.min(py1))
-            }
+            Some((px0, py0, px1, py1)) => (x0.max(px0), y0.max(py0), x1.min(px1), y1.min(py1)),
             None => (x0, y0, x1, y1),
         };
         self.clip = Some(combined);

@@ -123,7 +123,6 @@ impl Column {
         focused
     }
 
-
     fn choose_target(&self, event: &Event) -> Option<usize> {
         if event.is_keyboard() {
             return self.focused;
@@ -140,9 +139,7 @@ impl Column {
     /// Index of the first overlay that's currently asserting pre-emptive
     /// capture (typically: a dialog that's just been shown).
     fn active_overlay(&self) -> Option<usize> {
-        self.overlays
-            .iter()
-            .position(|o| o.captures_pointer())
+        self.overlays.iter().position(|o| o.captures_pointer())
     }
 
     fn change_focus(&mut self, new_focus: Option<usize>, ctx: &mut EventCtx) {
@@ -166,7 +163,10 @@ impl Column {
     }
 
     fn focusable_count(&self) -> usize {
-        self.children.iter().filter(|c| c.widget.focusable()).count()
+        self.children
+            .iter()
+            .filter(|c| c.widget.focusable())
+            .count()
     }
 
     fn cycle_focus(&mut self, dir: i32, ctx: &mut EventCtx) -> bool {
@@ -339,10 +339,9 @@ impl Widget for Column {
             // two focusable children we let both events fall through so
             // a sole `TextEditor` can still receive `'\t'`.
             match tab_action(event) {
-                Some(TabAction::Cycle(dir))
-                    if self.cycle_focus(dir, ctx) => {
-                        return;
-                    }
+                Some(TabAction::Cycle(dir)) if self.cycle_focus(dir, ctx) => {
+                    return;
+                }
                 Some(TabAction::Swallow) if self.focusable_count() >= 2 => return,
                 _ => {}
             }

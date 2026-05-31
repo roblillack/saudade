@@ -68,7 +68,6 @@ impl Container {
         self.focused
     }
 
-
     fn choose_target(&self, event: &Event) -> Option<usize> {
         if event.is_keyboard() {
             return self.focused;
@@ -130,7 +129,6 @@ impl Container {
         true
     }
 }
-
 
 fn next_in_cycle(candidates: &[usize], current: Option<usize>, dir: i32) -> usize {
     let n = candidates.len() as i32;
@@ -220,10 +218,9 @@ impl Widget for Container {
             // both events fall through — a lone `TextEditor` can then
             // still receive `'\t'` and insert it as indentation.
             match tab_action(event) {
-                Some(TabAction::Cycle(dir))
-                    if self.cycle_focus(dir, ctx) => {
-                        return;
-                    }
+                Some(TabAction::Cycle(dir)) if self.cycle_focus(dir, ctx) => {
+                    return;
+                }
                 Some(TabAction::Swallow) if self.focusable_count() >= 2 => return,
                 _ => {}
             }

@@ -36,9 +36,10 @@ fn main() {
         TextInput::new(Rect::new(72, 168, 192, 22)).with_text("Anonymous"),
     ));
 
-    let favorite = Rc::new(RefCell::new(
-        Checkbox::new(Rect::new(16, 200, 200, 16), "Add to favorites"),
-    ));
+    let favorite = Rc::new(RefCell::new(Checkbox::new(
+        Rect::new(16, 200, 200, 16),
+        "Add to favorites",
+    )));
 
     // The dialog is shared between OK and Cancel. Either one pops it; the
     // shared on_dismiss closes the window when the user clicks the OK
@@ -66,10 +67,9 @@ fn main() {
                     who
                 };
                 let body = match label {
-                    Some(item) if starred => format!(
-                        "{} picked:\n\n{}\n\nSaved to favorites.",
-                        who, item
-                    ),
+                    Some(item) if starred => {
+                        format!("{} picked:\n\n{}\n\nSaved to favorites.", who, item)
+                    }
                     Some(item) => format!("{} picked:\n\n{}", who, item),
                     None => format!("{} picked nothing.", who),
                 };

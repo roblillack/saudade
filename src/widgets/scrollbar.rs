@@ -129,7 +129,9 @@ impl ScrollBar {
             return track;
         }
         let total = self.viewport + self.max;
-        ((track * self.viewport) / total.max(1)).max(MIN_THUMB).min(track)
+        ((track * self.viewport) / total.max(1))
+            .max(MIN_THUMB)
+            .min(track)
     }
 
     fn thumb_offset(&self) -> i32 {
@@ -218,7 +220,9 @@ impl ScrollBar {
     }
 
     fn handle_drag(&mut self, pos: Point) {
-        let Some(offset) = self.drag_offset else { return };
+        let Some(offset) = self.drag_offset else {
+            return;
+        };
         let track = self.track_rect();
         let thumb_size = self.thumb_size();
         let movable = (self.track_extent() - thumb_size).max(1);
@@ -247,8 +251,20 @@ impl Widget for ScrollBar {
         let down = self.pos_arrow_rect();
         painter.button(up, theme, false, false);
         painter.button(down, theme, false, false);
-        draw_arrow(painter, up, self.orientation, ArrowDir::Negative, theme.text);
-        draw_arrow(painter, down, self.orientation, ArrowDir::Positive, theme.text);
+        draw_arrow(
+            painter,
+            up,
+            self.orientation,
+            ArrowDir::Negative,
+            theme.text,
+        );
+        draw_arrow(
+            painter,
+            down,
+            self.orientation,
+            ArrowDir::Positive,
+            theme.text,
+        );
 
         if self.max > 0 {
             let thumb = self.thumb_rect();
@@ -265,19 +281,17 @@ impl Widget for ScrollBar {
                 self.handle_press(*pos);
                 ctx.request_paint();
             }
-            Event::PointerMove { pos }
-                if self.drag_offset.is_some() => {
-                    self.handle_drag(*pos);
-                    ctx.request_paint();
-                }
+            Event::PointerMove { pos } if self.drag_offset.is_some() => {
+                self.handle_drag(*pos);
+                ctx.request_paint();
+            }
             Event::PointerUp {
                 button: MouseButton::Left,
                 ..
+            } if self.drag_offset.is_some() => {
+                self.drag_offset = None;
+                ctx.request_paint();
             }
-                if self.drag_offset.is_some() => {
-                    self.drag_offset = None;
-                    ctx.request_paint();
-                }
             _ => {}
         }
     }

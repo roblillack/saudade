@@ -166,8 +166,7 @@ fn warn(
 
 const UNIMPL: &str =
     "This action is not implemented\nyet in saudade's notepad demo.\n\nClick OK to dismiss.";
-const UNIMPL_FILE_DIALOG: &str =
-    "File dialogs are not implemented\nyet — pass the target file as\nthe first command-line argument\ninstead.\n\nClick OK to dismiss.";
+const UNIMPL_FILE_DIALOG: &str = "File dialogs are not implemented\nyet — pass the target file as\nthe first command-line argument\ninstead.\n\nClick OK to dismiss.";
 
 /// Tiny adapter that lets us hold a `TextEditor` in a `Rc<RefCell>` while
 /// still satisfying the `Widget` trait. The menu callbacks clone the `Rc` so
