@@ -17,7 +17,7 @@ assemble a Win 3.1 about box, a Notepad-style text editor, and similar
 single-window utilities. Scope is roughly that of NeXTSTEP's *WINGs*: a
 toolkit for utilities, not for full applications.
 
-Three reference apps live under `examples/`. Run any of them with
+Reference apps live under `examples/`. Run any of them with
 `cargo run --example <name>`:
 
 | Example       | What it shows                                            |
@@ -29,9 +29,10 @@ Three reference apps live under `examples/`. Run any of them with
 | `temperature` | 7GUIs task 2 — two `TextInput`s converting Celsius ↔ Fahrenheit live. |
 | `flight_booker` | 7GUIs task 3 — a `Dropdown` picks the flight type and reactively enables / disables the return-date field and the Book `Button`. |
 | `timer`       | 7GUIs task 4 — a `ProgressBar` gauge, a duration `Slider`, and a reset `Button`. |
+| `crud`        | 7GUIs task 5 — a `List` as a live, prefix-filtered database view with Create / Update / Delete `Button`s that enable themselves reactively. |
 
 ```console
-$ cargo run --example notepad        # or: filer, picker, counter, temperature, flight_booker, timer
+$ cargo run --example notepad        # or: filer, picker, counter, temperature, flight_booker, timer, crud
 ```
 
 saudade was extracted from *retrofetch*, whose about-box dialog
