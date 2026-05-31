@@ -889,5 +889,4 @@ runtimes, plugin systems, themable web components.
 
 ## License
 
-saudade was extracted from the *retrofetch* project and is released under
-the same license.
+MIT
