@@ -7,8 +7,8 @@
 //! for `insta::assert_binary_snapshot!`.
 //!
 //! ```no_run
-//! use retrogui::*;
-//! use retrogui::mock::MockBackend;
+//! use saudade::*;
+//! use saudade::mock::MockBackend;
 //!
 //! let mut root = Container::new(120, 40)
 //!     .with_background(Color::WHITE)
@@ -210,7 +210,7 @@ impl Snapshot {
                 png::Encoder::new(&mut buf, self.width as u32, self.height as u32);
             encoder.set_color(png::ColorType::Rgba);
             encoder.set_depth(png::BitDepth::Eight);
-            let mut writer = encoder.write_header().expect("retrogui::mock: png header");
+            let mut writer = encoder.write_header().expect("saudade::mock: png header");
             let mut rgba = Vec::with_capacity(self.pixels.len() * 4);
             for &px in &self.pixels {
                 let a = ((px >> 24) & 0xFF) as u8;
@@ -221,7 +221,7 @@ impl Snapshot {
             }
             writer
                 .write_image_data(&rgba)
-                .expect("retrogui::mock: png data");
+                .expect("saudade::mock: png data");
         }
         buf
     }

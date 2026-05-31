@@ -1,10 +1,10 @@
-//! filer — a tiny retrogui demo that walks the local filesystem inside a
+//! filer — a tiny saudade demo that walks the local filesystem inside a
 //! list widget. Double-click (or Enter) on a directory descends into it;
 //! double-click on `..` ascends to the parent.
 
 use std::path::{Path, PathBuf};
 
-use retrogui::{
+use saudade::{
     App, Color, Event, EventCtx, List, ListIcon, ListItem, Painter, Rect, Theme, Widget,
     WindowConfig,
 };

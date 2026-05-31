@@ -47,7 +47,7 @@ pub struct PopupRequest {
 /// It does not own peer widgets and never reaches into the runtime directly —
 /// repaint / close / focus requests are issued via [`EventCtx`].
 pub trait Widget {
-    /// Logical bounds relative to the window root, in retrogui pixels.
+    /// Logical bounds relative to the window root, in saudade pixels.
     fn bounds(&self) -> Rect;
 
     /// Render the widget in the normal pass.

@@ -2,7 +2,7 @@
 //!
 //! Used in place of winit when the process is started on a Wayland session
 //! (`WAYLAND_DISPLAY` is set). The widget tree, the painter, and every other
-//! piece of retrogui stay the same — only the windowing + event loop differ.
+//! piece of saudade stay the same — only the windowing + event loop differ.
 //!
 //! Why SCTK rather than winit's Wayland support: winit 0.30 still doesn't
 //! implement `xdg_popup`, so popups would fall back to plain `xdg_toplevel`s
@@ -54,22 +54,22 @@ use crate::widget::{PopupKind, PopupRequest, Widget};
 pub(crate) fn run(app: App) {
     let (window_cfg, theme, root) = app.into_parts();
 
-    let conn = Connection::connect_to_env().expect("retrogui: Wayland connect failed");
+    let conn = Connection::connect_to_env().expect("saudade: Wayland connect failed");
     let (globals, event_queue) =
-        registry_queue_init::<State>(&conn).expect("retrogui: registry init failed");
+        registry_queue_init::<State>(&conn).expect("saudade: registry init failed");
     let qh: QueueHandle<State> = event_queue.handle();
 
     let mut event_loop: CalloopLoop<State> =
-        CalloopLoop::try_new().expect("retrogui: calloop init failed");
+        CalloopLoop::try_new().expect("saudade: calloop init failed");
     let loop_handle = event_loop.handle();
     WaylandSource::new(conn.clone(), event_queue)
         .insert(loop_handle)
-        .expect("retrogui: WaylandSource insert failed");
+        .expect("saudade: WaylandSource insert failed");
 
     let compositor =
-        CompositorState::bind(&globals, &qh).expect("retrogui: wl_compositor not available");
-    let xdg_shell = XdgShell::bind(&globals, &qh).expect("retrogui: xdg_shell not available");
-    let shm = Shm::bind(&globals, &qh).expect("retrogui: wl_shm not available");
+        CompositorState::bind(&globals, &qh).expect("saudade: wl_compositor not available");
+    let xdg_shell = XdgShell::bind(&globals, &qh).expect("saudade: xdg_shell not available");
+    let shm = Shm::bind(&globals, &qh).expect("saudade: wl_shm not available");
     // Optional: the dialog protocol is a "staging" extension. Compositors
     // that don't advertise it fall back to plain xdg_toplevel with
     // set_parent — still a real top-level, just without the explicit
@@ -81,7 +81,7 @@ pub(crate) fn run(app: App) {
     let window =
         xdg_shell.create_window(surface, WindowDecorations::RequestServer, &qh);
     window.set_title(&window_cfg.title);
-    window.set_app_id(format!("retrogui.{}", sanitize(&window_cfg.title)));
+    window.set_app_id(format!("saudade.{}", sanitize(&window_cfg.title)));
 
     let initial_w = window_cfg.size.w.max(1) as u32;
     let initial_h = window_cfg.size.h.max(1) as u32;
@@ -100,7 +100,7 @@ pub(crate) fn run(app: App) {
     window.commit();
 
     let pool = SlotPool::new((initial_w * initial_h * 4) as usize * 4, &shm)
-        .expect("retrogui: slot pool init failed");
+        .expect("saudade: slot pool init failed");
 
     let mut state = State {
         registry_state: RegistryState::new(&globals),
@@ -139,7 +139,7 @@ pub(crate) fn run(app: App) {
     while !state.exit {
         event_loop
             .dispatch(Duration::from_millis(16), &mut state)
-            .expect("retrogui: dispatch failed");
+            .expect("saudade: dispatch failed");
         state.tick();
     }
 }

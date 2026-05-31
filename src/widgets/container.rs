@@ -7,7 +7,7 @@ use crate::widgets::{TabAction, tab_action};
 
 /// A flat collection of widgets at absolute positions inside a fixed-size area.
 ///
-/// The container is the only thing retrogui ships with right now — enough for
+/// The container is the only thing saudade ships with right now — enough for
 /// WINGs-style dialog layouts. It is responsible for three runtime concerns:
 ///
 /// * **hit testing**: pointer events are routed to the top-most child whose

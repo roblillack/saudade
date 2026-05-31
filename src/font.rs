@@ -3,7 +3,7 @@ use crate::painter::Painter;
 
 /// A loaded font, ready for glyph rasterization.
 ///
-/// retrogui owns no bundled bitmap font: we ask the host OS via fontdb for a
+/// saudade owns no bundled bitmap font: we ask the host OS via fontdb for a
 /// reasonable proportional sans-serif (MS Sans Serif on Windows, Tahoma /
 /// Liberation Sans / DejaVu Sans elsewhere) and rasterize on demand with
 /// fontdue. Glyph alpha is blended into the framebuffer.

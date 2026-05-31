@@ -1,7 +1,7 @@
-//! retrogui — a minimal, retained-mode GUI library for small Win 3.1-styled
+//! saudade — a minimal, retained-mode GUI library for small Win 3.1-styled
 //! utilities (about boxes, simple dialogs, system info viewers).
 //!
-//! The library follows the architecture sketched in `retrogui.md` but stays
+//! The library follows the architecture sketched in `saudade.md` but stays
 //! intentionally small:
 //!
 //! * the runtime drives winit + softbuffer
@@ -13,7 +13,7 @@
 //! ## Minimal example
 //!
 //! ```no_run
-//! use retrogui::*;
+//! use saudade::*;
 //!
 //! let root = Container::new(200, 80)
 //!     .with_background(Color::WHITE)

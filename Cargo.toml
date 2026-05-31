@@ -1,7 +1,10 @@
 [package]
-name = "retrogui"
+name = "saudade"
 version = "0.1.0"
 edition = "2024"
+
+[workspace]
+members = ["examples/filer", "examples/notepad", "examples/picker"]
 
 [dependencies]
 # winit drives X11 only. We bypass it entirely on Wayland sessions and

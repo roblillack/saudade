@@ -139,7 +139,7 @@ impl EventCtx {
     }
 
     /// `true` if a widget called [`Self::request_focus`] during this dispatch.
-    /// Custom container widgets (outside retrogui) read this after forwarding
+    /// Custom container widgets (outside saudade) read this after forwarding
     /// an event to a child to learn the child wants focus, then call
     /// [`Self::clear_focus_flags`] and move focus to it — the same protocol the
     /// built-in `Container` / `Column` use internally.

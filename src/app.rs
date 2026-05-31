@@ -82,13 +82,13 @@ impl App {
     }
 
     fn run_winit(self) {
-        let event_loop = EventLoop::new().expect("retrogui: failed to create event loop");
+        let event_loop = EventLoop::new().expect("saudade: failed to create event loop");
         event_loop.set_control_flow(ControlFlow::Wait);
 
         let mut handler = AppHandler::new(self);
         event_loop
             .run_app(&mut handler)
-            .expect("retrogui: event loop error");
+            .expect("saudade: event loop error");
     }
 
     #[cfg(all(unix, not(target_os = "macos")))]
@@ -178,14 +178,14 @@ impl ApplicationHandler for AppHandler {
             .with_resizable(self.window_config.resizable);
         let win = event_loop
             .create_window(attrs)
-            .expect("retrogui: failed to create window");
+            .expect("saudade: failed to create window");
         let win = Rc::new(win);
         let id = win.id();
 
         let context = softbuffer::Context::new(win.clone())
-            .expect("retrogui: failed to create softbuffer context");
+            .expect("saudade: failed to create softbuffer context");
         let mut surface = softbuffer::Surface::new(&context, win.clone())
-            .expect("retrogui: failed to create softbuffer surface");
+            .expect("saudade: failed to create softbuffer surface");
 
         self.physical = win.inner_size();
         self.scale = win.scale_factor() as f32;
@@ -485,7 +485,7 @@ impl AppHandler {
         };
         let mut surface_buf = surface
             .buffer_mut()
-            .expect("retrogui: failed to acquire surface buffer");
+            .expect("saudade: failed to acquire surface buffer");
         let mut painter = Painter::with_popup_pass(
             &mut surface_buf,
             self.physical.width as i32,
@@ -501,7 +501,7 @@ impl AppHandler {
         self.root.paint(&mut painter, &self.theme);
         surface_buf
             .present()
-            .expect("retrogui: failed to present buffer");
+            .expect("saudade: failed to present buffer");
     }
 
     fn paint_popup(&mut self) {
@@ -513,7 +513,7 @@ impl AppHandler {
         let mut surface_buf = p
             .surface
             .buffer_mut()
-            .expect("retrogui: failed to acquire popup buffer");
+            .expect("saudade: failed to acquire popup buffer");
         let mut painter = Painter::with_popup_pass(
             &mut surface_buf,
             p.physical.width as i32,
@@ -531,7 +531,7 @@ impl AppHandler {
         painter.clear_clip();
         surface_buf
             .present()
-            .expect("retrogui: failed to present popup buffer");
+            .expect("saudade: failed to present popup buffer");
     }
 
     /// Re-anchor the popup window to the main window's current screen
@@ -599,7 +599,7 @@ impl AppHandler {
 
         match request.kind {
             PopupKind::Popup => {
-                attrs = attrs.with_title("retrogui popup").with_decorations(false);
+                attrs = attrs.with_title("saudade popup").with_decorations(false);
 
                 // X11: take the WM completely out of the loop.
                 // override-redirect makes this an unmanaged window — it
@@ -748,7 +748,7 @@ fn resize_surface(
     let h = NonZeroU32::new(size.height.max(1)).unwrap();
     surface
         .resize(w, h)
-        .expect("retrogui: failed to resize surface");
+        .expect("saudade: failed to resize surface");
 }
 
 fn origin(logical: Size, scale: f32, physical: PhysicalSize<u32>) -> (i32, i32) {

@@ -53,7 +53,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: snapshot-diffs-${{ matrix.os }}
-          path: retrogui/tests/snapshots/*.snap.actual.png
+          path: tests/snapshots/*.snap.actual.png
           if-no-files-found: ignore
 
       - name: Build (release)

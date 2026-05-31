@@ -4,7 +4,7 @@ use std::fs;
 use std::path::PathBuf;
 use std::rc::Rc;
 
-use retrogui::{
+use saudade::{
     App, Color, Column, Dialog, Event, EventCtx, Menu, MenuBar, MenuItem, Painter, PopupRequest,
     Rect, TextEditor, Theme, Widget, WindowConfig,
 };
@@ -125,7 +125,7 @@ fn main() {
                 move |cx| {
                     dialog.borrow_mut().show_info(
                         "About Notepad",
-                        "notepad\n\nA retrogui demonstration.\n\nBuilt on retrogui — a\nminimal Win 3.1-styled\nGUI toolkit in Rust.",
+                        "notepad\n\nA saudade demonstration.\n\nBuilt on saudade — a\nminimal Win 3.1-styled\nGUI toolkit in Rust.",
                     );
                     cx.request_paint();
                 }
@@ -165,7 +165,7 @@ fn warn(
 }
 
 const UNIMPL: &str =
-    "This action is not implemented\nyet in retrogui's notepad demo.\n\nClick OK to dismiss.";
+    "This action is not implemented\nyet in saudade's notepad demo.\n\nClick OK to dismiss.";
 const UNIMPL_FILE_DIALOG: &str =
     "File dialogs are not implemented\nyet — pass the target file as\nthe first command-line argument\ninstead.\n\nClick OK to dismiss.";
 

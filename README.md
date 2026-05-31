@@ -1,10 +1,10 @@
-# retrogui
+# saudade
 
 A minimal, retained-mode GUI library for small Windows 3.1–styled utilities
 written in Rust. Built on `winit` + `softbuffer` with `fontdue` + `fontdb`
 for text — no GPU, no browser engine, no procedural-macro DSL.
 
-retrogui exists to make tiny dialogs and tools (about boxes, system
+saudade exists to make tiny dialogs and tools (about boxes, system
 viewers, simple text editors, mini control panels) that look like they
 fell out of 1992 while staying portable, density-independent, and crisp
 on modern displays.
@@ -17,26 +17,29 @@ assemble a Win 3.1 about box, a Notepad-style text editor, and similar
 single-window utilities. Scope is roughly that of NeXTSTEP's *WINGs*: a
 toolkit for utilities, not for full applications.
 
-Four reference apps live in the same workspace:
+Three reference apps live under `examples/`:
 
-| Crate       | What it shows                                            |
-|-------------|----------------------------------------------------------|
-| `retrofetch`| About-box dialog (`Container`, `Label`, `Button`, `Image`, `Bevel`). |
-| `notepad`   | Editor window with menu bar (`MenuBar`, `TextEditor`).   |
-| `filer`     | Filesystem browser using `List` with folder/file icons.  |
-| `picker`    | Pick-an-item dialog: `List` + buttons + `Dialog`, with Tab/Shift+Tab focus cycling. |
+| Crate     | What it shows                                            |
+|-----------|----------------------------------------------------------|
+| `notepad` | Editor window with menu bar (`MenuBar`, `TextEditor`).   |
+| `filer`   | Filesystem browser using `List` with folder/file icons.  |
+| `picker`  | Pick-an-item dialog: `List` + buttons + `Dialog`, with Tab/Shift+Tab focus cycling. |
+
+saudade was extracted from *retrofetch*, whose about-box dialog
+(`Container` + `Label` + `Button` + `Image` + `Bevel`) was the original
+demo; that project now lives in its own repository.
 
 
 ## At a glance
 
 ```rust
-use retrogui::*;
+use saudade::*;
 
 fn main() {
     let root = Container::new(220, 100)
         .with_background(Color::WHITE)
         .with_border(Color::BLACK)
-        .add(Label::new(20, 20, "Hello, retrogui!"))
+        .add(Label::new(20, 20, "Hello, saudade!"))
         .add(
             Button::new(Rect::new(70, 60, 80, 24), "OK")
                 .default(true)
@@ -48,23 +51,24 @@ fn main() {
 ```
 
 
-## Adding retrogui to your project
+## Adding saudade to your project
 
-retrogui currently lives inside the retrofetch repository as a workspace
-member. Add it via a path dependency:
+saudade isn't on crates.io yet — it'll be published as a regular crate
+once the API has settled. Until then, add it as a git dependency:
 
 ```toml
 # Cargo.toml
 [dependencies]
-retrogui = { path = "../retrogui" }
+saudade = { git = "https://github.com/roblillack/saudade" }
 ```
 
-It will be published as a regular crate once the API has settled.
+The reference apps under `examples/` depend on it by path
+(`saudade = { path = "../.." }`); see those for a working setup.
 
 
 ## Design philosophy
 
-retrogui follows the architecture sketched in `retrogui.md`:
+saudade follows the architecture sketched in `saudade.md`:
 
 * widgets are ordinary Rust values implementing the `Widget` trait
 * events are typed Rust enums — no integer message IDs
@@ -90,7 +94,7 @@ to an object-oriented UI framework.
 | app       | `App`, `WindowConfig` — runtime entry point                     |
 
 Everything user-facing is re-exported from the crate root; you generally
-just `use retrogui::*;`.
+just `use saudade::*;`.
 
 
 ## Core types
@@ -219,7 +223,7 @@ always in logical pixels.
 
 ### Layout vs. absolute positioning
 
-retrogui ships with two top-level container styles:
+saudade ships with two top-level container styles:
 
 * **`Container`** — children are placed at absolute logical-pixel positions.
   This is what you want for *dialogs* (about boxes, simple alerts) that
@@ -262,7 +266,7 @@ overlay pass — same contract as `Container`.
 
 Both `Column` and `Row` expose `focus_child(index)` to choose a non-default
 initial focus target (e.g. focus a content list instead of a leading toolbar
-field). Custom container widgets outside the crate can reuse retrogui's focus
+field). Custom container widgets outside the crate can reuse saudade's focus
 protocol via `EventCtx::is_focus_requested` / `is_focus_released` /
 `clear_focus_flags`.
 
@@ -693,7 +697,7 @@ none of those match, fontdb's monospace flag is used as a fallback.
 `Painter::text` / `Painter::measure_text` keep using the proportional
 default.
 
-retrogui does **not** ship a bundled bitmap font, so its text rendering
+saudade does **not** ship a bundled bitmap font, so its text rendering
 inherits the local system font. The Win 3.1 chrome still looks right,
 but the typography will be Liberation Sans on most Linux boxes rather
 than MS Sans Serif — close enough for retro nostalgia, not faithful to
@@ -733,7 +737,7 @@ is on the roadmap.
 
 ## Backends
 
-retrogui picks the windowing backend at startup based on the session:
+saudade picks the windowing backend at startup based on the session:
 
 * If `WAYLAND_DISPLAY` is set and non-empty, the runtime talks **pure
   smithay-client-toolkit** — no winit on the Wayland code path.
@@ -793,7 +797,7 @@ matters, draw chrome at a fixed `round(scale)` thickness using
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use retrogui::{
+use saudade::{
     App, Container, Event, EventCtx, Menu, MenuBar, MenuItem, Painter, Rect,
     TextEditor, Theme, Widget, WindowConfig,
 };
@@ -805,7 +809,7 @@ const BAR_H: i32 = 20;
 fn main() {
     let editor = Rc::new(RefCell::new(
         TextEditor::new(Rect::new(4, BAR_H + 4, W - 8, H - BAR_H - 8))
-            .with_text("Hello, retrogui!"),
+            .with_text("Hello, saudade!"),
     ));
 
     let menu_bar = MenuBar::new(Rect::new(0, 0, W, BAR_H))
@@ -825,7 +829,7 @@ fn main() {
         ));
 
     let root = Container::new(W, H)
-        .with_background(retrogui::Color::WHITE)
+        .with_background(saudade::Color::WHITE)
         .add(menu_bar)
         .add(SharedEditor(editor.clone()));
 
@@ -865,7 +869,7 @@ your head.
 
 ## Roadmap
 
-Things that would fit retrogui's spirit but aren't there yet:
+Things that would fit saudade's spirit but aren't there yet:
 
 * `Grid` container (the horizontal `Row` sibling of `Column` now exists)
 * `RadioButton` (single-line `TextInput`, `Checkbox` and `List` now exist)
@@ -885,4 +889,5 @@ runtimes, plugin systems, themable web components.
 
 ## License
 
-Same as the parent retrofetch project.
+saudade was extracted from the *retrofetch* project and is released under
+the same license.

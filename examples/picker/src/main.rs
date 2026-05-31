@@ -1,4 +1,4 @@
-//! picker — a tiny retrogui demo that shows focus cycling across multiple
+//! picker — a tiny saudade demo that shows focus cycling across multiple
 //! focusable widgets. The window holds a list and two buttons; Tab and
 //! Shift+Tab move focus between them, Enter / Space activate the focused
 //! button, and the list's own keyboard handlers work whenever it has focus.
@@ -10,7 +10,7 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use retrogui::{
+use saudade::{
     App, Button, Checkbox, Column, Container, Dialog, Event, EventCtx, Label, List, ListItem,
     Painter, PopupRequest, Rect, TextInput, Theme, Widget, WindowConfig,
 };
@@ -113,7 +113,7 @@ fn main() {
 // ============================================================================
 // Adapters that let the menu/button callbacks mutate the same List/Dialog
 // instances the widget tree owns. Identical in shape to notepad's
-// SharedEditor / SharedDialog — see retrogui's README for the pattern.
+// SharedEditor / SharedDialog — see saudade's README for the pattern.
 // ============================================================================
 
 struct SharedList(Rc<RefCell<List>>);

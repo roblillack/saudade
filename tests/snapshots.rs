@@ -1,16 +1,16 @@
-//! Pixel-snapshot tests for every retrogui widget.
+//! Pixel-snapshot tests for every saudade widget.
 //!
 //! Each test renders a small fixed-size widget tree through `MockBackend`
 //! at 1.0x, 1.25x, 1.5x, and 2.0x, then compares the result to a checked-in
 //! baseline PNG with a small pixel tolerance (see `common::snapshot_at_all_scales`).
 //! Regenerate baselines after an intentional change with
-//! `UPDATE_SNAPSHOTS=1 cargo test -p retrogui`.
+//! `UPDATE_SNAPSHOTS=1 cargo test -p saudade`.
 
 mod common;
 
 use common::snapshot_at_all_scales;
 
-use retrogui::{
+use saudade::{
     Bevel, Button, Color, Column, Container, Dialog, Event, Image, Key, Label, List, ListIcon,
     ListItem, Menu, MenuBar, MenuItem, Modifiers, NamedKey, Orientation, Rect, Row, ScrollBar,
     TextEditor, Widget,
@@ -288,7 +288,7 @@ fn dialog_no_icon() {
         dialog.show(
             "Notice",
             "A plain message without any icon decoration.",
-            retrogui::DialogIcon::None,
+            saudade::DialogIcon::None,
         );
         let column = Column::new()
             .with_background(Color::LIGHT_GRAY)
@@ -472,7 +472,7 @@ fn composite_about_box() {
 /// not two — otherwise Tab from "A" lands on "C" instead of "B".
 #[test]
 fn tab_press_moves_focus_exactly_once() {
-    use retrogui::mock::MockBackend;
+    use saudade::mock::MockBackend;
     let mut container = Container::new(300, 60)
         .add(Button::new(Rect::new(10, 10, 60, 24), "A"))
         .add(Button::new(Rect::new(80, 10, 60, 24), "B"))
@@ -528,7 +528,7 @@ fn tab_propagates_through_single_child_outer_container() {
     use std::cell::RefCell;
     use std::rc::Rc;
 
-    use retrogui::mock::MockBackend;
+    use saudade::mock::MockBackend;
 
     // Each button records its own label when fired so the test can read
     // back which one was activated by Enter.
@@ -607,7 +607,7 @@ fn default_button_fires_on_enter_from_any_focus() {
     use std::cell::RefCell;
     use std::rc::Rc;
 
-    use retrogui::mock::MockBackend;
+    use saudade::mock::MockBackend;
 
     let fired: Rc<RefCell<Vec<String>>> = Rc::new(RefCell::new(Vec::new()));
     let make_btn = |x: i32, label: &'static str, default: bool| {
@@ -700,7 +700,7 @@ fn default_button_fires_on_enter_from_any_focus() {
 /// widget regressions.
 #[test]
 fn snapshot_facility_smoke_test() {
-    use retrogui::mock::MockBackend;
+    use saudade::mock::MockBackend;
     let mut root: Box<dyn Widget> = Box::new(
         Container::new(40, 20)
             .with_background(Color::WHITE)

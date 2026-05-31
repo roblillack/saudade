@@ -18,13 +18,13 @@
 //! After an intentional rendering change, regenerate the baselines with:
 //!
 //! ```sh
-//! UPDATE_SNAPSHOTS=1 cargo test -p retrogui
+//! UPDATE_SNAPSHOTS=1 cargo test -p saudade
 //! ```
 
 use std::path::{Path, PathBuf};
 
-use retrogui::mock::MockBackend;
-use retrogui::{Font, Widget};
+use saudade::mock::MockBackend;
+use saudade::{Font, Widget};
 
 pub fn sans_font() -> Font {
     Font::from_bytes(include_bytes!("../fonts/DejaVuSans.ttf").to_vec())
@@ -79,7 +79,7 @@ fn snapshot_one(name: &str, width: i32, height: i32, scale: f32, mut widget: Box
 
     let baseline = std::fs::read(&path).unwrap_or_else(|_| {
         panic!(
-            "missing baseline {} — create it with `UPDATE_SNAPSHOTS=1 cargo test -p retrogui`",
+            "missing baseline {} — create it with `UPDATE_SNAPSHOTS=1 cargo test -p saudade`",
             path.display()
         )
     });
@@ -89,7 +89,7 @@ fn snapshot_one(name: &str, width: i32, height: i32, scale: f32, mut widget: Box
         let actual = write_actual_render(&snap, name, scale);
         panic!(
             "snapshot `{name}` @ {scale}x: size changed (baseline {bw}x{bh}, rendered {}x{}). \
-             Rendered frame written to {}. Run `UPDATE_SNAPSHOTS=1 cargo test -p retrogui` if \
+             Rendered frame written to {}. Run `UPDATE_SNAPSHOTS=1 cargo test -p saudade` if \
              this is intended.",
             snap.width(),
             snap.height(),
@@ -135,7 +135,7 @@ fn snapshot_one(name: &str, width: i32, height: i32, scale: f32, mut widget: Box
              than {MAX_CHANNEL_DELTA}/255 (largest channel delta {max_delta}, first at \
              {first_offender:?}). Rendered frame written to {} (uploaded as a CI artifact on \
              failure). If this is an intended rendering change, regenerate with \
-             `UPDATE_SNAPSHOTS=1 cargo test -p retrogui`; otherwise it is a regression. \
+             `UPDATE_SNAPSHOTS=1 cargo test -p saudade`; otherwise it is a regression. \
              Baseline: {}",
             actual.display(),
             path.display(),
@@ -147,7 +147,7 @@ fn snapshot_one(name: &str, width: i32, height: i32, scale: f32, mut widget: Box
 /// `<name>_<scale>.snap.actual.png` so the failure can be eyeballed locally and
 /// uploaded as a CI artifact (these files are git-ignored). Best-effort: a
 /// write error must not mask the assertion failure that triggered it.
-fn write_actual_render(snap: &retrogui::mock::Snapshot, name: &str, scale: f32) -> PathBuf {
+fn write_actual_render(snap: &saudade::mock::Snapshot, name: &str, scale: f32) -> PathBuf {
     let path = snapshot_path(&format!("{}_{}.snap.actual.png", name, scale_tag(scale)));
     let _ = std::fs::write(&path, snap.to_png());
     path
@@ -161,7 +161,7 @@ fn snapshot_path(file: &str) -> PathBuf {
 }
 
 /// Decode a baseline PNG into `(width, height, rgba8 bytes)`. Baselines are
-/// written by [`retrogui::mock::Snapshot::to_png`], which always emits 8-bit
+/// written by [`saudade::mock::Snapshot::to_png`], which always emits 8-bit
 /// RGBA, so we assert that format rather than handle every PNG variant.
 fn decode_rgba(bytes: &[u8], path: &Path) -> (u32, u32, Vec<u8>) {
     let decoder = png::Decoder::new(bytes);
