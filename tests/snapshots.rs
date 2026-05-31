@@ -105,13 +105,11 @@ fn label_default() {
 fn label_styled() {
     snapshot_at_all_scales("label_styled", 140, 30, || {
         Box::new(
-            Container::new(140, 30)
-                .with_background(Color::WHITE)
-                .add(
-                    Label::new(Rect::new(8, 6, 124, 22), "Big Red")
-                        .with_color(Color::RED)
-                        .with_size(16.0),
-                ),
+            Container::new(140, 30).with_background(Color::WHITE).add(
+                Label::new(Rect::new(8, 6, 124, 22), "Big Red")
+                    .with_color(Color::RED)
+                    .with_size(16.0),
+            ),
         )
     });
 }
@@ -590,7 +588,8 @@ fn list_scrolls() {
     snapshot_at_all_scales("list_scrolls", 200, 100, || {
         let mut items = Vec::new();
         for n in 1..=20 {
-            items.push(ListItem::new(format!("entry {:>2}", n)).with_icon(swatch_icon(Color::NAVY)));
+            items
+                .push(ListItem::new(format!("entry {:>2}", n)).with_icon(swatch_icon(Color::NAVY)));
         }
         let list = laid_out_list(Rect::new(8, 8, 184, 84), items);
         Box::new(
@@ -616,7 +615,10 @@ fn composite_about_box() {
                 .add(Label::new(Rect::new(16, 16, 228, 20), "Retrogui Demo").with_size(14.0))
                 .add(Label::new(Rect::new(16, 40, 228, 16), "Version 0.1.0"))
                 .add(Bevel::etched_line(16, 64, 228))
-                .add(Label::new(Rect::new(16, 76, 228, 16), "(c) Nobody in particular"))
+                .add(Label::new(
+                    Rect::new(16, 76, 228, 16),
+                    "(c) Nobody in particular",
+                ))
                 .add(Button::new(Rect::new(90, 104, 80, 24), "OK").default(true)),
         )
     });
@@ -649,11 +651,19 @@ fn tab_press_moves_focus_exactly_once() {
 
     backend.dispatch(&mut container, &tab);
     backend.dispatch(&mut container, &tab_char);
-    assert_eq!(container.focused_index(), Some(1), "first Tab press should land on B");
+    assert_eq!(
+        container.focused_index(),
+        Some(1),
+        "first Tab press should land on B"
+    );
 
     backend.dispatch(&mut container, &tab);
     backend.dispatch(&mut container, &tab_char);
-    assert_eq!(container.focused_index(), Some(2), "second Tab press should land on C");
+    assert_eq!(
+        container.focused_index(),
+        Some(2),
+        "second Tab press should land on C"
+    );
 
     // Shift+Tab cycles backward.
     let shift_tab = Event::KeyDown {
@@ -672,7 +682,11 @@ fn tab_press_moves_focus_exactly_once() {
     };
     backend.dispatch(&mut container, &shift_tab);
     backend.dispatch(&mut container, &shift_tab_char);
-    assert_eq!(container.focused_index(), Some(1), "Shift+Tab should walk back to B");
+    assert_eq!(
+        container.focused_index(),
+        Some(1),
+        "Shift+Tab should walk back to B"
+    );
 }
 
 /// Tab at an outer `Column` that has the inner `Container` as its only

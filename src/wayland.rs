@@ -24,11 +24,11 @@ use smithay_client_toolkit::seat::keyboard::{
 use smithay_client_toolkit::seat::pointer::{PointerEvent, PointerEventKind, PointerHandler};
 use smithay_client_toolkit::seat::{Capability, SeatHandler, SeatState};
 use smithay_client_toolkit::shell::WaylandSurface;
-use smithay_client_toolkit::shell::xdg::{XdgShell, XdgSurface};
 use smithay_client_toolkit::shell::xdg::popup::{Popup, PopupConfigure, PopupHandler};
 use smithay_client_toolkit::shell::xdg::window::{
     Window as XdgWindow, WindowConfigure, WindowDecorations, WindowHandler,
 };
+use smithay_client_toolkit::shell::xdg::{XdgShell, XdgSurface};
 use smithay_client_toolkit::shm::slot::{Buffer, SlotPool};
 use smithay_client_toolkit::shm::{Shm, ShmHandler};
 use smithay_client_toolkit::{
@@ -78,8 +78,7 @@ pub(crate) fn run(app: App) {
         globals.bind::<XdgWmDialogV1, _, _>(&qh, 1..=1, ()).ok();
 
     let surface = compositor.create_surface(&qh);
-    let window =
-        xdg_shell.create_window(surface, WindowDecorations::RequestServer, &qh);
+    let window = xdg_shell.create_window(surface, WindowDecorations::RequestServer, &qh);
     window.set_title(&window_cfg.title);
     window.set_app_id(format!("saudade.{}", sanitize(&window_cfg.title)));
 
@@ -228,7 +227,10 @@ impl ChildSurface {
 
 impl Drop for ChildSurface {
     fn drop(&mut self) {
-        if let ChildSurface::Dialog { dialog_v1: Some(d), .. } = self {
+        if let ChildSurface::Dialog {
+            dialog_v1: Some(d), ..
+        } = self
+        {
             d.destroy();
         }
     }
@@ -272,7 +274,10 @@ impl State {
             self.popup.as_ref(),
             Some(p) if p.configured && p.needs_redraw
         );
-        if popup_should_draw && self.draw_popup() && let Some(p) = self.popup.as_mut() {
+        if popup_should_draw
+            && self.draw_popup()
+            && let Some(p) = self.popup.as_mut()
+        {
             p.needs_redraw = false;
         }
     }
@@ -308,12 +313,10 @@ impl State {
         let buf_w = (self.surface_w.max(1) * scale as u32) as i32;
         let buf_h = (self.surface_h.max(1) * scale as u32) as i32;
         let stride = buf_w * 4;
-        let buffer = match self.pool.create_buffer(
-            buf_w,
-            buf_h,
-            stride,
-            wl_shm::Format::Argb8888,
-        ) {
+        let buffer = match self
+            .pool
+            .create_buffer(buf_w, buf_h, stride, wl_shm::Format::Argb8888)
+        {
             Ok((b, _)) => b,
             Err(_) => return,
         };
@@ -354,16 +357,16 @@ impl State {
     /// Draw the popup window. Returns true if anything was drawn.
     fn draw_popup(&mut self) -> bool {
         let scale = self.scale.max(1);
-        let Some(p) = self.popup.as_mut() else { return false };
+        let Some(p) = self.popup.as_mut() else {
+            return false;
+        };
         let buf_w = (p.surface_w.max(1) * scale as u32) as i32;
         let buf_h = (p.surface_h.max(1) * scale as u32) as i32;
         let stride = buf_w * 4;
-        let buffer = match p.pool.create_buffer(
-            buf_w,
-            buf_h,
-            stride,
-            wl_shm::Format::Argb8888,
-        ) {
+        let buffer = match p
+            .pool
+            .create_buffer(buf_w, buf_h, stride, wl_shm::Format::Argb8888)
+        {
             Ok((b, _)) => b,
             Err(_) => return false,
         };
@@ -408,10 +411,7 @@ impl State {
     /// `popup_request`. Opens, destroys, or repositions as needed.
     fn sync_popup(&mut self) {
         let request = self.root.popup_request();
-        let existing = self
-            .popup
-            .as_ref()
-            .map(|p| (p.anchor, p.surface.kind()));
+        let existing = self.popup.as_ref().map(|p| (p.anchor, p.surface.kind()));
         match (request, existing) {
             (None, Some(_)) => {
                 self.popup = None;
@@ -445,10 +445,8 @@ impl State {
                 // popup's top-left in the parent surface. Gravity goes
                 // BottomRight so the popup extends down/right from the
                 // anchor — same shape as a classic dropdown menu.
-                let positioner: XdgPositioner = self
-                    .xdg_shell
-                    .xdg_wm_base()
-                    .create_positioner(&self.qh, ());
+                let positioner: XdgPositioner =
+                    self.xdg_shell.xdg_wm_base().create_positioner(&self.qh, ());
                 positioner.set_size(anchor.w.max(1), anchor.h.max(1));
                 positioner.set_anchor_rect(anchor.x, anchor.y, 1, 1);
                 positioner.set_anchor(Anchor::BottomLeft);
@@ -498,7 +496,10 @@ impl State {
                 });
 
                 dialog.commit();
-                ChildSurface::Dialog { window: dialog, dialog_v1 }
+                ChildSurface::Dialog {
+                    window: dialog,
+                    dialog_v1,
+                }
             }
         };
 
@@ -910,20 +911,20 @@ impl PointerHandler for State {
                     self.dispatch(Event::PointerLeave);
                 }
                 PointerEventKind::Press { button, .. } => {
-                    let Some(b) = map_button(button) else { continue };
+                    let Some(b) = map_button(button) else {
+                        continue;
+                    };
                     self.dispatch(Event::PointerDown { pos, button: b });
-                    if in_popup
-                        && let Some(p) = self.popup.as_mut()
-                    {
+                    if in_popup && let Some(p) = self.popup.as_mut() {
                         p.needs_redraw = true;
                     }
                 }
                 PointerEventKind::Release { button, .. } => {
-                    let Some(b) = map_button(button) else { continue };
+                    let Some(b) = map_button(button) else {
+                        continue;
+                    };
                     self.dispatch(Event::PointerUp { pos, button: b });
-                    if in_popup
-                        && let Some(p) = self.popup.as_mut()
-                    {
+                    if in_popup && let Some(p) = self.popup.as_mut() {
                         p.needs_redraw = true;
                     }
                 }
@@ -963,7 +964,13 @@ delegate_registry!(State);
 
 fn sanitize(s: &str) -> String {
     s.chars()
-        .map(|c| if c.is_ascii_alphanumeric() { c.to_ascii_lowercase() } else { '-' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() {
+                c.to_ascii_lowercase()
+            } else {
+                '-'
+            }
+        })
         .collect()
 }
 

@@ -483,10 +483,8 @@ impl Widget for TextInput {
                 let before: String = self.chars[..s].iter().collect();
                 let middle: String = self.chars[s..e].iter().collect();
                 let after: String = self.chars[e..].iter().collect();
-                let middle_x =
-                    text_x0 + self.cumulative_widths.get(s).copied().unwrap_or(0);
-                let after_x =
-                    text_x0 + self.cumulative_widths.get(e).copied().unwrap_or(0);
+                let middle_x = text_x0 + self.cumulative_widths.get(s).copied().unwrap_or(0);
+                let after_x = text_x0 + self.cumulative_widths.get(e).copied().unwrap_or(0);
                 painter.text(text_x0, text_y, &before, font_size, theme.text);
                 painter.text(middle_x, text_y, &middle, font_size, sel_text);
                 painter.text(after_x, text_y, &after, font_size, theme.text);
@@ -541,24 +539,22 @@ impl Widget for TextInput {
                 self.reset_blink();
                 ctx.request_paint();
             }
-            Event::PointerMove { pos }
-                if self.drag_active => {
-                    let local_x = pos.x - self.rect.x;
-                    self.cursor = self.char_index_at_x(local_x);
-                    self.reset_blink();
-                    ctx.request_paint();
-                }
+            Event::PointerMove { pos } if self.drag_active => {
+                let local_x = pos.x - self.rect.x;
+                self.cursor = self.char_index_at_x(local_x);
+                self.reset_blink();
+                ctx.request_paint();
+            }
             Event::PointerUp {
                 button: MouseButton::Left,
                 ..
-            }
-                if self.drag_active => {
-                    self.drag_active = false;
-                    if self.selection_anchor == Some(self.cursor) {
-                        self.selection_anchor = None;
-                    }
-                    ctx.request_paint();
+            } if self.drag_active => {
+                self.drag_active = false;
+                if self.selection_anchor == Some(self.cursor) {
+                    self.selection_anchor = None;
                 }
+                ctx.request_paint();
+            }
             Event::Char { ch, modifiers } if !modifiers.has_command() => {
                 if !self.focused {
                     return;
@@ -574,7 +570,9 @@ impl Widget for TextInput {
                 }
             }
             Event::KeyDown { key, modifiers } if self.focused => {
-                if modifiers.control && let Key::Char(c) = key {
+                if modifiers.control
+                    && let Key::Char(c) = key
+                {
                     let consumed = match c.to_ascii_lowercase() {
                         'c' => {
                             self.copy();
