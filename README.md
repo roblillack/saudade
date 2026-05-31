@@ -693,6 +693,13 @@ click-outside dismissals both route back to it — exactly like the menu bar.
 `Dropdown::open()` drops the list programmatically (handy for tests and custom
 keybindings).
 
+An open dropdown also owns the keyboard: `Container` / `Column` suppress the
+accelerator pass while the focused child is capturing, so a sibling **default
+`Button`** doesn't steal Enter — the keystroke commits the highlighted row
+instead. Once the list closes, Enter fires the default button again. The flight
+booker relies on this: its Book button is the default action *and* lives next to
+the flight-type dropdown.
+
 ### Disabled controls
 
 Every interactive widget — `Button`, `Checkbox`, `TextInput`, `TextEditor`,

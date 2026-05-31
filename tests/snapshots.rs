@@ -1054,6 +1054,66 @@ fn dropdown_disabled_is_inert() {
     assert!(!dd.is_open(), "a disabled dropdown does not open on click");
 }
 
+/// An open dropdown owns the keyboard even beside a default button: Enter
+/// commits the highlighted row instead of firing the default action. Once the
+/// list closes, Enter books as usual. Pins the container's accelerator
+/// suppression for a focused, capturing child.
+#[test]
+fn open_dropdown_blocks_default_button_enter() {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    use saudade::mock::MockBackend;
+
+    let booked = Rc::new(RefCell::new(0u32));
+    let changes: Rc<RefCell<Vec<usize>>> = Rc::new(RefCell::new(Vec::new()));
+
+    let mut dd = Dropdown::new(Rect::new(10, 10, 120, 24)).with_items(["a", "b", "c"]);
+    dd.set_on_change({
+        let changes = changes.clone();
+        move |_cx, idx| changes.borrow_mut().push(idx)
+    });
+    let book = Button::new(Rect::new(10, 50, 80, 24), "Book")
+        .default(true)
+        .on_click({
+            let booked = booked.clone();
+            move |_cx| *booked.borrow_mut() += 1
+        });
+
+    let mut container = Container::new(160, 90).add(dd).add(book);
+    container.layout(Rect::new(0, 0, 160, 90));
+    container.focus_first(); // the dropdown is the first focusable child
+
+    let backend = MockBackend::new(160, 90).with_scale(1.0);
+    let down = |x, y| Event::PointerDown {
+        pos: saudade::Point::new(x, y),
+        button: saudade::MouseButton::Left,
+    };
+    let key = |k| Event::KeyDown {
+        key: Key::Named(k),
+        modifiers: Modifiers::default(),
+    };
+
+    // Click the field to open, move the highlight to "b", then Enter.
+    backend.dispatch(&mut container, &down(20, 20));
+    backend.dispatch(&mut container, &key(NamedKey::Down));
+    backend.dispatch(&mut container, &key(NamedKey::Enter));
+    assert_eq!(
+        *changes.borrow(),
+        vec![1],
+        "Enter commits the open dropdown"
+    );
+    assert_eq!(
+        *booked.borrow(),
+        0,
+        "the default button must not fire while the list is open"
+    );
+
+    // List closed now → Enter fires the default Book button.
+    backend.dispatch(&mut container, &key(NamedKey::Enter));
+    assert_eq!(*booked.borrow(), 1, "Enter books once the list is closed");
+}
+
 /// Sanity-check that the [`MockBackend`] API itself returns a
 /// non-empty image. Distinguishes framework breakage from genuine
 /// widget regressions.

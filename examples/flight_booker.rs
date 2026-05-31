@@ -51,31 +51,36 @@ fn main() {
     ));
     let dialog = Rc::new(RefCell::new(Dialog::new()));
 
-    // Book button — *not* a default button, so its Enter accelerator never
-    // competes with the dropdown's "Enter commits the highlighted row" while
-    // the list is open. Clicking it (only possible while enabled) confirms.
+    // Book button — the dialog's default action, so Enter books the flight.
+    // While the dropdown's list is open it owns the keyboard (the container
+    // suppresses the default-button accelerator), so Enter there commits the
+    // highlighted row instead; once the list closes Enter books again. A
+    // disabled Book button also gives up the accelerator, so Enter does
+    // nothing while the dates are invalid.
     let book = Rc::new(RefCell::new(
-        Button::new(Rect::new(16, 124, 268, 26), "Book").on_click({
-            let flight_type = flight_type.clone();
-            let start = start.clone();
-            let back = back.clone();
-            let dialog = dialog.clone();
-            move |cx| {
-                let is_return = flight_type.borrow().selected_index() == Some(RETURN);
-                let start_date = start.borrow().text();
-                let message = if is_return {
-                    format!(
-                        "You have booked a return flight\nleaving {}\nand returning {}.",
-                        start_date,
-                        back.borrow().text(),
-                    )
-                } else {
-                    format!("You have booked a one-way flight\non {}.", start_date)
-                };
-                dialog.borrow_mut().show_info("Flight booked", message);
-                cx.request_paint();
-            }
-        }),
+        Button::new(Rect::new(16, 124, 268, 26), "Book")
+            .default(true)
+            .on_click({
+                let flight_type = flight_type.clone();
+                let start = start.clone();
+                let back = back.clone();
+                let dialog = dialog.clone();
+                move |cx| {
+                    let is_return = flight_type.borrow().selected_index() == Some(RETURN);
+                    let start_date = start.borrow().text();
+                    let message = if is_return {
+                        format!(
+                            "You have booked a return flight\nleaving {}\nand returning {}.",
+                            start_date,
+                            back.borrow().text(),
+                        )
+                    } else {
+                        format!("You have booked a one-way flight\non {}.", start_date)
+                    };
+                    dialog.borrow_mut().show_info("Flight booked", message);
+                    cx.request_paint();
+                }
+            }),
     ));
 
     // Re-validate whenever the flight type or either date changes.
