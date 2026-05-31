@@ -85,7 +85,11 @@ impl Widget for Checkbox {
         // white window background without leaning on a sunken bevel.
         painter.fill_rect(
             box_rect.inset(1),
-            if pressed_visual { theme.face } else { theme.background },
+            if pressed_visual {
+                theme.face
+            } else {
+                theme.background
+            },
         );
         painter.stroke_rect(box_rect, theme.border);
 
@@ -117,39 +121,35 @@ impl Widget for Checkbox {
             Event::PointerDown {
                 pos,
                 button: MouseButton::Left,
+            } if self.rect.contains(*pos) => {
+                self.pressed = true;
+                self.armed = true;
+                ctx.request_focus();
+                ctx.request_paint();
             }
-                if self.rect.contains(*pos) => {
-                    self.pressed = true;
-                    self.armed = true;
-                    ctx.request_focus();
+            Event::PointerMove { pos } if self.pressed => {
+                let armed_now = self.rect.contains(*pos);
+                if armed_now != self.armed {
+                    self.armed = armed_now;
                     ctx.request_paint();
                 }
-            Event::PointerMove { pos }
-                if self.pressed => {
-                    let armed_now = self.rect.contains(*pos);
-                    if armed_now != self.armed {
-                        self.armed = armed_now;
-                        ctx.request_paint();
-                    }
-                }
+            }
             Event::PointerUp {
                 pos,
                 button: MouseButton::Left,
+            } if self.pressed => {
+                let fire = self.armed && self.rect.contains(*pos);
+                self.pressed = false;
+                self.armed = false;
+                ctx.request_paint();
+                if fire {
+                    self.toggle(ctx);
+                }
             }
-                if self.pressed => {
-                    let fire = self.armed && self.rect.contains(*pos);
-                    self.pressed = false;
-                    self.armed = false;
-                    ctx.request_paint();
-                    if fire {
-                        self.toggle(ctx);
-                    }
-                }
-            Event::PointerLeave
-                if self.armed => {
-                    self.armed = false;
-                    ctx.request_paint();
-                }
+            Event::PointerLeave if self.armed => {
+                self.armed = false;
+                ctx.request_paint();
+            }
             Event::KeyDown { key, modifiers }
                 if self.focused
                     && !modifiers.has_command()

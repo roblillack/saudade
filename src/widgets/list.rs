@@ -165,7 +165,12 @@ impl List {
         } else {
             0
         };
-        Rect::new(self.rect.x, self.rect.y, (self.rect.w - sb_w).max(0), self.rect.h)
+        Rect::new(
+            self.rect.x,
+            self.rect.y,
+            (self.rect.w - sb_w).max(0),
+            self.rect.h,
+        )
     }
 
     fn visible_rows(&self) -> i32 {
@@ -212,7 +217,11 @@ impl List {
         }
         let row_offset = (local_y / ROW_HEIGHT) as usize;
         let row = self.scroll_top() + row_offset;
-        if row < self.items.len() { Some(row) } else { None }
+        if row < self.items.len() {
+            Some(row)
+        } else {
+            None
+        }
     }
 
     fn select_and_show(&mut self, idx: usize) {
@@ -249,7 +258,9 @@ impl List {
         let threshold = Duration::from_millis(DOUBLE_CLICK_MS);
         let double = self
             .last_click
-            .map(|(prev_idx, prev_time)| prev_idx == idx && now.duration_since(prev_time) <= threshold)
+            .map(|(prev_idx, prev_time)| {
+                prev_idx == idx && now.duration_since(prev_time) <= threshold
+            })
             .unwrap_or(false);
         self.select_and_show(idx);
         if double {
@@ -297,10 +308,7 @@ impl Widget for List {
             };
             let text_color = if selected { text_color } else { theme.text };
             if selected {
-                painter.fill_rect(
-                    Rect::new(text_x, y, row_w.max(0), ROW_HEIGHT),
-                    bg_color,
-                );
+                painter.fill_rect(Rect::new(text_x, y, row_w.max(0), ROW_HEIGHT), bg_color);
             }
 
             let item = &self.items[row];

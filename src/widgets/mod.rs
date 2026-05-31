@@ -40,11 +40,10 @@ pub(crate) fn tab_action(event: &Event) -> Option<TabAction> {
         } if !modifiers.control && !modifiers.alt && !modifiers.logo => {
             Some(TabAction::Cycle(if modifiers.shift { -1 } else { 1 }))
         }
-        Event::Char { ch: '\t', modifiers }
-            if !modifiers.control && !modifiers.alt && !modifiers.logo =>
-        {
-            Some(TabAction::Swallow)
-        }
+        Event::Char {
+            ch: '\t',
+            modifiers,
+        } if !modifiers.control && !modifiers.alt && !modifiers.logo => Some(TabAction::Swallow),
         _ => None,
     }
 }
@@ -60,6 +59,6 @@ pub use label::Label;
 pub use list::{List, ListIcon, ListItem};
 pub use menu::{Menu, MenuBar, MenuItem};
 pub use row::Row;
-pub use scrollbar::{Orientation, ScrollBar, SCROLLBAR_THICKNESS};
+pub use scrollbar::{Orientation, SCROLLBAR_THICKNESS, ScrollBar};
 pub use text_editor::TextEditor;
 pub use text_input::TextInput;

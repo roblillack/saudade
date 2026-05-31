@@ -206,8 +206,7 @@ impl Snapshot {
     pub fn to_png(&self) -> Vec<u8> {
         let mut buf = Vec::new();
         {
-            let mut encoder =
-                png::Encoder::new(&mut buf, self.width as u32, self.height as u32);
+            let mut encoder = png::Encoder::new(&mut buf, self.width as u32, self.height as u32);
             encoder.set_color(png::ColorType::Rgba);
             encoder.set_depth(png::BitDepth::Eight);
             let mut writer = encoder.write_header().expect("saudade::mock: png header");

@@ -179,7 +179,10 @@ impl MenuBar {
         let mut x = self.rect.x;
         for menu in &self.menus {
             let parsed = parse_label(&menu.label);
-            let w = painter.measure_text(&parsed.display, theme.menu_font_size).w + BAR_PADDING * 2;
+            let w = painter
+                .measure_text(&parsed.display, theme.menu_font_size)
+                .w
+                + BAR_PADDING * 2;
             self.cache.label_rects.push((x, w));
             x += w;
         }
@@ -198,7 +201,9 @@ impl MenuBar {
         for item in &menu.items {
             if let MenuItem::Action { label, .. } = item {
                 let parsed = parse_label(label);
-                let w = painter.measure_text(&parsed.display, theme.menu_font_size).w;
+                let w = painter
+                    .measure_text(&parsed.display, theme.menu_font_size)
+                    .w;
                 if w > max_label {
                     max_label = w;
                 }
@@ -317,9 +322,7 @@ impl Widget for MenuBar {
 
     fn paint(&mut self, painter: &mut Painter, theme: &Theme) {
         self.rebuild_label_rects(painter, theme);
-        self.cache.popup = self
-            .open
-            .map(|idx| self.compute_popup(idx, painter, theme));
+        self.cache.popup = self.open.map(|idx| self.compute_popup(idx, painter, theme));
 
         // Bar background + 1-px shadow line along the bottom. The bar is
         // white to match Win 3.1's program-manager chrome — only the labels
@@ -380,21 +383,11 @@ impl Widget for MenuBar {
         // L-shape drop shadow drawn first so the popup overlays it on the
         // top/left edges.
         painter.fill_rect(
-            Rect::new(
-                popup.x + SHADOW_SIZE,
-                popup.bottom(),
-                popup.w,
-                SHADOW_SIZE,
-            ),
+            Rect::new(popup.x + SHADOW_SIZE, popup.bottom(), popup.w, SHADOW_SIZE),
             SHADOW_COLOR,
         );
         painter.fill_rect(
-            Rect::new(
-                popup.right(),
-                popup.y + SHADOW_SIZE,
-                SHADOW_SIZE,
-                popup.h,
-            ),
+            Rect::new(popup.right(), popup.y + SHADOW_SIZE, SHADOW_SIZE, popup.h),
             SHADOW_COLOR,
         );
 

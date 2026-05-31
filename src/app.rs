@@ -541,12 +541,18 @@ impl AppHandler {
     /// are managed top-levels so the WM moves them on its own — we only
     /// reposition popup-kind children.
     fn reposition_popup(&mut self) {
-        let Some(popup) = self.popup.as_ref() else { return };
+        let Some(popup) = self.popup.as_ref() else {
+            return;
+        };
         if popup.kind != PopupKind::Popup {
             return;
         }
-        let Some(main_win) = self.main_win.as_ref() else { return };
-        let Ok(inner) = main_win.inner_position() else { return };
+        let Some(main_win) = self.main_win.as_ref() else {
+            return;
+        };
+        let Ok(inner) = main_win.inner_position() else {
+            return;
+        };
         let px = inner.x + ((popup.anchor.x as f32) * self.scale).round() as i32;
         let py = inner.y + ((popup.anchor.y as f32) * self.scale).round() as i32;
         popup.win.set_outer_position(PhysicalPosition::new(px, py));
@@ -697,10 +703,7 @@ fn popup_position_to_widget(pos: PhysicalPosition<f64>, popup: &PopupWindow) -> 
     let s = popup.scale.max(0.01) as f64;
     let lx = pos.x / s;
     let ly = pos.y / s;
-    Point::new(
-        (lx as i32) + popup.anchor.x,
-        (ly as i32) + popup.anchor.y,
-    )
+    Point::new((lx as i32) + popup.anchor.x, (ly as i32) + popup.anchor.y)
 }
 
 fn map_key(key: &WKey) -> Option<Key> {
