@@ -21,6 +21,7 @@ pub struct Checkbox {
     pressed: bool,
     armed: bool,
     focused: bool,
+    enabled: bool,
     on_toggle: Option<ToggleHandler>,
 }
 
@@ -33,6 +34,7 @@ impl Checkbox {
             pressed: false,
             armed: false,
             focused: false,
+            enabled: true,
             on_toggle: None,
         }
     }
@@ -40,6 +42,25 @@ impl Checkbox {
     pub fn checked(mut self, checked: bool) -> Self {
         self.checked = checked;
         self
+    }
+
+    pub fn with_enabled(mut self, enabled: bool) -> Self {
+        self.set_enabled(enabled);
+        self
+    }
+
+    pub fn is_enabled(&self) -> bool {
+        self.enabled
+    }
+
+    /// Enable or disable the checkbox. A disabled checkbox paints greyed, can't
+    /// take focus, and ignores clicks and Space.
+    pub fn set_enabled(&mut self, enabled: bool) {
+        self.enabled = enabled;
+        if !enabled {
+            self.pressed = false;
+            self.armed = false;
+        }
     }
 
     pub fn on_toggle<F>(mut self, handler: F) -> Self
@@ -93,8 +114,13 @@ impl Widget for Checkbox {
         );
         painter.stroke_rect(box_rect, theme.border);
 
+        let fg = if self.enabled {
+            theme.text
+        } else {
+            theme.disabled_text
+        };
         if self.checked {
-            draw_check(painter, box_rect, theme.text);
+            draw_check(painter, box_rect, fg);
         }
 
         // Label sits to the right of the box, vertically centered with the
@@ -103,9 +129,9 @@ impl Widget for Checkbox {
         let measured = painter.measure_text(&self.label, text_size);
         let text_x = box_rect.right() + LABEL_GAP;
         let text_y = self.rect.y + ((self.rect.h - measured.h).max(0)) / 2;
-        painter.text(text_x, text_y, &self.label, text_size, theme.text);
+        painter.text(text_x, text_y, &self.label, text_size, fg);
 
-        if self.focused {
+        if self.focused && self.enabled {
             let focus_rect = Rect::new(
                 text_x - FOCUS_PAD_X,
                 text_y - FOCUS_PAD_Y,
@@ -117,6 +143,9 @@ impl Widget for Checkbox {
     }
 
     fn event(&mut self, event: &Event, ctx: &mut EventCtx) {
+        if !self.enabled {
+            return;
+        }
         match event {
             Event::PointerDown {
                 pos,
@@ -167,7 +196,7 @@ impl Widget for Checkbox {
     }
 
     fn focusable(&self) -> bool {
-        true
+        self.enabled
     }
 
     fn set_focused(&mut self, focused: bool) {

@@ -15,6 +15,7 @@ pub struct Button {
     pressed: bool,
     armed: bool,
     focused: bool,
+    enabled: bool,
     on_click: Option<ClickHandler>,
 }
 
@@ -27,6 +28,7 @@ impl Button {
             pressed: false,
             armed: false,
             focused: false,
+            enabled: true,
             on_click: None,
         }
     }
@@ -34,6 +36,26 @@ impl Button {
     pub fn default(mut self, default: bool) -> Self {
         self.default = default;
         self
+    }
+
+    pub fn with_enabled(mut self, enabled: bool) -> Self {
+        self.set_enabled(enabled);
+        self
+    }
+
+    pub fn is_enabled(&self) -> bool {
+        self.enabled
+    }
+
+    /// Enable or disable the button. A disabled button paints its label
+    /// engraved (greyed), can't take focus, and ignores clicks and Enter / Space
+    /// — including the default-button accelerator.
+    pub fn set_enabled(&mut self, enabled: bool) {
+        self.enabled = enabled;
+        if !enabled {
+            self.pressed = false;
+            self.armed = false;
+        }
     }
 
     pub fn on_click<F>(mut self, handler: F) -> Self
@@ -66,12 +88,27 @@ impl Widget for Button {
             label_rect.x += 1;
             label_rect.y += 1;
         }
-        painter.text_centered(label_rect, &self.label, theme.font_size, theme.text);
+        if self.enabled {
+            painter.text_centered(label_rect, &self.label, theme.font_size, theme.text);
+        } else {
+            // Engraved disabled label: a white copy nudged down-right, with the
+            // grey text laid over it — the classic Win 3.1 greyed look.
+            let mut emboss = label_rect;
+            emboss.x += 1;
+            emboss.y += 1;
+            painter.text_centered(emboss, &self.label, theme.font_size, theme.highlight);
+            painter.text_centered(
+                label_rect,
+                &self.label,
+                theme.font_size,
+                theme.disabled_text,
+            );
+        }
 
         // Dotted focus rectangle inside the bevel — the same chrome Win 3.1
         // drew on its focused buttons. Keep it inset enough that it doesn't
         // collide with the raised bevel highlights.
-        if self.focused {
+        if self.focused && self.enabled {
             let inset = if self.default { 4 } else { 3 };
             let r = self.rect.inset(inset);
             draw_focus_rect(painter, r, theme.text);
@@ -79,6 +116,9 @@ impl Widget for Button {
     }
 
     fn event(&mut self, event: &Event, ctx: &mut EventCtx) {
+        if !self.enabled {
+            return;
+        }
         match event {
             Event::PointerDown {
                 pos,
@@ -159,7 +199,7 @@ impl Widget for Button {
     }
 
     fn focusable(&self) -> bool {
-        true
+        self.enabled
     }
 
     fn set_focused(&mut self, focused: bool) {
@@ -174,9 +214,10 @@ impl Widget for Button {
     /// container — pressing Enter while any non-button widget holds focus
     /// fires the default action. We piggyback on the existing accelerator
     /// routing so the parent container forwards keyboard events here
-    /// even when the focus is parked on a sibling.
+    /// even when the focus is parked on a sibling. A disabled default
+    /// button gives up the accelerator so Enter falls through.
     fn accepts_accelerators(&self) -> bool {
-        self.default
+        self.default && self.enabled
     }
 }
 

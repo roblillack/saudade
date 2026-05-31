@@ -27,10 +27,11 @@ Three reference apps live under `examples/`. Run any of them with
 | `picker`      | Pick-an-item dialog: `List` + buttons + `Dialog`, with Tab/Shift+Tab focus cycling. |
 | `counter`     | [7GUIs](https://eugenkiss.github.io/7guis/) task 1 — a `Label` field and a `Button`. |
 | `temperature` | 7GUIs task 2 — two `TextInput`s converting Celsius ↔ Fahrenheit live. |
+| `flight_booker` | 7GUIs task 3 — a `Dropdown` picks the flight type and reactively enables / disables the return-date field and the Book `Button`. |
 | `timer`       | 7GUIs task 4 — a `ProgressBar` gauge, a duration `Slider`, and a reset `Button`. |
 
 ```console
-$ cargo run --example notepad        # or: filer, picker, counter, temperature, timer
+$ cargo run --example notepad        # or: filer, picker, counter, temperature, flight_booker, timer
 ```
 
 saudade was extracted from *retrofetch*, whose about-box dialog
@@ -644,6 +645,66 @@ contribute work. The scrollbar's canonical position is its own
 the widget; the cursor only renders while focused; vertical scroll
 follows the cursor automatically.
 
+
+### `Dropdown`
+
+A Win 3.1 drop-down list box (combobox): a sunken field showing the current
+selection with a raised drop-arrow on the right. Clicking it drops a popup list
+of the items — hosted in its own borderless top-level window, the same
+machinery `MenuBar` uses — so the list can extend past the main window's bottom
+edge.
+
+```rust
+let flight_type = Dropdown::new(Rect::new(16, 16, 200, 24))
+    .with_items(["one-way flight", "return flight"])
+    .with_selected(0)
+    .on_change(|cx, index| {
+        // fires whenever the selection changes
+        cx.request_paint();
+    });
+
+let picked: Option<usize> = flight_type.selected_index();
+let label: Option<&str> = flight_type.selected_text();
+```
+
+`with_items` accepts anything that iterates into strings (`["a", "b"]` or a
+`Vec<String>`); the first item becomes the initial selection. Use
+`set_on_change` to install the handler after construction when the dropdown is
+held behind an `Rc<RefCell<…>>` and needs to talk to widgets built later — the
+pattern the flight booker uses. `set_selected` updates the value *without*
+firing `on_change`, mirroring the other widgets' setters.
+
+Interaction:
+
+| Input                     | Effect                                          |
+|---------------------------|-------------------------------------------------|
+| click field               | open / close the list                           |
+| click a row               | select it and close                             |
+| click outside / Esc       | dismiss without changing the selection          |
+| ↑ / ↓ (closed)            | step the selection in place                     |
+| Space (closed)            | open the list                                   |
+| ↑ / ↓ (open)              | move the highlight (clamped, no wrap)           |
+| Home / End (open)         | highlight the first / last row                  |
+| Enter / Space (open)      | commit the highlight and close                  |
+
+The dropdown is focusable and draws a dotted focus rectangle inside the field.
+While the list is open it captures the pointer, so popup clicks and
+click-outside dismissals both route back to it — exactly like the menu bar.
+`Dropdown::open()` drops the list programmatically (handy for tests and custom
+keybindings).
+
+### Disabled controls
+
+Every interactive widget — `Button`, `Checkbox`, `TextInput`, `TextEditor`,
+`Slider`, `List`, and `Dropdown` — carries an enabled flag. Construct with
+`.with_enabled(false)` or flip it at runtime with `set_enabled(bool)` (read it
+back with `is_enabled()`). A disabled control paints greyed (an engraved label
+on a button, greyed text elsewhere), refuses keyboard focus, and ignores every
+input event — a disabled default `Button` even gives up its Enter accelerator.
+The flight booker uses this to grey out the return-date field for one-way
+flights and to block the Book button until the dates are valid; it surfaces an
+*ill-formatted* date not by recoloring the field but with a small red `Label`
+beside it.
 
 ## The `Widget` trait
 
