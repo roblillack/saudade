@@ -117,6 +117,11 @@ pub struct EventCtx {
     /// step (accelerator pass, focused dispatch, …) and bail out so the
     /// event doesn't trigger a second action elsewhere in the tree.
     pub(crate) consumed: bool,
+    /// Set by content inside a modal dialog to ask its host to close. The
+    /// hosting [`Modal`](crate::widgets::Modal) observes this after forwarding
+    /// an event to its content, runs its `on_dismiss` handler, and tears the
+    /// dialog down — the same protocol a message box's OK button uses.
+    pub(crate) dismiss_requested: bool,
 }
 
 impl EventCtx {
@@ -127,6 +132,7 @@ impl EventCtx {
             focus_requested: false,
             focus_released: false,
             consumed: false,
+            dismiss_requested: false,
         }
     }
 
@@ -189,5 +195,20 @@ impl EventCtx {
     pub fn release_focus(&mut self) {
         self.focus_released = true;
         self.focus_requested = false;
+    }
+
+    /// Content inside a modal dialog calls this to ask the hosting
+    /// [`Modal`](crate::widgets::Modal) to close — e.g. from an OK / Close
+    /// button's `on_click`. The modal runs its `on_dismiss` handler and
+    /// dismisses after the current event finishes dispatching.
+    pub fn request_dismiss(&mut self) {
+        self.dismiss_requested = true;
+    }
+
+    /// `true` if a widget called [`Self::request_dismiss`] during this
+    /// dispatch. Read by [`Modal`](crate::widgets::Modal) after forwarding an
+    /// event to its content.
+    pub fn is_dismiss_requested(&self) -> bool {
+        self.dismiss_requested
     }
 }
