@@ -30,7 +30,7 @@ Reference apps live under `examples/`. Run any of them with
 | `flight_booker` | 7GUIs task 3 — a `Dropdown` picks the flight type and reactively enables / disables the return-date field and the Book `Button`. |
 | `timer`       | 7GUIs task 4 — a `ProgressBar` gauge, a duration `Slider`, and a reset `Button`. |
 | `crud`        | 7GUIs task 5 — a `List` as a live, prefix-filtered database view with Create / Update / Delete `Button`s that enable themselves reactively. |
-| `circle_drawer` | 7GUIs task 6 — a custom canvas (no circle primitive: midpoint outlines, span-filled disks) with hover selection, a right-click menu, a `Slider` diameter panel, and snapshot undo/redo. |
+| `circle_drawer` | 7GUIs task 6 — a custom canvas (no circle primitive: midpoint outlines, span-filled disks) with hover selection, a right-click menu, a real modal dialog (`Modal`) hosting the diameter `Slider`, and snapshot undo/redo. |
 | `cells`       | 7GUIs task 7 — a scrollable A–Z / 0–99 spreadsheet `Grid` (built on `ScrollBar` + `TextInput`) with a formula engine: cell refs, `+ - * /`, ranges, `SUM`/`AVG`/…, reactive recompute and cycle detection. |
 
 ```console
@@ -104,7 +104,7 @@ to an object-oriented UI framework.
 | painter   | `Painter` — drawing primitives + Win 3.1 chrome helpers         |
 | font      | `Font` — system font lookup + glyph rasterization               |
 | widget    | `Widget` trait (paint / event / focus / overlay hooks)          |
-| widgets   | `Container`, `Column`, `Row`, `Label`, `Button`, `Checkbox`, `Bevel`, `Image`, `MenuBar`, `Menu`, `MenuItem`, `ScrollBar`, `Slider`, `ProgressBar`, `List`, `Dialog`, `TextInput`, `TextEditor` |
+| widgets   | `Container`, `Column`, `Row`, `Label`, `Button`, `Checkbox`, `Bevel`, `Image`, `MenuBar`, `Menu`, `MenuItem`, `ScrollBar`, `Slider`, `ProgressBar`, `List`, `Modal`, `Dialog`, `TextInput`, `TextEditor` |
 | app       | `App`, `WindowConfig` — runtime entry point                     |
 
 Everything user-facing is re-exported from the crate root; you generally

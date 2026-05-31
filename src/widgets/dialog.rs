@@ -1,15 +1,17 @@
 use crate::event::{Event, EventCtx, Key, MouseButton, NamedKey};
-use crate::geometry::{Color, Point, Rect, Size};
+use crate::geometry::{Color, Rect, Size};
 use crate::painter::Painter;
 use crate::theme::Theme;
-use crate::widget::{PopupKind, PopupRequest, Widget};
+use crate::widget::{PopupRequest, Widget};
+use crate::widgets::modal::Modal;
 
 const BUTTON_W: i32 = 70;
 const BUTTON_H: i32 = 22;
 const ICON_SIZE: i32 = 32;
 const PADDING: i32 = 16;
-
-type DismissHandler = Box<dyn FnMut(&mut EventCtx)>;
+/// Default message-box size. 18 logical px shorter than a square so the
+/// client-drawn title bar's old space stays reclaimed.
+const DEFAULT_SIZE: Size = Size::new(340, 132);
 
 /// What icon — if any — to show on the left of the message.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -20,61 +22,32 @@ pub enum DialogIcon {
     Error,
 }
 
-/// A modal warning / info dialog.
+/// A modal message / alert box.
 ///
-/// `Dialog` lives in the widget tree as a normally-invisible overlay. The
-/// application owns it (e.g., via `Rc<RefCell<Dialog>>`) and calls
-/// `show_warning` / `show_info` to display it; a single OK button (or
-/// Enter / Escape) dismisses it.
+/// `Dialog` is the ready-made message box built on the general-purpose
+/// [`Modal`] facility: it hosts a body that draws an icon, a wrapped message,
+/// and a single OK button. The application owns it (e.g., via
+/// `Rc<RefCell<Dialog>>`) as an overlay and calls `show_warning` / `show_info`
+/// / `show_error` to display it; OK, Enter, Space, Escape, or the window's
+/// close button all dismiss it.
 ///
-/// When the dialog opens it reports a [`PopupRequest`] of kind
-/// [`PopupKind::Dialog`], so the runtime opens a real top-level window
-/// (transient to the main window, with server-side decorations) and the
-/// dialog paints its body into that window's surface — `paint_overlay`
-/// only draws while the popup-pass painter is active. The dialog's title
-/// rides along on the request and ends up as the OS window title, so we
-/// do **not** draw a client-side title bar. Inside the widget tree the
-/// dialog still asserts `captures_pointer` and `accepts_accelerators`,
-/// so any events that somehow reach the main window are swallowed
-/// instead of leaking through to the widgets below.
+/// As with any [`Modal`], the dialog opens in a real top-level window
+/// (transient to the main window, with server-side decorations), so no
+/// client-side title bar is drawn — the title rides along on the
+/// [`PopupRequest`] and becomes the OS window title.
 ///
-/// The window is centered over the parent at show-time. The position is
-/// then frozen for the lifetime of the open state — a parent resize
-/// while the dialog is up does **not** move the dialog.
+/// To run code when the dialog closes (the classic "OK closes the window"),
+/// install an [`on_dismiss`](Dialog::on_dismiss) handler.
 pub struct Dialog {
+    modal: Modal,
     size: Size,
-    /// Parent bounds last passed to `layout`. Used at show-time to pick
-    /// the initial centered position; ignored afterwards so a parent
-    /// resize doesn't yank the dialog around.
-    parent_bounds: Rect,
-    open: bool,
-    title: String,
-    message: String,
-    icon: DialogIcon,
-    button_pressed: bool,
-    button_armed: bool,
-    on_dismiss: Option<DismissHandler>,
-    /// Top-left corner of the dialog in the parent's widget-tree
-    /// coordinate space, captured at `show()` time. `None` while the
-    /// dialog is closed.
-    frozen_origin: Option<Point>,
 }
 
 impl Dialog {
     pub fn new() -> Self {
         Self {
-            // 18 logical px shorter than the original to reclaim the
-            // space the client-drawn title bar used to occupy.
-            size: Size::new(340, 132),
-            parent_bounds: Rect::new(0, 0, 0, 0),
-            open: false,
-            title: String::new(),
-            message: String::new(),
-            icon: DialogIcon::None,
-            button_pressed: false,
-            button_armed: false,
-            on_dismiss: None,
-            frozen_origin: None,
+            modal: Modal::new(),
+            size: DEFAULT_SIZE,
         }
     }
 
@@ -84,31 +57,16 @@ impl Dialog {
     }
 
     pub fn on_dismiss(mut self, handler: impl FnMut(&mut EventCtx) + 'static) -> Self {
-        self.on_dismiss = Some(Box::new(handler));
+        self.modal.set_on_dismiss(handler);
         self
     }
 
     pub fn show(&mut self, title: impl Into<String>, message: impl Into<String>, icon: DialogIcon) {
-        self.title = title.into();
-        self.message = message.into();
-        self.icon = icon;
-        self.open = true;
-        self.button_pressed = false;
-        self.button_armed = false;
-        // Capture the centered position now if we already know where
-        // our parent lives. Otherwise the first `layout()` call will
-        // freeze it instead. Either way, once frozen, subsequent
-        // layout() updates do not move the dialog.
-        self.frozen_origin = self.centered_origin();
-    }
-
-    fn centered_origin(&self) -> Option<Point> {
-        if self.parent_bounds.w <= 0 || self.parent_bounds.h <= 0 {
-            return None;
-        }
-        let px = self.parent_bounds.x + (self.parent_bounds.w - self.size.w) / 2;
-        let py = self.parent_bounds.y + (self.parent_bounds.h - self.size.h) / 2;
-        Some(Point::new(px.max(0), py.max(0)))
+        self.modal.show(
+            title,
+            self.size,
+            Box::new(MessageBody::new(icon, message.into())),
+        );
     }
 
     pub fn show_warning(&mut self, title: impl Into<String>, message: impl Into<String>) {
@@ -124,30 +82,11 @@ impl Dialog {
     }
 
     pub fn dismiss(&mut self) {
-        self.open = false;
-        self.button_pressed = false;
-        self.button_armed = false;
-        self.frozen_origin = None;
+        self.modal.dismiss();
     }
 
     pub fn is_open(&self) -> bool {
-        self.open
-    }
-
-    fn dialog_rect(&self) -> Rect {
-        let origin = self.frozen_origin.unwrap_or_else(|| {
-            let px = self.parent_bounds.x + (self.parent_bounds.w - self.size.w) / 2;
-            let py = self.parent_bounds.y + (self.parent_bounds.h - self.size.h) / 2;
-            Point::new(px.max(0), py.max(0))
-        });
-        Rect::new(origin.x, origin.y, self.size.w, self.size.h)
-    }
-
-    fn button_rect(&self) -> Rect {
-        let dialog = self.dialog_rect();
-        let bx = dialog.x + (dialog.w - BUTTON_W) / 2;
-        let by = dialog.bottom() - BUTTON_H - PADDING;
-        Rect::new(bx, by, BUTTON_W, BUTTON_H)
+        self.modal.is_open()
     }
 }
 
@@ -157,59 +96,87 @@ impl Default for Dialog {
     }
 }
 
+// `Dialog` is just a `Modal` with a fixed body, so every `Widget` method
+// delegates straight through.
 impl Widget for Dialog {
     fn bounds(&self) -> Rect {
-        if self.open {
-            self.dialog_rect()
-        } else {
-            Rect::new(0, 0, 0, 0)
+        self.modal.bounds()
+    }
+    fn layout(&mut self, bounds: Rect) {
+        self.modal.layout(bounds);
+    }
+    fn paint(&mut self, painter: &mut Painter, theme: &Theme) {
+        self.modal.paint(painter, theme);
+    }
+    fn paint_overlay(&mut self, painter: &mut Painter, theme: &Theme) {
+        self.modal.paint_overlay(painter, theme);
+    }
+    fn event(&mut self, event: &Event, ctx: &mut EventCtx) {
+        self.modal.event(event, ctx);
+    }
+    fn captures_pointer(&self) -> bool {
+        self.modal.captures_pointer()
+    }
+    fn accepts_accelerators(&self) -> bool {
+        self.modal.accepts_accelerators()
+    }
+    fn popup_request(&self) -> Option<PopupRequest> {
+        self.modal.popup_request()
+    }
+    fn wants_ticks(&self) -> bool {
+        self.modal.wants_ticks()
+    }
+}
+
+/// The message box's body: the icon, the wrapped message, and the OK button.
+/// Hosted as a [`Modal`]'s content and laid out into the dialog's client rect,
+/// so all positions are taken relative to that rect.
+struct MessageBody {
+    icon: DialogIcon,
+    message: String,
+    rect: Rect,
+    button_pressed: bool,
+    button_armed: bool,
+}
+
+impl MessageBody {
+    fn new(icon: DialogIcon, message: String) -> Self {
+        Self {
+            icon,
+            message,
+            rect: Rect::new(0, 0, 0, 0),
+            button_pressed: false,
+            button_armed: false,
         }
+    }
+
+    fn button_rect(&self) -> Rect {
+        let bx = self.rect.x + (self.rect.w - BUTTON_W) / 2;
+        let by = self.rect.bottom() - BUTTON_H - PADDING;
+        Rect::new(bx, by, BUTTON_W, BUTTON_H)
+    }
+}
+
+impl Widget for MessageBody {
+    fn bounds(&self) -> Rect {
+        self.rect
     }
 
     fn layout(&mut self, bounds: Rect) {
-        self.parent_bounds = bounds;
-        // First time we learn our parent bounds while open: freeze the
-        // centered origin now. (Subsequent layouts leave the frozen
-        // value alone.)
-        if self.open && self.frozen_origin.is_none() {
-            self.frozen_origin = self.centered_origin();
-        }
+        self.rect = bounds;
     }
 
-    fn paint(&mut self, _painter: &mut Painter, _theme: &Theme) {
-        // Drawn in paint_overlay so we sit on top of normal siblings —
-        // and only into the popup-pass surface that the runtime opens
-        // for our top-level dialog window.
-    }
+    fn paint(&mut self, painter: &mut Painter, theme: &Theme) {
+        let body = self.rect;
 
-    fn paint_overlay(&mut self, painter: &mut Painter, theme: &Theme) {
-        // The dialog lives in its own top-level window. Skip the main
-        // window's overlay pass so the area under the dialog stays
-        // untouched — the runtime hosts our content in a separate popup
-        // surface that runs through this same routine with
-        // `is_popup_pass() == true`.
-        if !self.open || !painter.is_popup_pass() {
-            return;
-        }
-
-        let dialog = self.dialog_rect();
-
-        // Solid background fill across the whole client area. The compositor
-        // / WM draws the surrounding decorations (title bar, close button),
-        // so we don't need a border or bevel here — the dialog body is just
-        // the window background color.
-        painter.fill_rect(dialog, theme.background);
-
-        // Body content: icon on the left, wrapped message lines on the
-        // right.
-        let body_y = dialog.y + PADDING;
-        let icon_x = dialog.x + PADDING;
-        let icon_y = body_y;
+        // Icon on the left, wrapped message lines on the right.
+        let body_y = body.y + PADDING;
+        let icon_x = body.x + PADDING;
         if self.icon != DialogIcon::None {
-            draw_icon(painter, icon_x, icon_y, ICON_SIZE, self.icon);
+            draw_icon(painter, icon_x, body_y, ICON_SIZE, self.icon);
         }
         let msg_x = if self.icon == DialogIcon::None {
-            dialog.x + PADDING
+            body.x + PADDING
         } else {
             icon_x + ICON_SIZE + PADDING
         };
@@ -219,8 +186,8 @@ impl Widget for Dialog {
             msg_y += (theme.font_size as i32) + 3;
         }
 
-        // OK button — default-styled (1-px outer black border) so Enter
-        // is the obvious confirm key.
+        // OK button — default-styled (1-px outer black border) so Enter is the
+        // obvious confirm key.
         let btn = self.button_rect();
         let pressed = self.button_pressed && self.button_armed;
         painter.button(btn, theme, pressed, true);
@@ -234,9 +201,6 @@ impl Widget for Dialog {
     }
 
     fn event(&mut self, event: &Event, ctx: &mut EventCtx) {
-        if !self.open {
-            return;
-        }
         let btn = self.button_rect();
         match event {
             Event::PointerDown {
@@ -247,7 +211,6 @@ impl Widget for Dialog {
                 self.button_armed = true;
                 ctx.request_paint();
             }
-            // Clicks anywhere else on the dialog are swallowed — modal.
             Event::PointerMove { pos } if self.button_pressed => {
                 let in_btn = btn.contains(*pos);
                 if in_btn != self.button_armed {
@@ -264,48 +227,18 @@ impl Widget for Dialog {
                 self.button_armed = false;
                 ctx.request_paint();
                 if fire {
-                    self.fire(ctx);
+                    ctx.request_dismiss();
                 }
             }
+            // Enter / Space confirm; Escape is handled by the hosting `Modal`.
             Event::KeyDown {
-                key: Key::Named(NamedKey::Enter | NamedKey::Escape | NamedKey::Space),
+                key: Key::Named(NamedKey::Enter | NamedKey::Space),
                 ..
             } => {
-                self.fire(ctx);
+                ctx.request_dismiss();
             }
-            _ => {
-                // Modal — silently consume every other event.
-            }
+            _ => {}
         }
-    }
-
-    fn captures_pointer(&self) -> bool {
-        self.open
-    }
-
-    fn accepts_accelerators(&self) -> bool {
-        self.open
-    }
-
-    fn popup_request(&self) -> Option<PopupRequest> {
-        if !self.open {
-            return None;
-        }
-        Some(PopupRequest {
-            rect: self.dialog_rect(),
-            kind: PopupKind::Dialog,
-            title: Some(self.title.clone()),
-        })
-    }
-}
-
-impl Dialog {
-    fn fire(&mut self, ctx: &mut EventCtx) {
-        if let Some(handler) = self.on_dismiss.as_mut() {
-            handler(ctx);
-        }
-        self.dismiss();
-        ctx.request_paint();
     }
 }
 

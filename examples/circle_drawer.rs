@@ -18,28 +18,23 @@
 //! This is the example that exercises custom canvas painting (there is no
 //! circle primitive — [`Canvas`] rasterizes outlines with a midpoint algorithm
 //! and fills disks with horizontal spans), pointer-driven *hover* selection,
-//! and an undo/redo history.
+//! an undo/redo history, and a real modal dialog.
 //!
-//! Two notes on how this maps onto saudade, which targets single-window Win 3.1
-//! utilities rather than multi-window apps:
-//!
-//! * The "popup menu" and the "diameter adjustment frame" are drawn as
-//!   *in-window overlays* (in the [`Widget::paint_overlay`] pass) rather than as
-//!   separate OS windows. While either is open the canvas captures the pointer,
-//!   so it behaves modally — clicks elsewhere can't leak to the undo/redo
-//!   buttons. The adjustment panel hosts a real [`Slider`]; dragging it edits
-//!   the selected circle's diameter live.
-//! * History is a stack of whole-scene snapshots. Creating a circle commits one
-//!   snapshot; a diameter adjustment commits exactly one snapshot when its panel
-//!   closes (and only if the diameter actually changed) — so every tweak made
-//!   while the panel was open collapses into a single undo step, as required.
+//! The "another frame with a slider" is a genuine modal dialog ([`Modal`]): a
+//! separate top-level window hosting a [`Slider`] over the selected circle's
+//! diameter. While the dialog is open the slider edits a shared *working*
+//! diameter that the canvas reads live (so the circle resizes immediately in
+//! the main window); closing the dialog commits that diameter as a single
+//! undo/redo step — so every drag made while it was open collapses into one
+//! step, as required. The smaller right-click context menu stays an in-window
+//! overlay drawn by the canvas.
 
 use std::cell::RefCell;
 use std::rc::Rc;
 
 use saudade::{
-    App, Button, Color, Container, Event, EventCtx, MouseButton, Painter, Point, Rect, Slider,
-    Theme, Widget, WindowConfig,
+    App, Button, Color, Column, Container, Event, EventCtx, Key, Modal, MouseButton, NamedKey,
+    Painter, Point, PopupRequest, Rect, Size, Slider, Theme, Widget, WindowConfig,
 };
 
 const W: i32 = 480;
@@ -55,23 +50,48 @@ const MAX_DIAMETER: i32 = 160;
 /// Gray fill of the selected circle.
 const SELECTED_FILL: Color = Color::rgb(0xC8, 0xC8, 0xC8);
 
-const PANEL_W: i32 = 300;
-const PANEL_H: i32 = 112;
 const MENU_W: i32 = 140;
 const MENU_H: i32 = 22;
+/// Logical size of the diameter-adjustment dialog.
+const DIALOG_W: i32 = 300;
+const DIALOG_H: i32 = 120;
+
+// Shared-handle aliases for the state the widgets pass around.
+type SharedDoc = Rc<RefCell<Doc>>;
+type SharedAdjust = Rc<RefCell<Option<Adjust>>>;
+type SharedModalHandle = Rc<RefCell<Modal>>;
 
 fn main() {
-    let doc = Rc::new(RefCell::new(Doc::new()));
-    let root = build_root(doc);
-
+    let (_doc, _adjust, _modal, root) = build_app();
     App::new(WindowConfig::new("Circle Drawer", W, H), root)
         .with_theme(Theme::windows_31())
         .run();
 }
 
-/// Assemble the widget tree around a shared [`Doc`]. Factored out of `main` so
-/// tests can drive the same tree through the mock backend.
-fn build_root(doc: Rc<RefCell<Doc>>) -> Container {
+/// Build the whole widget tree plus the shared state behind it. Returns the
+/// shared handles too so tests can drive and inspect the same tree the mock
+/// backend renders.
+fn build_app() -> (SharedDoc, SharedAdjust, SharedModalHandle, Column) {
+    let doc = Rc::new(RefCell::new(Doc::new()));
+    // The live diameter being edited while the dialog is open (`None` when it
+    // is closed). The dialog's slider writes it; the canvas reads it.
+    let adjust: Rc<RefCell<Option<Adjust>>> = Rc::new(RefCell::new(None));
+
+    // Closing the dialog commits the working diameter as one undo step.
+    let modal = Rc::new(RefCell::new(Modal::new().on_dismiss({
+        let doc = doc.clone();
+        let adjust = adjust.clone();
+        move |cx| {
+            if let Some(a) = adjust.borrow_mut().take() {
+                let current = doc.borrow().circles().get(a.target).map(|c| c.d);
+                if current != Some(a.diameter) {
+                    doc.borrow_mut().set_diameter(a.target, a.diameter);
+                }
+            }
+            cx.request_paint();
+        }
+    })));
+
     let undo = ToolButton::new(
         Button::new(Rect::new(12, 12, 84, 26), "Undo").on_click({
             let doc = doc.clone();
@@ -100,11 +120,19 @@ fn build_root(doc: Rc<RefCell<Doc>>) -> Container {
         },
     );
 
-    Container::new(W, H)
+    let content = Container::new(W, H)
         .with_background(Color::LIGHT_GRAY)
         .add(undo)
         .add(redo)
-        .add(Canvas::new(doc))
+        .add(Canvas::new(doc.clone(), adjust.clone(), modal.clone()));
+
+    // The modal floats as an overlay so the runtime can host it in its own
+    // top-level window via PopupRequest.
+    let root = Column::new()
+        .add_fill(content)
+        .add_overlay(SharedModal(modal.clone()));
+
+    (doc, adjust, modal, root)
 }
 
 // ============================================================================
@@ -185,6 +213,12 @@ impl Doc {
     }
 }
 
+/// The working diameter being edited by the open dialog.
+struct Adjust {
+    target: usize,
+    diameter: i32,
+}
+
 /// The circle "nearest to the pointer such that the distance from its center to
 /// the pointer is less than its radius", or `None`. Ties break toward the
 /// closest center.
@@ -205,9 +239,35 @@ fn pick(circles: &[Circle], pointer: Option<Point>) -> Option<usize> {
     best
 }
 
+/// Diameter to *render* circle `index` with — the dialog's live working value
+/// while that circle is being adjusted, otherwise its stored diameter.
+fn render_diameter(index: usize, stored: i32, adjust: Option<&Adjust>) -> i32 {
+    match adjust {
+        Some(a) if a.target == index => a.diameter,
+        _ => stored,
+    }
+}
+
+/// The circle drawn gray: the one under adjustment, else the menu's target,
+/// else the hover pick.
+fn highlighted(
+    circles: &[Circle],
+    pointer: Option<Point>,
+    menu: Option<&MenuState>,
+    adjust: Option<&Adjust>,
+) -> Option<usize> {
+    if let Some(a) = adjust {
+        Some(a.target)
+    } else if let Some(m) = menu {
+        Some(m.target)
+    } else {
+        pick(circles, pointer)
+    }
+}
+
 // ============================================================================
-// Canvas — the interactive drawing surface, plus its two in-window overlays
-// (the right-click menu and the diameter-adjustment panel).
+// Canvas — the interactive drawing surface plus its in-window right-click menu.
+// The diameter editor lives in a separate `Modal`, not here.
 // ============================================================================
 
 /// The right-click context menu, anchored at `at`, acting on circle `target`.
@@ -216,53 +276,24 @@ struct MenuState {
     target: usize,
 }
 
-/// The open diameter panel: the circle being adjusted and its diameter when the
-/// panel opened (so closing only commits a step when something actually moved).
-struct AdjustState {
-    target: usize,
-    original_d: i32,
-}
-
 struct Canvas {
-    doc: Rc<RefCell<Doc>>,
+    doc: SharedDoc,
+    adjust: SharedAdjust,
+    modal: SharedModalHandle,
     /// Last pointer position inside the canvas, for hover selection.
     pointer: Option<Point>,
     menu: Option<MenuState>,
-    adjust: Option<AdjustState>,
-    /// Reused for the adjustment panel; repositioned/ranged when it opens. Its
-    /// value is the live diameter of the circle under adjustment.
-    slider: Slider,
 }
 
 impl Canvas {
-    fn new(doc: Rc<RefCell<Doc>>) -> Self {
+    fn new(doc: SharedDoc, adjust: SharedAdjust, modal: SharedModalHandle) -> Self {
         Self {
             doc,
+            adjust,
+            modal,
             pointer: None,
             menu: None,
-            adjust: None,
-            slider: Slider::new(Rect::new(0, 0, 10, 10), MIN_DIAMETER, MAX_DIAMETER),
         }
-    }
-
-    fn panel_rect(&self) -> Rect {
-        let c = CANVAS_RECT;
-        Rect::new(
-            c.x + (c.w - PANEL_W) / 2,
-            c.bottom() - PANEL_H - 20,
-            PANEL_W,
-            PANEL_H,
-        )
-    }
-
-    fn slider_rect(&self) -> Rect {
-        let p = self.panel_rect();
-        Rect::new(p.x + 16, p.y + 44, p.w - 32, 20)
-    }
-
-    fn ok_rect(&self) -> Rect {
-        let p = self.panel_rect();
-        Rect::new(p.x + (p.w - 64) / 2, p.bottom() - 12 - 26, 64, 26)
     }
 
     /// The menu box, clamped to stay inside the canvas.
@@ -280,79 +311,26 @@ impl Canvas {
             .unwrap_or(Rect::new(0, 0, 0, 0))
     }
 
-    /// Diameter to *render* a circle with — the live slider value while that
-    /// circle is being adjusted, otherwise its stored diameter.
-    fn render_diameter(&self, index: usize, stored: i32) -> i32 {
-        match &self.adjust {
-            Some(a) if a.target == index => self.slider.value(),
-            _ => stored,
-        }
-    }
-
-    /// The circle drawn gray: the one under adjustment, else the menu's target,
-    /// else the hover pick.
-    fn highlighted(&self, circles: &[Circle]) -> Option<usize> {
-        if let Some(a) = &self.adjust {
-            Some(a.target)
-        } else if let Some(m) = &self.menu {
-            Some(m.target)
-        } else {
-            pick(circles, self.pointer)
-        }
-    }
-
-    fn open_adjust(&mut self, target: usize) {
-        let cur = self
+    /// Open the diameter dialog for `target`, seeding the working diameter from
+    /// the circle's current size and handing a slider-bearing body to the modal.
+    fn open_dialog(&mut self, target: usize) {
+        let current = self
             .doc
             .borrow()
             .circles()
             .get(target)
             .map(|c| c.d)
             .unwrap_or(DEFAULT_DIAMETER);
-        let r = self.slider_rect();
-        self.slider.set_rect(r);
-        self.slider.set_range(MIN_DIAMETER, MAX_DIAMETER);
-        self.slider.set_value(cur);
-        self.adjust = Some(AdjustState {
+        *self.adjust.borrow_mut() = Some(Adjust {
             target,
-            original_d: cur,
+            diameter: current,
         });
-    }
-
-    /// Close the panel, committing the diameter as one history step if it moved.
-    fn close_adjust(&mut self, ctx: &mut EventCtx) {
-        if let Some(a) = self.adjust.take() {
-            let new_d = self.slider.value();
-            if new_d != a.original_d {
-                self.doc.borrow_mut().set_diameter(a.target, new_d);
-            }
-        }
-        ctx.request_paint();
-    }
-
-    fn event_adjust(&mut self, event: &Event, ctx: &mut EventCtx) {
-        match *event {
-            Event::PointerDown {
-                pos,
-                button: MouseButton::Left,
-            } => {
-                if self.ok_rect().contains(pos) {
-                    self.close_adjust(ctx);
-                } else if self.slider.bounds().contains(pos) {
-                    self.slider.event(event, ctx);
-                } else if !self.panel_rect().contains(pos) {
-                    // Clicking outside the panel closes it (commits) — the
-                    // in-window stand-in for "closing the frame".
-                    self.close_adjust(ctx);
-                }
-            }
-            // Forward drags / release so the slider keeps tracking the pointer
-            // even when it strays outside the panel.
-            Event::PointerMove { .. } | Event::PointerUp { .. } => {
-                self.slider.event(event, ctx);
-            }
-            _ => {}
-        }
+        let body = DiameterBody::new(self.adjust.clone(), current);
+        self.modal.borrow_mut().show(
+            "Adjust diameter",
+            Size::new(DIALOG_W, DIALOG_H),
+            Box::new(body),
+        );
     }
 
     fn event_menu(&mut self, event: &Event, ctx: &mut EventCtx) {
@@ -367,7 +345,7 @@ impl Canvas {
             } => {
                 if self.menu_item_rect().contains(pos) {
                     let target = self.menu.take().unwrap().target;
-                    self.open_adjust(target);
+                    self.open_dialog(target);
                 } else {
                     self.menu = None;
                 }
@@ -448,9 +426,10 @@ impl Widget for Canvas {
         let saved = painter.push_clip(c.inset(1));
         let doc = self.doc.borrow();
         let circles = doc.circles();
-        let hi = self.highlighted(circles);
+        let adjust = self.adjust.borrow();
+        let hi = highlighted(circles, self.pointer, self.menu.as_ref(), adjust.as_ref());
         for (i, circle) in circles.iter().enumerate() {
-            let r = self.render_diameter(i, circle.d) / 2;
+            let r = render_diameter(i, circle.d, adjust.as_ref()) / 2;
             if Some(i) == hi {
                 fill_disk(painter, circle.x, circle.y, r, SELECTED_FILL);
             }
@@ -460,12 +439,11 @@ impl Widget for Canvas {
     }
 
     fn paint_overlay(&mut self, painter: &mut Painter, theme: &Theme) {
-        // Our menu / panel are in-window overlays; nothing to draw onto a
-        // separate popup surface.
+        // The right-click menu is an in-window overlay; nothing to draw onto a
+        // separate popup surface (the dialog handles its own).
         if painter.is_popup_pass() {
             return;
         }
-
         if let Some(rect) = self.menu_rect() {
             painter.fill_rect(rect, theme.background);
             painter.stroke_rect(rect, theme.border);
@@ -480,44 +458,10 @@ impl Widget for Canvas {
             let ty = item.y + (item.h - theme.font_size as i32) / 2;
             painter.text(item.x + 6, ty, "Adjust diameter..", theme.font_size, fg);
         }
-
-        if let Some(target) = self.adjust.as_ref().map(|a| a.target) {
-            let panel = self.panel_rect();
-            painter.fill_rect(panel, theme.face);
-            painter.raised_bevel(panel, theme.highlight, theme.shadow);
-            painter.stroke_rect(panel, theme.border);
-
-            let title = {
-                let doc = self.doc.borrow();
-                match doc.circles().get(target) {
-                    Some(c) => format!(
-                        "Adjust diameter of circle at ({}, {}).",
-                        c.x - CANVAS_RECT.x,
-                        c.y - CANVAS_RECT.y
-                    ),
-                    None => "Adjust diameter.".to_string(),
-                }
-            };
-            painter.text(
-                panel.x + 14,
-                panel.y + 12,
-                &title,
-                theme.font_size,
-                theme.text,
-            );
-
-            self.slider.paint(painter, theme);
-
-            let ok = self.ok_rect();
-            painter.button(ok, theme, false, true);
-            painter.text_centered(ok, "OK", theme.font_size, theme.text);
-        }
     }
 
     fn event(&mut self, event: &Event, ctx: &mut EventCtx) {
-        if self.adjust.is_some() {
-            self.event_adjust(event, ctx);
-        } else if self.menu.is_some() {
+        if self.menu.is_some() {
             self.event_menu(event, ctx);
         } else {
             self.event_canvas(event, ctx);
@@ -525,9 +469,109 @@ impl Widget for Canvas {
     }
 
     fn captures_pointer(&self) -> bool {
-        // While a menu or panel is up, keep every pointer event flowing here so
-        // the overlay behaves modally and clicks can't reach the buttons.
-        self.menu.is_some() || self.adjust.is_some()
+        // Keep events flowing here while the menu is up so it behaves modally.
+        // (The diameter dialog is a real modal window handled by the runtime.)
+        self.menu.is_some()
+    }
+}
+
+// ============================================================================
+// DiameterBody — the modal dialog's content: a label, a diameter slider, and an
+// OK button. Laid out into the dialog's client rect, so everything is placed
+// relative to that rect.
+// ============================================================================
+
+struct DiameterBody {
+    slider: Slider,
+    rect: Rect,
+}
+
+impl DiameterBody {
+    fn new(adjust: SharedAdjust, initial: i32) -> Self {
+        let slider = Slider::new(Rect::new(0, 0, 10, 10), MIN_DIAMETER, MAX_DIAMETER)
+            .with_value(initial)
+            .on_change(move |cx, value| {
+                if let Some(a) = adjust.borrow_mut().as_mut() {
+                    a.diameter = value;
+                }
+                cx.request_paint();
+            });
+        Self {
+            slider,
+            rect: Rect::new(0, 0, 0, 0),
+        }
+    }
+
+    fn slider_area(&self) -> Rect {
+        Rect::new(self.rect.x + 16, self.rect.y + 44, self.rect.w - 32, 20)
+    }
+
+    fn ok_rect(&self) -> Rect {
+        Rect::new(
+            self.rect.x + (self.rect.w - 64) / 2,
+            self.rect.bottom() - 12 - 26,
+            64,
+            26,
+        )
+    }
+}
+
+impl Widget for DiameterBody {
+    fn bounds(&self) -> Rect {
+        self.rect
+    }
+
+    fn layout(&mut self, bounds: Rect) {
+        self.rect = bounds;
+        let area = self.slider_area();
+        self.slider.set_rect(area);
+    }
+
+    fn paint(&mut self, painter: &mut Painter, theme: &Theme) {
+        painter.text(
+            self.rect.x + 16,
+            self.rect.y + 14,
+            "Adjust diameter:",
+            theme.font_size,
+            theme.text,
+        );
+        self.slider.paint(painter, theme);
+        let ok = self.ok_rect();
+        painter.button(ok, theme, false, true);
+        painter.text_centered(ok, "OK", theme.font_size, theme.text);
+    }
+
+    fn event(&mut self, event: &Event, ctx: &mut EventCtx) {
+        match *event {
+            Event::PointerDown {
+                pos,
+                button: MouseButton::Left,
+            } if self.ok_rect().contains(pos) => {
+                ctx.request_dismiss();
+            }
+            // Enter confirms; Escape is handled by the hosting `Modal`.
+            Event::KeyDown {
+                key: Key::Named(NamedKey::Enter),
+                ..
+            } => {
+                ctx.request_dismiss();
+            }
+            // Everything else drives the slider (drag, and arrow keys when it
+            // holds focus).
+            _ => self.slider.event(event, ctx),
+        }
+    }
+
+    fn focusable(&self) -> bool {
+        true
+    }
+
+    fn set_focused(&mut self, focused: bool) {
+        self.slider.set_focused(focused);
+    }
+
+    fn captures_pointer(&self) -> bool {
+        self.slider.captures_pointer()
     }
 }
 
@@ -629,6 +673,43 @@ impl Widget for ToolButton {
 }
 
 // ============================================================================
+// SharedModal — lets the canvas's callbacks and the widget tree hold the same
+// live `Modal`. Mirrors the SharedDialog adapter in the picker example.
+// ============================================================================
+
+struct SharedModal(SharedModalHandle);
+
+impl Widget for SharedModal {
+    fn bounds(&self) -> Rect {
+        self.0.borrow().bounds()
+    }
+    fn paint(&mut self, painter: &mut Painter, theme: &Theme) {
+        self.0.borrow_mut().paint(painter, theme);
+    }
+    fn paint_overlay(&mut self, painter: &mut Painter, theme: &Theme) {
+        self.0.borrow_mut().paint_overlay(painter, theme);
+    }
+    fn event(&mut self, event: &Event, ctx: &mut EventCtx) {
+        self.0.borrow_mut().event(event, ctx);
+    }
+    fn captures_pointer(&self) -> bool {
+        self.0.borrow().captures_pointer()
+    }
+    fn accepts_accelerators(&self) -> bool {
+        self.0.borrow().accepts_accelerators()
+    }
+    fn layout(&mut self, bounds: Rect) {
+        self.0.borrow_mut().layout(bounds);
+    }
+    fn popup_request(&self) -> Option<PopupRequest> {
+        self.0.borrow().popup_request()
+    }
+    fn wants_ticks(&self) -> bool {
+        self.0.borrow().wants_ticks()
+    }
+}
+
+// ============================================================================
 // Tests — the history and hit-testing logic is pure, so it runs headless and
 // doubles as documentation of the 7GUIs undo/redo and selection rules.
 // ============================================================================
@@ -700,11 +781,11 @@ mod tests {
         assert_eq!(pick(&circles, None), None);
     }
 
-    // Drive the whole create → hover → right-click menu → adjust panel → slider
-    // → OK → undo flow through the mock backend, rendering at each step. This
-    // exercises the overlay painting, pointer-capture routing, and the shared
-    // `Doc` borrows — the parts a unit test on `Doc` alone can't reach — and
-    // would panic on a clip-stack imbalance or a double borrow.
+    // Drive the whole create → hover → right-click menu → modal dialog →
+    // slider drag → dismiss → undo flow through the mock backend, rendering at
+    // each step. This exercises the in-window menu overlay, the real modal
+    // dialog (its popup-pass painting and event routing through `Modal`), the
+    // shared working-diameter state, and the commit-on-close undo batching.
     #[test]
     fn interactive_flow_renders_without_panicking() {
         use saudade::mock::MockBackend;
@@ -715,19 +796,12 @@ mod tests {
                 button,
             }
         }
-        fn up(x: i32, y: i32) -> Event {
-            Event::PointerUp {
-                pos: Point::new(x, y),
-                button: MouseButton::Left,
-            }
-        }
 
-        let doc = Rc::new(RefCell::new(Doc::new()));
-        let mut root = build_root(doc.clone());
+        let (doc, adjust, modal, mut root) = build_app();
         let backend = MockBackend::new(W, H);
         backend.render(&mut root);
 
-        // Create a circle in the canvas, then hover its center.
+        // Create a circle, then hover its center.
         backend.dispatch(&mut root, &down(200, 200, MouseButton::Left));
         backend.dispatch(
             &mut root,
@@ -738,36 +812,60 @@ mod tests {
         backend.render(&mut root);
         assert_eq!(doc.borrow().circles().len(), 1);
 
-        // Right-click the circle → context menu; click its only item → panel.
+        // Right-click the circle → context menu; click its item → modal dialog.
         backend.dispatch(&mut root, &down(200, 200, MouseButton::Right));
         backend.render(&mut root);
         backend.dispatch(&mut root, &down(210, 210, MouseButton::Left));
-        backend.render(&mut root);
+        backend.render(&mut root); // renders the dialog via the popup pass
+        assert!(modal.borrow().is_open());
+        assert!(adjust.borrow().is_some());
 
-        // Drag the slider, then close the panel with OK.
-        backend.dispatch(&mut root, &down(240, 309, MouseButton::Left));
+        // Drag the dialog's slider (it lives at the dialog's centered rect).
+        // 90 + (400-120)/2 = 90,140 origin; the slider spans the body width.
+        backend.dispatch(&mut root, &down(200, 189, MouseButton::Left));
         backend.dispatch(
             &mut root,
             &Event::PointerMove {
-                pos: Point::new(200, 309),
+                pos: Point::new(250, 189),
             },
         );
-        backend.dispatch(&mut root, &up(200, 309));
-        backend.render(&mut root);
-        backend.dispatch(&mut root, &down(240, 343, MouseButton::Left));
+        backend.dispatch(
+            &mut root,
+            &Event::PointerUp {
+                pos: Point::new(250, 189),
+                button: MouseButton::Left,
+            },
+        );
         backend.render(&mut root);
 
-        // The diameter moved and committed as one step.
+        // Close the dialog with Escape → commits the new diameter as one step.
+        backend.dispatch(
+            &mut root,
+            &Event::KeyDown {
+                key: Key::Named(NamedKey::Escape),
+                modifiers: Default::default(),
+            },
+        );
+        backend.render(&mut root);
+        assert!(!modal.borrow().is_open());
         {
             let d = doc.borrow();
             assert_eq!(d.circles().len(), 1);
-            assert_ne!(d.circles()[0].d, DEFAULT_DIAMETER);
+            let diameter = d.circles()[0].d;
+            assert_ne!(diameter, DEFAULT_DIAMETER);
+            assert!((MIN_DIAMETER..=MAX_DIAMETER).contains(&diameter));
             assert!(d.can_undo());
         }
 
         // Undo the diameter change (button fires on release).
         backend.dispatch(&mut root, &down(54, 25, MouseButton::Left));
-        backend.dispatch(&mut root, &up(54, 25));
+        backend.dispatch(
+            &mut root,
+            &Event::PointerUp {
+                pos: Point::new(54, 25),
+                button: MouseButton::Left,
+            },
+        );
         backend.render(&mut root);
         let d = doc.borrow();
         assert_eq!(d.circles().len(), 1);
