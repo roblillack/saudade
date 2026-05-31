@@ -116,6 +116,53 @@ fn label_styled() {
     });
 }
 
+#[test]
+fn label_multiline() {
+    snapshot_at_all_scales("label_multiline", 140, 60, || {
+        Box::new(
+            Container::new(140, 60)
+                .with_background(Color::WHITE)
+                .add(Label::new(8, 8, "First line\nSecond line\nThird line")),
+        )
+    });
+}
+
+#[test]
+fn label_wrapped() {
+    snapshot_at_all_scales("label_wrapped", 140, 80, || {
+        Box::new(
+            Container::new(140, 80)
+                .with_background(Color::WHITE)
+                .add(
+                    Label::new(
+                        8,
+                        8,
+                        "The quick brown fox jumps over the lazy dog.",
+                    )
+                    .wrap(124),
+                ),
+        )
+    });
+}
+
+#[test]
+fn label_wrapped_with_breaks() {
+    snapshot_at_all_scales("label_wrapped_with_breaks", 160, 100, || {
+        Box::new(
+            Container::new(160, 100)
+                .with_background(Color::WHITE)
+                .add(
+                    Label::new(
+                        8,
+                        8,
+                        "Paragraph one wraps across several lines.\n\nParagraph two follows a blank line.",
+                    )
+                    .wrap(144),
+                ),
+        )
+    });
+}
+
 // ---------------------------------------------------------------- Image
 
 #[test]

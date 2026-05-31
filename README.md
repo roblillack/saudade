@@ -314,8 +314,8 @@ Add order matters: later widgets paint on top and are hit-tested first.
 
 ### `Label`
 
-A single line of text positioned by its top-left corner. Inherits color
-and size from the active `Theme` unless overridden.
+A run of text positioned by its top-left corner. Inherits color and size
+from the active `Theme` unless overridden.
 
 ```rust
 Label::new(10, 10, "Plain label");
@@ -323,7 +323,22 @@ Label::new(10, 30, "Smaller").with_size(8.0);
 Label::new(10, 50, "Red").with_color(Color::RED);
 ```
 
-There is no built-in multi-line / word-wrap label yet.
+Labels are multi-line: an explicit `\n` in the text always starts a new
+line, stacked at the font's natural line height.
+
+```rust
+Label::new(10, 10, "First line\nSecond line");
+```
+
+Call `.wrap(max_width)` to also word-wrap to a maximum line width (in
+logical pixels). Lines are split on `\n` first, then each is wrapped at
+whitespace to fit; a word wider than the limit overflows on its own line
+rather than being broken mid-word.
+
+```rust
+Label::new(10, 10, "A longer paragraph that wraps across several lines.")
+    .wrap(180);
+```
 
 ### `Button`
 
@@ -876,7 +891,6 @@ Things that would fit saudade's spirit but aren't there yet:
 * Horizontal scrolling in `TextEditor` (a horizontal `ScrollBar` is
   already implemented; the editor just doesn't ride it yet)
 * Mouse-wheel scroll events
-* Multi-line / wrapping `Label`
 * Undo / redo in `TextEditor`
 * Save-As / Open file dialogs
 * Optional bitmap fonts for fully retro-faithful text
