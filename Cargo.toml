@@ -3,8 +3,9 @@ name = "saudade"
 version = "0.1.0"
 edition = "2024"
 
-[workspace]
-members = ["examples/filer", "examples/notepad", "examples/picker"]
+# The reference apps in `examples/` are plain Cargo examples — run any of them
+# with `cargo run --example <name>` (filer, notepad, picker). They build as
+# part of this package, so they're covered by `cargo build --all-targets`.
 
 [dependencies]
 # winit drives X11 only. We bypass it entirely on Wayland sessions and

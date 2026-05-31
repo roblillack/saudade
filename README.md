@@ -17,13 +17,18 @@ assemble a Win 3.1 about box, a Notepad-style text editor, and similar
 single-window utilities. Scope is roughly that of NeXTSTEP's *WINGs*: a
 toolkit for utilities, not for full applications.
 
-Three reference apps live under `examples/`:
+Three reference apps live under `examples/`. Run any of them with
+`cargo run --example <name>`:
 
-| Crate     | What it shows                                            |
+| Example   | What it shows                                            |
 |-----------|----------------------------------------------------------|
 | `notepad` | Editor window with menu bar (`MenuBar`, `TextEditor`).   |
 | `filer`   | Filesystem browser using `List` with folder/file icons.  |
 | `picker`  | Pick-an-item dialog: `List` + buttons + `Dialog`, with Tab/Shift+Tab focus cycling. |
+
+```console
+$ cargo run --example notepad        # or: filer, picker
+```
 
 saudade was extracted from *retrofetch*, whose about-box dialog
 (`Container` + `Label` + `Button` + `Image` + `Bevel`) was the original
@@ -62,8 +67,9 @@ once the API has settled. Until then, add it as a git dependency:
 saudade = { git = "https://github.com/roblillack/saudade" }
 ```
 
-The reference apps under `examples/` depend on it by path
-(`saudade = { path = "../.." }`); see those for a working setup.
+The reference apps under `examples/` are plain Cargo examples built against
+this crate; see those for a working setup, and run them with
+`cargo run --example <name>`.
 
 
 ## Design philosophy
@@ -865,7 +871,8 @@ impl Widget for SharedEditor {
 ```
 
 A more complete version, including Open/Save against a path passed as
-`argv[1]`, lives in `notepad/src/main.rs` in this repository.
+`argv[1]`, lives in `examples/notepad.rs` in this repository
+(`cargo run --example notepad`).
 
 
 ## Non-goals
