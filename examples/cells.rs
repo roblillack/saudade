@@ -48,9 +48,7 @@ const DOUBLE_CLICK: Duration = Duration::from_millis(400);
 const GRID_LINE: Color = Color::rgb(0xD0, 0xD0, 0xD0);
 
 fn main() {
-    let root = Container::new(W, H)
-        .with_background(Color::LIGHT_GRAY)
-        .add(Grid::new(seed_sheet()));
+    let root = Container::new(W, H).add(Grid::new(seed_sheet()));
 
     App::new(WindowConfig::new("Cells", W, H), root)
         .with_theme(Theme::windows_31())

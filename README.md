@@ -32,10 +32,12 @@ Reference apps live under `examples/`. Run any of them with
 | `crud`        | 7GUIs task 5 — a `List` as a live, prefix-filtered database view with Create / Update / Delete `Button`s that enable themselves reactively. |
 | `circle_drawer` | 7GUIs task 6 — a custom canvas (no circle primitive: midpoint outlines, span-filled disks) with hover selection, a right-click menu, a real modal dialog (`Modal`) hosting the diameter `Slider`, and snapshot undo/redo. |
 | `cells`       | 7GUIs task 7 — a scrollable A–Z / 0–99 spreadsheet `Grid` (built on `ScrollBar` + `TextInput`) with a formula engine: cell refs, `+ - * /`, ranges, `SUM`/`AVG`/…, reactive recompute and cycle detection. |
+| `patterns`    | Previews the window background patterns (`none`, `solid`, `dots`, `lines`, `diagonal`, `cross-stitch`): press `p` to cycle the pattern and `c` to cycle the color. Every app draws one behind its widgets — default `superlight` `diagonal`, overridable with `SAUDADE_WINDOW_PATTERN` / `SAUDADE_WINDOW_PATTERN_COLOR` (e.g. `SAUDADE_WINDOW_PATTERN=dots SAUDADE_WINDOW_PATTERN_COLOR=light`). |
 
 ```console
 $ cargo run --example notepad        # or: filer, picker, counter, temperature,
-                                     #     flight_booker, timer, crud, circle_drawer, cells
+                                     #     flight_booker, timer, crud, circle_drawer,
+                                     #     cells, patterns
 ```
 
 saudade was extracted from *retrofetch*, whose about-box dialog

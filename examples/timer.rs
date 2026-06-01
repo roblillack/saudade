@@ -20,8 +20,8 @@ use std::rc::Rc;
 use std::time::Instant;
 
 use saudade::{
-    App, Button, Color, Container, Event, EventCtx, Label, Painter, ProgressBar, Rect, Slider,
-    Theme, Widget, WindowConfig,
+    App, Button, Container, Event, EventCtx, Label, Painter, ProgressBar, Rect, Slider, Theme,
+    Widget, WindowConfig,
 };
 
 const W: i32 = 300;
@@ -84,7 +84,6 @@ fn main() {
     };
 
     let root = Container::new(W, H)
-        .with_background(Color::WHITE)
         .add(Label::new(Rect::new(16, 16, 76, 16), "Elapsed:"))
         .add(SharedProgressBar(gauge.clone()))
         .add(SharedLabel(elapsed_label.clone()))

@@ -47,7 +47,10 @@ impl Column {
     pub fn new() -> Self {
         Self {
             bounds: Rect::new(0, 0, 0, 0),
-            background: Some(Color::WHITE),
+            // Transparent by default (see `Container::new`): the runtime fills
+            // the window with `theme.background`, so an opaque white here is
+            // redundant. Set one only to override what shows behind the column.
+            background: None,
             children: Vec::new(),
             overlays: Vec::new(),
             captured: None,

@@ -120,11 +120,11 @@ fn build_app() -> (SharedDoc, SharedAdjust, SharedModalHandle, Column) {
         },
     );
 
-    let content = Container::new(W, H)
-        .with_background(Color::LIGHT_GRAY)
-        .add(undo)
-        .add(redo)
-        .add(Canvas::new(doc.clone(), adjust.clone(), modal.clone()));
+    let content = Container::new(W, H).add(undo).add(redo).add(Canvas::new(
+        doc.clone(),
+        adjust.clone(),
+        modal.clone(),
+    ));
 
     // The modal floats as an overlay so the runtime can host it in its own
     // top-level window via PopupRequest.
