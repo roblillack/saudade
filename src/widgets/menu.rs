@@ -584,8 +584,9 @@ impl Widget for MenuBar {
             },
             Event::Char { ch, modifiers }
                 // Some platforms route mnemonic characters through Char with
-                // Alt held; treat the same way.
-                if modifiers.alt => {
+                // Alt held; treat the same way. AltGr is excluded so composed
+                // characters still reach the focused text widget.
+                if modifiers.mnemonic_alt() => {
                     self.handle_mnemonic(*ch, *modifiers, ctx);
                 }
             _ => {}
@@ -713,10 +714,11 @@ impl MenuBar {
             }
             return false;
         }
-        // Closed bar: only respond to Alt+letter to open a top-level menu.
+        // Closed bar: only respond to (left) Alt+letter to open a top-level
+        // menu. AltGr is excluded so it stays free for composing characters.
         // Keyboard-opened menus pre-highlight the first action so the user
         // can hit Enter or use arrows immediately.
-        if modifiers.alt
+        if modifiers.mnemonic_alt()
             && let Some(menu_idx) = self.top_level_mnemonic(ch)
         {
             self.open = Some(menu_idx);
