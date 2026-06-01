@@ -41,7 +41,7 @@ mod widget;
 mod widgets;
 
 pub use app::{App, WindowConfig};
-pub use background::BackgroundPattern;
+pub use background::{BackgroundPattern, PATTERN_COLORS};
 pub use event::{Event, EventCtx, Key, Modifiers, MouseButton, NamedKey};
 pub use font::Font;
 pub use geometry::{Color, Point, Rect, Size};

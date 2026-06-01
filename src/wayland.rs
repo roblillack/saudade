@@ -128,7 +128,7 @@ pub(crate) fn run(app: App) {
         keyboard: None,
         pointer: None,
         modifiers: Modifiers::default(),
-        bg: BackgroundState::new(),
+        bg: BackgroundState::from_env(),
         cursor: None,
 
         popup: None,
@@ -344,7 +344,7 @@ impl State {
             self.mono_font.as_ref(),
             false,
         );
-        painter.fill_pattern(self.theme.background, self.bg.pattern, self.bg.color());
+        painter.fill_pattern(self.theme.background, self.bg.pattern, self.bg.color);
         self.root.paint(&mut painter, &self.theme);
 
         let surface = self.window.wl_surface();
@@ -842,17 +842,6 @@ impl State {
         let modifiers = self.modifiers;
         let mapped = map_keysym(event.keysym);
         if pressed {
-            // Global debug hotkeys: `p` cycles the window background pattern,
-            // `c` cycles its color. Handled ahead of the widget tree (so they
-            // work in any application) and consumed so the letter doesn't also
-            // leak into a focused text field.
-            if !modifiers.has_command()
-                && let Some(Key::Char(ch)) = mapped
-                && self.bg.handle_key(ch)
-            {
-                self.needs_redraw = true;
-                return;
-            }
             if let Some(mapped) = mapped {
                 self.dispatch(Event::KeyDown {
                     key: mapped,

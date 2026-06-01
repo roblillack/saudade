@@ -1,23 +1,27 @@
 //! patterns — a playground for the window background patterns.
 //!
-//! saudade lets a *regular* top-level window paint a 1-bit desktop texture
-//! behind the widget tree, while dialogs and modals stay plain white. The
-//! pattern and its color are runtime/debug state toggled from the keyboard,
-//! the same in every saudade app:
+//! Every saudade app paints a 1-bit desktop texture behind its widgets (dialogs
+//! and modals stay white). The pattern + color are fixed per process: the
+//! default is a `superlight` forward-diagonal hatch, overridable with the
+//! `SAUDADE_WINDOW_PATTERN` and `SAUDADE_WINDOW_PATTERN_COLOR` environment
+//! variables, e.g.
 //!
-//! * `p` rotates the pattern: none → solid → dots → dots2 → lines →
-//!   diagonal `///` → diagonal `\\\` → cross-stitch → none …
+//! ```console
+//! $ SAUDADE_WINDOW_PATTERN=dots SAUDADE_WINDOW_PATTERN_COLOR=light cargo run --example notepad
+//! ```
+//!
+//! This demo is the exception: it draws the background itself so you can preview
+//! the options interactively —
+//!
+//! * `p` rotates the pattern: none → solid → dots → lines → diagonal → cross-stitch …
 //! * `c` rotates the color: superlight → light → dark → black …
 //!
 //! Each press prints the new pattern + color to the console.
-//!
-//! Most saudade apps fill their whole window with an opaque `Container`, so
-//! the pattern sits hidden behind it — the console line is then the only
-//! feedback. This demo's root deliberately leaves the window background
-//! exposed and floats a small "About"-style card on top, so you can actually
-//! watch the texture change.
 
-use saudade::{App, Painter, Rect, Theme, Widget, WindowConfig};
+use saudade::{
+    App, BackgroundPattern, Color, Event, EventCtx, Key, PATTERN_COLORS, Painter, Rect, Theme,
+    Widget, WindowConfig,
+};
 
 const W: i32 = 480;
 const H: i32 = 320;
@@ -25,18 +29,46 @@ const H: i32 = 320;
 fn main() {
     App::new(
         WindowConfig::new("Background Patterns", W, H).resizable(true),
-        Workspace {
-            bounds: Rect::new(0, 0, W, H),
-        },
+        Workspace::new(),
     )
     .with_theme(Theme::windows_31())
     .run();
 }
 
-/// A root that paints only a small centered card and leaves the rest of the
-/// window untouched, so the runtime's background pattern shows around it.
+/// Fills the whole window with the currently-selected pattern (so this demo is
+/// self-contained rather than relying on the process-wide background), and
+/// floats a small instruction card on top. `p` / `c` cycle the selection.
 struct Workspace {
     bounds: Rect,
+    pattern: BackgroundPattern,
+    color_idx: usize,
+}
+
+impl Workspace {
+    fn new() -> Self {
+        // Start on the same defaults the runtime uses.
+        Self {
+            bounds: Rect::new(0, 0, W, H),
+            pattern: BackgroundPattern::DiagonalForward,
+            color_idx: 0,
+        }
+    }
+
+    fn color(&self) -> Color {
+        PATTERN_COLORS[self.color_idx].1
+    }
+
+    fn log(&self) {
+        let (name, c) = PATTERN_COLORS[self.color_idx];
+        println!(
+            "[patterns] pattern: {} | color: {} (#{:02X}{:02X}{:02X})",
+            self.pattern.name(),
+            name,
+            c.red(),
+            c.green(),
+            c.blue(),
+        );
+    }
 }
 
 impl Widget for Workspace {
@@ -49,9 +81,24 @@ impl Widget for Workspace {
         self.bounds = bounds;
     }
 
+    fn event(&mut self, event: &Event, ctx: &mut EventCtx) {
+        if let Event::KeyDown {
+            key: Key::Char(ch), ..
+        } = event
+        {
+            match ch.to_ascii_lowercase() {
+                'p' => self.pattern = self.pattern.next(),
+                'c' => self.color_idx = (self.color_idx + 1) % PATTERN_COLORS.len(),
+                _ => return,
+            }
+            self.log();
+            ctx.request_paint();
+        }
+    }
+
     fn paint(&mut self, painter: &mut Painter, theme: &Theme) {
-        // NOTE: intentionally no full-window fill here. Everything we *don't*
-        // paint keeps the background pattern the runtime drew underneath.
+        painter.fill_pattern(Color::WHITE, self.pattern, self.color());
+
         let cw = 300;
         let ch = 132;
         let cx = self.bounds.x + (self.bounds.w - cw) / 2;
