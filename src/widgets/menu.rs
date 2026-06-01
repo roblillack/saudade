@@ -234,7 +234,11 @@ impl MenuBar {
         }
         // The accelerator column only widens the popup when some item carries
         // one, so accelerator-free menus keep their original width.
-        let accel_col = if max_accel > 0 { ACCEL_GAP + max_accel } else { 0 };
+        let accel_col = if max_accel > 0 {
+            ACCEL_GAP + max_accel
+        } else {
+            0
+        };
         let width = max_label + accel_col + POPUP_PADDING_X * 2;
         let mut height = POPUP_PADDING_Y * 2;
         for item in &menu.items {
