@@ -2,11 +2,17 @@
 name = "saudade"
 version = "0.1.0"
 edition = "2024"
+rust-version = "1.88"
 description = "Classic looking retained-mode, cross-platform Rust GUI library"
 repository = "https://github.com/roblillack/saudade"
 license = "MIT"
 keywords = ["gui", "ui", "retained-mode", "cross-platform", "widgets"]
 categories = ["gui"]
+
+# Test snapshot baselines (2.2 MB of PNGs) and the test fonts are only needed to
+# run the test suite, not to build or use the library. Keep them out of the
+# published crate.
+exclude = ["tests/snapshots", "tests/fonts"]
 
 # The reference apps in `examples/` are plain Cargo examples — run any of them
 # with `cargo run --example <name>` (filer, notepad, picker). They build as
