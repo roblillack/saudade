@@ -107,9 +107,8 @@ impl Widget for FileBrowser {
     }
 
     fn paint(&mut self, painter: &mut Painter, theme: &Theme) {
-        // Background tint for the whole window — the list paints itself
-        // sunken-white over the top.
-        painter.fill_rect(self.bounds, theme.face);
+        // No background fill — the window background (pattern) shows behind the
+        // header strip; the list paints itself sunken-white over the top.
         let header_rect = Rect::new(self.bounds.x, self.bounds.y, self.bounds.w, HEADER_H);
         painter.text(
             header_rect.x + 8,
