@@ -535,6 +535,24 @@ fn dialog_no_icon() {
     });
 }
 
+/// A multi-line message must grow the box so the text clears the OK button —
+/// the clash the picker example surfaced once both the chrome font and the
+/// button grew. Mirrors picker's "<who> picked: … Saved to favorites." body.
+#[test]
+fn dialog_multiline() {
+    snapshot_at_all_scales("dialog_multiline", 420, 240, || {
+        let mut dialog = Dialog::new();
+        dialog.show_info(
+            "Confirmed",
+            "Alice picked:\n\nThe blue option\n\nSaved to favorites.",
+        );
+        let column = Column::new()
+            .with_background(Color::LIGHT_GRAY)
+            .add_overlay(dialog);
+        Box::new(column)
+    });
+}
+
 // ---------------------------------------------------------------- TextEditor
 
 /// TextEditor wraps an internal ScrollBar that's only sized via

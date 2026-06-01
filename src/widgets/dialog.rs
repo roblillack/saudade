@@ -11,9 +11,29 @@ const BUTTON_W: i32 = 70;
 const BUTTON_H: i32 = 26;
 const ICON_SIZE: i32 = 32;
 const PADDING: i32 = 16;
-/// Default message-box size. 18 logical px shorter than a square so the
-/// client-drawn title bar's old space stays reclaimed.
-const DEFAULT_SIZE: Size = Size::new(340, 132);
+/// Vertical breathing room between the message block and the OK button.
+const BUTTON_GAP: i32 = 16;
+/// Height of one message line: the default chrome font (13pt) plus a few px of
+/// leading. Kept in sync with the per-line advance in `MessageBody::paint` so
+/// the auto-computed window height matches what actually gets drawn.
+const MSG_LINE_HEIGHT: i32 = 16;
+/// Classic message-box width. The height is derived from the message instead
+/// (see [`message_box_size`]), so the box grows to fit multi-line text and
+/// never crowds the OK button.
+const DEFAULT_WIDTH: i32 = 340;
+
+/// Size a message box to its content: a fixed classic width, and a height that
+/// stacks the icon / message lines, a gap, and the OK button, each framed by
+/// `PADDING`. Because the message is top-anchored and the button bottom-
+/// anchored, fitting the content here is what keeps the two from colliding.
+fn message_box_size(message: &str, icon: DialogIcon) -> Size {
+    let lines = message.split('\n').count() as i32;
+    let text_h = lines * MSG_LINE_HEIGHT;
+    let icon_h = if icon == DialogIcon::None { 0 } else { ICON_SIZE };
+    let content_h = text_h.max(icon_h);
+    let height = PADDING + content_h + BUTTON_GAP + BUTTON_H + PADDING;
+    Size::new(DEFAULT_WIDTH, height)
+}
 
 /// What icon — if any — to show on the left of the message.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -42,19 +62,23 @@ pub enum DialogIcon {
 /// install an [`on_dismiss`](Dialog::on_dismiss) handler.
 pub struct Dialog {
     modal: Modal,
-    size: Size,
+    /// Explicit size set via [`with_size`]; `None` lets the dialog size itself
+    /// to its message each time it's shown.
+    size: Option<Size>,
 }
 
 impl Dialog {
     pub fn new() -> Self {
         Self {
             modal: Modal::new(),
-            size: DEFAULT_SIZE,
+            size: None,
         }
     }
 
+    /// Pin the dialog to a fixed size, opting out of the content-based
+    /// auto-sizing that [`show`](Self::show) otherwise applies.
     pub fn with_size(mut self, width: i32, height: i32) -> Self {
-        self.size = Size::new(width.max(120), height.max(60));
+        self.size = Some(Size::new(width.max(120), height.max(60)));
         self
     }
 
@@ -64,11 +88,10 @@ impl Dialog {
     }
 
     pub fn show(&mut self, title: impl Into<String>, message: impl Into<String>, icon: DialogIcon) {
-        self.modal.show(
-            title,
-            self.size,
-            Box::new(MessageBody::new(icon, message.into())),
-        );
+        let message = message.into();
+        let size = self.size.unwrap_or_else(|| message_box_size(&message, icon));
+        self.modal
+            .show(title, size, Box::new(MessageBody::new(icon, message)));
     }
 
     pub fn show_warning(&mut self, title: impl Into<String>, message: impl Into<String>) {
