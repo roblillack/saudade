@@ -5,6 +5,8 @@ edition = "2024"
 description = "Classic looking retained-mode, cross-platform Rust GUI library"
 repository = "https://github.com/roblillack/saudade"
 license = "MIT"
+keywords = ["gui", "ui", "retained-mode", "cross-platform", "widgets"]
+categories = ["gui"]
 
 # The reference apps in `examples/` are plain Cargo examples — run any of them
 # with `cargo run --example <name>` (filer, notepad, picker). They build as
