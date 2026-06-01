@@ -190,10 +190,27 @@ impl<'a> Painter<'a> {
             _ => {}
         }
         // Grid spacing + feature thickness in physical pixels. `near` is the
-        // tight 4px grid (dots, lines, hatching); `far` is the looser 8px one.
+        // tight 4px grid (dots, lines, hatching); `far` is the wider 6px dot
+        // grid; `cross` gives the cross-stitch weave a touch more breathing
+        // room than the plain diagonals.
         let near = (4.0 * self.scale).round().max(1.0) as i32;
-        let far = (8.0 * self.scale).round().max(1.0) as i32;
+        let far = (6.0 * self.scale).round().max(1.0) as i32;
+        let cross = (6.0 * self.scale).round().max(1.0) as i32;
         let thick = self.scale.round().max(1.0) as i32;
+        // A staggered dot field: dots sit on a `step` grid, but every other
+        // row is shifted half a step so each dot falls in the gap of the row
+        // above — the quincunx of the classic Mac desktop, not a square grid.
+        let dotted = |ax: i32, ay: i32, step: i32| -> bool {
+            if ay.rem_euclid(step) >= thick {
+                return false;
+            }
+            let shift = if ay.div_euclid(step).rem_euclid(2) == 1 {
+                step / 2
+            } else {
+                0
+            };
+            (ax - shift).rem_euclid(step) < thick
+        };
         let fg = fg.0;
         for y in 0..self.height {
             // Offset by the logical origin so the grid stays put regardless of
@@ -203,17 +220,13 @@ impl<'a> Painter<'a> {
             for x in 0..self.width {
                 let ax = x - self.origin_x;
                 let on = match pattern {
-                    BackgroundPattern::Dots => {
-                        ax.rem_euclid(near) < thick && ay.rem_euclid(near) < thick
-                    }
-                    BackgroundPattern::Dots2 => {
-                        ax.rem_euclid(far) < thick && ay.rem_euclid(far) < thick
-                    }
+                    BackgroundPattern::Dots => dotted(ax, ay, near),
+                    BackgroundPattern::Dots2 => dotted(ax, ay, far),
                     BackgroundPattern::Lines => ay.rem_euclid(near) < thick,
                     BackgroundPattern::DiagonalForward => (ax + ay).rem_euclid(near) < thick,
                     BackgroundPattern::DiagonalBack => (ax - ay).rem_euclid(near) < thick,
                     BackgroundPattern::CrossStitch => {
-                        (ax + ay).rem_euclid(near) < thick || (ax - ay).rem_euclid(near) < thick
+                        (ax + ay).rem_euclid(cross) < thick || (ax - ay).rem_euclid(cross) < thick
                     }
                     // Handled above with an early return.
                     BackgroundPattern::None | BackgroundPattern::Solid => false,
@@ -481,18 +494,22 @@ mod tests {
     }
 
     #[test]
-    fn dots_land_on_the_grid_only() {
+    fn dots_are_staggered_between_rows() {
         let px = render(8, 8, BackgroundPattern::Dots, Color::BLACK);
         let at = |x: i32, y: i32| px[(y * 8 + x) as usize];
-        // Dots sit on the 4px grid corners...
+        // Even dot-row (y == 0): dots on the 4px grid.
         assert_eq!(at(0, 0), Color::BLACK.0);
         assert_eq!(at(4, 0), Color::BLACK.0);
-        assert_eq!(at(0, 4), Color::BLACK.0);
-        assert_eq!(at(4, 4), Color::BLACK.0);
-        // ...and nowhere between them.
-        assert_eq!(at(1, 1), Color::WHITE.0);
+        assert_eq!(at(2, 0), Color::WHITE.0);
+        // Odd dot-row (y == 4): shifted half a step, so dots land in the gaps
+        // of the row above rather than directly beneath it.
+        assert_eq!(at(2, 4), Color::BLACK.0);
+        assert_eq!(at(6, 4), Color::BLACK.0);
+        assert_eq!(at(0, 4), Color::WHITE.0);
+        assert_eq!(at(4, 4), Color::WHITE.0);
+        // Rows between dot-rows stay blank.
+        assert_eq!(at(0, 1), Color::WHITE.0);
         assert_eq!(at(2, 3), Color::WHITE.0);
-        assert_eq!(at(3, 4), Color::WHITE.0);
     }
 
     #[test]
@@ -507,13 +524,27 @@ mod tests {
     }
 
     #[test]
-    fn cross_stitch_is_the_union_of_both_diagonals() {
+    fn cross_stitch_weave_is_wider_than_the_diagonals() {
+        let px = render(12, 12, BackgroundPattern::CrossStitch, Color::BLACK);
+        let at = |x: i32, y: i32| px[(y * 12 + x) as usize];
+        // Lit where (x+y) or (x-y) is a multiple of the 6px cross spacing.
+        assert_eq!(at(0, 0), Color::BLACK.0);
+        assert_eq!(at(6, 0), Color::BLACK.0);
+        assert_eq!(at(3, 3), Color::BLACK.0); // forward diagonal: x+y == 6
+        assert_eq!(at(1, 1), Color::BLACK.0); // back diagonal: x-y == 0
+        // The "slightly wider" check: a 4px step is now blank — the plain
+        // diagonals (still on the 4px grid) would have drawn here.
+        assert_eq!(at(4, 0), Color::WHITE.0);
+        assert_eq!(at(2, 0), Color::WHITE.0);
+    }
+
+    #[test]
+    fn diagonals_still_use_the_tight_grid() {
+        // DiagonalForward / DiagonalBack are unchanged: a 4px step is lit.
         let fwd = render(8, 8, BackgroundPattern::DiagonalForward, Color::BLACK);
         let back = render(8, 8, BackgroundPattern::DiagonalBack, Color::BLACK);
-        let cross = render(8, 8, BackgroundPattern::CrossStitch, Color::BLACK);
-        for i in 0..(8 * 8) {
-            let lit = fwd[i] == Color::BLACK.0 || back[i] == Color::BLACK.0;
-            assert_eq!(cross[i] == Color::BLACK.0, lit);
-        }
+        let at = |px: &[u32], x: i32, y: i32| px[(y * 8 + x) as usize];
+        assert_eq!(at(&fwd, 4, 0), Color::BLACK.0); // x+y == 4
+        assert_eq!(at(&back, 4, 0), Color::BLACK.0); // x-y == 4
     }
 }
