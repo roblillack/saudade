@@ -175,7 +175,12 @@ impl Dialog {
         self.modal.show(
             title,
             size,
-            Box::new(ConfirmBody::new(icon, message, affirm, Box::new(on_confirm))),
+            Box::new(ConfirmBody::new(
+                icon,
+                message,
+                affirm,
+                Box::new(on_confirm),
+            )),
         );
     }
 
