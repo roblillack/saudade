@@ -832,6 +832,10 @@ impl KeyboardHandler for State {
             shift: modifiers.shift,
             control: modifiers.ctrl,
             alt: modifiers.alt,
+            // On X11/Wayland AltGr is `ISO_Level3_Shift` (Mod5), reported
+            // separately from Alt (Mod1) and not surfaced here, so it never
+            // looks like `alt` and needs no special-casing.
+            alt_graph: false,
             logo: modifiers.logo,
         };
     }

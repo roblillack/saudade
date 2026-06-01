@@ -6,7 +6,7 @@ use winit::application::ApplicationHandler;
 use winit::dpi::{LogicalSize, PhysicalPosition, PhysicalSize};
 use winit::event::{ElementState, MouseButton as WinitMouseButton, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
-use winit::keyboard::{Key as WKey, NamedKey as WNamedKey};
+use winit::keyboard::{Key as WKey, ModifiersKeyState, NamedKey as WNamedKey};
 use winit::window::{Window, WindowAttributes, WindowButtons, WindowId};
 
 // X11 platform extensions. winit 0.30's generic `with_parent_window` is
@@ -319,6 +319,9 @@ impl AppHandler {
                     shift: s.shift_key(),
                     control: s.control_key(),
                     alt: s.alt_key(),
+                    // Right Alt / Option = AltGr: reserved for composing
+                    // characters, so it must not trigger menu mnemonics.
+                    alt_graph: new_mods.ralt_state() == ModifiersKeyState::Pressed,
                     logo: s.super_key(),
                 };
             }
@@ -391,6 +394,9 @@ impl AppHandler {
                     shift: s.shift_key(),
                     control: s.control_key(),
                     alt: s.alt_key(),
+                    // Right Alt / Option = AltGr: reserved for composing
+                    // characters, so it must not trigger menu mnemonics.
+                    alt_graph: new_mods.ralt_state() == ModifiersKeyState::Pressed,
                     logo: s.super_key(),
                 };
             }
@@ -443,7 +449,7 @@ impl AppHandler {
     }
 
     fn dispatch_key(&mut self, key: &winit::event::KeyEvent, event_loop: &ActiveEventLoop) {
-        let mapped = map_key(&key.logical_key);
+        let mapped = map_base_key(key);
         match key.state {
             ElementState::Pressed => {
                 if let Some(mapped) = mapped {
@@ -724,6 +730,50 @@ fn popup_position_to_widget(pos: PhysicalPosition<f64>, popup: &PopupWindow) -> 
     let lx = pos.x / s;
     let ly = pos.y / s;
     Point::new((lx as i32) + popup.anchor.x, (ly as i32) + popup.anchor.y)
+}
+
+/// The key to report for `KeyDown` / `KeyUp` — the layout-resolved key with
+/// *modifiers* stripped (Shift, Ctrl, and, crucially on macOS, Alt/Option).
+///
+/// We deliberately do not use `key.logical_key` here: on macOS winit folds the
+/// Option modifier into the character, so `Option+F` arrives as `'ƒ'` and
+/// `Option+O` as `'ø'`, which never match an ASCII menu mnemonic — only dead
+/// keys like `Option+E` happen to fall back to their base letter. winit's
+/// `key_without_modifiers()` resolves the key through the *active* keyboard
+/// layout (so German QWERTZ still reports `z`/`y` correctly) while discarding
+/// the modifier-composition, which is exactly what mnemonics and hotkeys want.
+///
+/// Text insertion is unaffected: that path uses `key.text` via the `Char`
+/// event, which still carries the composed character. The trait is only
+/// available on the desktop backends, so non-desktop targets fall back to
+/// `logical_key` (their previous behaviour).
+#[cfg(any(
+    target_os = "windows",
+    target_os = "macos",
+    target_os = "linux",
+    target_os = "freebsd",
+    target_os = "dragonfly",
+    target_os = "netbsd",
+    target_os = "openbsd",
+    target_os = "redox",
+))]
+fn map_base_key(key: &winit::event::KeyEvent) -> Option<Key> {
+    use winit::platform::modifier_supplement::KeyEventExtModifierSupplement;
+    map_key(&key.key_without_modifiers())
+}
+
+#[cfg(not(any(
+    target_os = "windows",
+    target_os = "macos",
+    target_os = "linux",
+    target_os = "freebsd",
+    target_os = "dragonfly",
+    target_os = "netbsd",
+    target_os = "openbsd",
+    target_os = "redox",
+)))]
+fn map_base_key(key: &winit::event::KeyEvent) -> Option<Key> {
+    map_key(&key.logical_key)
 }
 
 fn map_key(key: &WKey) -> Option<Key> {

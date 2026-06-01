@@ -39,16 +39,37 @@ pub enum NamedKey {
 pub struct Modifiers {
     pub shift: bool,
     pub control: bool,
+    /// Any Alt / Option key, either side.
     pub alt: bool,
+    /// The right Alt key specifically — `AltGr` on PC keyboards, the right
+    /// `Option` on macOS. It is reserved for *composing* characters (umlauts,
+    /// currency symbols, …), so it deliberately does not open menu mnemonics
+    /// and does not count as a command modifier. Whenever `alt_graph` is set,
+    /// `alt` is set too.
+    pub alt_graph: bool,
     pub logo: bool,
 }
 
 impl Modifiers {
-    /// True if any of Ctrl / Alt / Logo is held. Editing widgets use this to
-    /// decide whether a `Char` event should be inserted as text or treated as
-    /// a hotkey instead.
+    /// True if a command modifier (Ctrl / left Alt / Logo) is held. Editing
+    /// widgets use this to decide whether a `Char` event should be inserted as
+    /// text or treated as a hotkey instead.
+    ///
+    /// `AltGr` (right Alt) is intentionally *not* a command modifier: it
+    /// composes characters and must let the resulting text through. Windows
+    /// reports `AltGr` as `Ctrl+Alt`, so when it is held we ignore those bits.
     pub fn has_command(&self) -> bool {
+        if self.alt_graph {
+            return false;
+        }
         self.control || self.alt || self.logo
+    }
+
+    /// True when an Alt key that should activate menu mnemonics is held — the
+    /// left Alt only. The right Alt (`AltGr`) is reserved for composing
+    /// characters such as umlauts and must not steal those keystrokes.
+    pub fn mnemonic_alt(&self) -> bool {
+        self.alt && !self.alt_graph
     }
 }
 
