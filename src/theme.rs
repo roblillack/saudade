@@ -15,11 +15,11 @@ pub struct Theme {
     pub highlight_bg: Color,
     /// Selected-item foreground text color — white on Win 3.1.
     pub highlight_text: Color,
+    /// Point size for all chrome text — labels, buttons, fields, list rows,
+    /// dropdowns, dialogs, and the menu bar. One value so the whole UI stays
+    /// visually consistent; content widgets that want a different size (e.g.
+    /// `TextEditor`) carry their own override.
     pub font_size: f32,
-    /// Font size used by `MenuBar` — kept separate from `font_size` so the
-    /// menu chrome can carry slightly larger, more legible glyphs without
-    /// inflating dialog labels everywhere else.
-    pub menu_font_size: f32,
 }
 
 impl Theme {
@@ -36,8 +36,7 @@ impl Theme {
             disabled_text: Color::MID_GRAY,
             highlight_bg: Color::NAVY,
             highlight_text: Color::WHITE,
-            font_size: 11.0,
-            menu_font_size: 13.0,
+            font_size: 13.0,
         }
     }
 }

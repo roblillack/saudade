@@ -196,7 +196,7 @@ impl MenuBar {
         for menu in &self.menus {
             let parsed = parse_label(&menu.label);
             let w = painter
-                .measure_text(&parsed.display, theme.menu_font_size)
+                .measure_text(&parsed.display, theme.font_size)
                 .w
                 + BAR_PADDING * 2;
             self.cache.label_rects.push((x, w));
@@ -219,13 +219,13 @@ impl MenuBar {
             if let MenuItem::Action { label, accel, .. } = item {
                 let parsed = parse_label(label);
                 let w = painter
-                    .measure_text(&parsed.display, theme.menu_font_size)
+                    .measure_text(&parsed.display, theme.font_size)
                     .w;
                 if w > max_label {
                     max_label = w;
                 }
                 if let Some(accel) = accel {
-                    let aw = painter.measure_text(accel, theme.menu_font_size).w;
+                    let aw = painter.measure_text(accel, theme.font_size).w;
                     if aw > max_accel {
                         max_accel = aw;
                     }
@@ -386,7 +386,7 @@ impl Widget for MenuBar {
                 self.rect.y + BAR_LABEL_INSET_Y,
                 1,
                 &parsed,
-                theme.menu_font_size,
+                theme.font_size,
                 fg,
             );
         }
@@ -444,19 +444,19 @@ impl Widget for MenuBar {
                         row.y + ITEM_TEXT_INSET_Y,
                         0,
                         &parsed,
-                        theme.menu_font_size,
+                        theme.font_size,
                         fg,
                     );
                     // Accelerator hint, right-aligned with the same inset the
                     // label carries on the left.
                     if let Some(accel) = accel {
-                        let aw = painter.measure_text(accel, theme.menu_font_size).w;
+                        let aw = painter.measure_text(accel, theme.font_size).w;
                         let ax = row.right() - (POPUP_PADDING_X - 4) - aw;
                         painter.text(
                             ax,
                             row.y + ITEM_TEXT_INSET_Y,
                             accel,
-                            theme.menu_font_size,
+                            theme.font_size,
                             fg,
                         );
                     }
