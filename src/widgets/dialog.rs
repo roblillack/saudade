@@ -6,7 +6,9 @@ use crate::widget::{PopupRequest, Widget};
 use crate::widgets::modal::Modal;
 
 const BUTTON_W: i32 = 70;
-const BUTTON_H: i32 = 22;
+// Tall enough to give the 13pt label comfortable breathing room above and
+// below — matches the push-button height the CRUD example uses.
+const BUTTON_H: i32 = 26;
 const ICON_SIZE: i32 = 32;
 const PADDING: i32 = 16;
 /// Default message-box size. 18 logical px shorter than a square so the
