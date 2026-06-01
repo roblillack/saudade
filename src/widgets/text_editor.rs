@@ -636,6 +636,14 @@ impl Widget for TextEditor {
             self.v_scrollbar.event(event, ctx);
             return;
         }
+        // The wheel scrolls the view whenever the pointer is over the editor,
+        // leaving the caret and selection where they are.
+        if let Event::Scroll { pos, .. } = event {
+            if self.rect.contains(*pos) {
+                self.v_scrollbar.event(event, ctx);
+            }
+            return;
+        }
         // Otherwise route positional events that land in the scrollbar.
         if let Some(pos) = event.position()
             && self.v_scrollbar.rect().contains(pos)

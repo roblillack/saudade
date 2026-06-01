@@ -4,7 +4,7 @@ use std::time::{Duration, Instant};
 
 use winit::application::ApplicationHandler;
 use winit::dpi::{LogicalSize, PhysicalPosition, PhysicalSize};
-use winit::event::{ElementState, MouseButton as WinitMouseButton, WindowEvent};
+use winit::event::{ElementState, MouseButton as WinitMouseButton, MouseScrollDelta, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{Key as WKey, ModifiersKeyState, NamedKey as WNamedKey};
 use winit::window::{Window, WindowAttributes, WindowButtons, WindowId};
@@ -20,7 +20,10 @@ use winit::window::{Window, WindowAttributes, WindowButtons, WindowId};
 use winit::platform::x11::{WindowAttributesExtX11, WindowType as XWindowType};
 
 use crate::background::BackgroundState;
-use crate::event::{Event, EventCtx, Key, Modifiers, MouseButton, NamedKey};
+use crate::event::{
+    Event, EventCtx, Key, Modifiers, MouseButton, NamedKey, SCROLL_PIXELS_PER_LINE,
+    WHEEL_LINES_PER_DETENT,
+};
 use crate::font::Font;
 use crate::geometry::{Point, Rect, Size};
 use crate::painter::Painter;
@@ -312,6 +315,19 @@ impl AppHandler {
                     ElementState::Released => Event::PointerUp { pos, button },
                 };
                 self.dispatch(&event, event_loop);
+            }
+            WindowEvent::MouseWheel { delta, .. } => {
+                // The wheel carries no position; use the last cursor location.
+                let Some(pos) = self.cursor else { return };
+                let (delta_x, delta_y) = scroll_delta_lines(delta, self.scale);
+                self.dispatch(
+                    &Event::Scroll {
+                        pos,
+                        delta_x,
+                        delta_y,
+                    },
+                    event_loop,
+                );
             }
             WindowEvent::ModifiersChanged(new_mods) => {
                 let s = new_mods.state();
@@ -810,6 +826,24 @@ fn map_button(button: WinitMouseButton) -> Option<MouseButton> {
         WinitMouseButton::Right => Some(MouseButton::Right),
         WinitMouseButton::Middle => Some(MouseButton::Middle),
         _ => None,
+    }
+}
+
+/// Translate a winit scroll delta into saudade's `(delta_x, delta_y)` in
+/// document lines, positive toward the content's end. winit reports positive
+/// values as scrolling *up/left* (revealing earlier content), the opposite of
+/// our convention, so we negate. Discrete wheel notches scale by
+/// [`WHEEL_LINES_PER_DETENT`]; trackpad pixel deltas (physical pixels) are taken
+/// back to logical pixels by `scale` and divided into lines.
+fn scroll_delta_lines(delta: MouseScrollDelta, scale: f32) -> (f32, f32) {
+    match delta {
+        MouseScrollDelta::LineDelta(x, y) => {
+            (-x * WHEEL_LINES_PER_DETENT, -y * WHEEL_LINES_PER_DETENT)
+        }
+        MouseScrollDelta::PixelDelta(p) => {
+            let per_line = scale.max(0.01) * SCROLL_PIXELS_PER_LINE;
+            (-(p.x as f32) / per_line, -(p.y as f32) / per_line)
+        }
     }
 }
 

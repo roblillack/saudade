@@ -21,7 +21,9 @@ use smithay_client_toolkit::registry::{ProvidesRegistryState, RegistryState};
 use smithay_client_toolkit::seat::keyboard::{
     KeyEvent as WlKeyEvent, KeyboardHandler, Keysym, Modifiers as WlModifiers,
 };
-use smithay_client_toolkit::seat::pointer::{PointerEvent, PointerEventKind, PointerHandler};
+use smithay_client_toolkit::seat::pointer::{
+    AxisScroll, PointerEvent, PointerEventKind, PointerHandler,
+};
 use smithay_client_toolkit::seat::{Capability, SeatHandler, SeatState};
 use smithay_client_toolkit::shell::WaylandSurface;
 use smithay_client_toolkit::shell::xdg::popup::{Popup, PopupConfigure, PopupHandler};
@@ -45,7 +47,10 @@ use wayland_protocols::xdg::shell::client::xdg_positioner::{Anchor, Gravity, Xdg
 
 use crate::app::App;
 use crate::background::BackgroundState;
-use crate::event::{Event, EventCtx, Key, Modifiers, MouseButton, NamedKey};
+use crate::event::{
+    Event, EventCtx, Key, Modifiers, MouseButton, NamedKey, SCROLL_PIXELS_PER_LINE,
+    WHEEL_LINES_PER_DETENT,
+};
 use crate::font::Font;
 use crate::geometry::{Point, Rect};
 use crate::painter::Painter;
@@ -937,8 +942,34 @@ impl PointerHandler for State {
                         p.needs_redraw = true;
                     }
                 }
-                PointerEventKind::Axis { .. } => {
-                    // Scroll wheel events — not surfaced yet.
+                PointerEventKind::Axis {
+                    horizontal,
+                    vertical,
+                    ..
+                } => {
+                    // Wayland already follows our sign convention: a positive
+                    // axis value scrolls down / right, toward the content's
+                    // end. Surface coordinates are logical, so the continuous
+                    // (`absolute`) fallback needs no DPI scaling.
+                    let lines = |axis: AxisScroll| {
+                        if axis.discrete != 0 {
+                            axis.discrete as f32 * WHEEL_LINES_PER_DETENT
+                        } else {
+                            axis.absolute as f32 / SCROLL_PIXELS_PER_LINE
+                        }
+                    };
+                    let delta_x = lines(horizontal);
+                    let delta_y = lines(vertical);
+                    if delta_x != 0.0 || delta_y != 0.0 {
+                        self.dispatch(Event::Scroll {
+                            pos,
+                            delta_x,
+                            delta_y,
+                        });
+                        if in_popup && let Some(p) = self.popup.as_mut() {
+                            p.needs_redraw = true;
+                        }
+                    }
                 }
             }
         }
