@@ -29,7 +29,11 @@ const DEFAULT_WIDTH: i32 = 340;
 fn message_box_size(message: &str, icon: DialogIcon) -> Size {
     let lines = message.split('\n').count() as i32;
     let text_h = lines * MSG_LINE_HEIGHT;
-    let icon_h = if icon == DialogIcon::None { 0 } else { ICON_SIZE };
+    let icon_h = if icon == DialogIcon::None {
+        0
+    } else {
+        ICON_SIZE
+    };
     let content_h = text_h.max(icon_h);
     let height = PADDING + content_h + BUTTON_GAP + BUTTON_H + PADDING;
     Size::new(DEFAULT_WIDTH, height)
@@ -89,7 +93,9 @@ impl Dialog {
 
     pub fn show(&mut self, title: impl Into<String>, message: impl Into<String>, icon: DialogIcon) {
         let message = message.into();
-        let size = self.size.unwrap_or_else(|| message_box_size(&message, icon));
+        let size = self
+            .size
+            .unwrap_or_else(|| message_box_size(&message, icon));
         self.modal
             .show(title, size, Box::new(MessageBody::new(icon, message)));
     }

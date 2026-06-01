@@ -195,10 +195,7 @@ impl MenuBar {
         let mut x = self.rect.x;
         for menu in &self.menus {
             let parsed = parse_label(&menu.label);
-            let w = painter
-                .measure_text(&parsed.display, theme.font_size)
-                .w
-                + BAR_PADDING * 2;
+            let w = painter.measure_text(&parsed.display, theme.font_size).w + BAR_PADDING * 2;
             self.cache.label_rects.push((x, w));
             x += w;
         }
@@ -218,9 +215,7 @@ impl MenuBar {
         for item in &menu.items {
             if let MenuItem::Action { label, accel, .. } = item {
                 let parsed = parse_label(label);
-                let w = painter
-                    .measure_text(&parsed.display, theme.font_size)
-                    .w;
+                let w = painter.measure_text(&parsed.display, theme.font_size).w;
                 if w > max_label {
                     max_label = w;
                 }
@@ -452,13 +447,7 @@ impl Widget for MenuBar {
                     if let Some(accel) = accel {
                         let aw = painter.measure_text(accel, theme.font_size).w;
                         let ax = row.right() - (POPUP_PADDING_X - 4) - aw;
-                        painter.text(
-                            ax,
-                            row.y + ITEM_TEXT_INSET_Y,
-                            accel,
-                            theme.font_size,
-                            fg,
-                        );
+                        painter.text(ax, row.y + ITEM_TEXT_INSET_Y, accel, theme.font_size, fg);
                     }
                     y += ITEM_HEIGHT;
                 }
