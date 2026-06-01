@@ -303,6 +303,12 @@ impl Widget for List {
         painter.sunken_bevel(text, theme.highlight, theme.shadow);
         painter.stroke_rect(text, theme.border);
 
+        // Confine every row to the field interior so a label wider than the
+        // row (or a forced partial row in a field too short for one) is clipped
+        // at the border instead of bleeding into the scrollbar gutter or past
+        // the widget — the same overflow guard `TextInput`/`Dropdown` apply.
+        let saved_clip = painter.push_clip(text.inset(1));
+
         let text_x = text.x + TEXT_PAD_X;
         let text_y0 = text.y + TEXT_PAD_Y;
         let row_w = text.w - TEXT_PAD_X * 2;
@@ -360,6 +366,8 @@ impl Widget for List {
                 theme.text,
             );
         }
+
+        painter.restore_clip(saved_clip);
 
         self.v_scrollbar.paint(painter, theme);
     }

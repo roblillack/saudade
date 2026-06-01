@@ -722,6 +722,27 @@ fn list_disabled() {
     });
 }
 
+#[test]
+fn list_clips_long_labels() {
+    snapshot_at_all_scales("list_clips_long_labels", 200, 100, || {
+        let mut list = laid_out_list(
+            Rect::new(8, 8, 184, 84),
+            vec![
+                ListItem::new("a label far too wide to fit inside this narrow list field")
+                    .with_icon(swatch_icon(Color::RED)),
+                ListItem::new("another entry whose text also overruns the right edge"),
+            ],
+        );
+        list.set_selected(Some(0));
+        list.set_focused(true);
+        Box::new(
+            Container::new(200, 100)
+                .with_background(Color::LIGHT_GRAY)
+                .add(list),
+        )
+    });
+}
+
 // ---------------------------------------------------------------- Composite
 
 /// A small dialog-style layout that exercises Container, Label, Bevel,
