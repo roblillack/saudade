@@ -1,38 +1,43 @@
-# saudade
+# Saudade
+
+[![CI](https://github.com/roblillack/saudade/actions/workflows/ci.yml/badge.svg)](https://github.com/roblillack/saudade/actions/workflows/ci.yml)
+[![crates.io](https://img.shields.io/crates/v/saudade.svg)](https://crates.io/crates/saudade)
+[![docs.rs](https://img.shields.io/docsrs/saudade)](https://docs.rs/saudade)
 
 A minimal, retained-mode GUI library for small Windows 3.1–styled utilities
 written in Rust. Built on `winit` + `softbuffer` with `fontdue` + `fontdb`
 for text — no GPU, no browser engine, no procedural-macro DSL.
 
-saudade exists to make tiny dialogs and tools (about boxes, system
+![Saudade widgets: a picker dialog, an about box, and a modal confirmation, all in Windows 3.1 chrome](screenshot.png)
+
+Saudade exists to make tiny dialogs and tools (about boxes, system
 viewers, simple text editors, mini control panels) that look like they
 fell out of 1992 while staying portable, density-independent, and crisp
 on modern displays.
 
+Applications built with Saudade pair exceptionally well with my Wayland Window Manager [Canoe](https://github.com/roblillack/canoe), but will work on any UNIX (Wayland/X11) or Mac system.
 
 ## Status
 
 Pre-1.0, intentionally small. The current widget set is enough to
-assemble a Win 3.1 about box, a Notepad-style text editor, and similar
-single-window utilities. Scope is roughly that of NeXTSTEP's *WINGs*: a
-toolkit for utilities, not for full applications.
+assemble small single-window utilities. There is currently no documentation apart from this huge ~~braindump~~ README.
 
 Reference apps live under `examples/`. Run any of them with
 `cargo run --example <name>`:
 
-| Example       | What it shows                                            |
-|---------------|----------------------------------------------------------|
-| `notepad`     | Editor window with menu bar (`MenuBar`, `TextEditor`).   |
-| `filer`       | Filesystem browser using `List` with folder/file icons.  |
-| `picker`      | Pick-an-item dialog: `List` + buttons + `Dialog`, with Tab/Shift+Tab focus cycling. |
-| `counter`     | [7GUIs](https://eugenkiss.github.io/7guis/) task 1 — a `Label` field and a `Button`. |
-| `temperature` | 7GUIs task 2 — two `TextInput`s converting Celsius ↔ Fahrenheit live. |
-| `flight_booker` | 7GUIs task 3 — a `Dropdown` picks the flight type and reactively enables / disables the return-date field and the Book `Button`. |
-| `timer`       | 7GUIs task 4 — a `ProgressBar` gauge, a duration `Slider`, and a reset `Button`. |
-| `crud`        | 7GUIs task 5 — a `List` as a live, prefix-filtered database view with Create / Update / Delete `Button`s that enable themselves reactively. |
-| `circle_drawer` | 7GUIs task 6 — a custom canvas (no circle primitive: midpoint outlines, span-filled disks) with hover selection, a right-click menu, a real modal dialog (`Modal`) hosting the diameter `Slider`, and snapshot undo/redo. |
-| `cells`       | 7GUIs task 7 — a scrollable A–Z / 0–99 spreadsheet `Grid` (built on `ScrollBar` + `TextInput`) with a formula engine: cell refs, `+ - * /`, ranges, `SUM`/`AVG`/…, reactive recompute and cycle detection. |
-| `patterns`    | Previews the window background patterns (`none`, `solid`, `dots`, `lines`, `diagonal`, `cross-stitch`): press `p` to cycle the pattern and `c` to cycle the color. Every app draws one behind its widgets — default `superlight` `diagonal`, overridable with `SAUDADE_WINDOW_PATTERN` / `SAUDADE_WINDOW_PATTERN_COLOR` (e.g. `SAUDADE_WINDOW_PATTERN=dots SAUDADE_WINDOW_PATTERN_COLOR=light`). |
+| Example         | What it shows                                                                                                                                                                                                                                                                                                                                                                                    |
+| --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `notepad`       | Editor window with menu bar (`MenuBar`, `TextEditor`).                                                                                                                                                                                                                                                                                                                                           |
+| `filer`         | Filesystem browser using `List` with folder/file icons.                                                                                                                                                                                                                                                                                                                                          |
+| `picker`        | Pick-an-item dialog: `List` + buttons + `Dialog`, with Tab/Shift+Tab focus cycling.                                                                                                                                                                                                                                                                                                              |
+| `counter`       | [7GUIs](https://eugenkiss.github.io/7guis/) task 1 — a `Label` field and a `Button`.                                                                                                                                                                                                                                                                                                             |
+| `temperature`   | 7GUIs task 2 — two `TextInput`s converting Celsius ↔ Fahrenheit live.                                                                                                                                                                                                                                                                                                                            |
+| `flight_booker` | 7GUIs task 3 — a `Dropdown` picks the flight type and reactively enables / disables the return-date field and the Book `Button`.                                                                                                                                                                                                                                                                 |
+| `timer`         | 7GUIs task 4 — a `ProgressBar` gauge, a duration `Slider`, and a reset `Button`.                                                                                                                                                                                                                                                                                                                 |
+| `crud`          | 7GUIs task 5 — a `List` as a live, prefix-filtered database view with Create / Update / Delete `Button`s that enable themselves reactively.                                                                                                                                                                                                                                                      |
+| `circle_drawer` | 7GUIs task 6 — a custom canvas (no circle primitive: midpoint outlines, span-filled disks) with hover selection, a right-click menu, a real modal dialog (`Modal`) hosting the diameter `Slider`, and snapshot undo/redo.                                                                                                                                                                        |
+| `cells`         | 7GUIs task 7 — a scrollable A–Z / 0–99 spreadsheet `Grid` (built on `ScrollBar` + `TextInput`) with a formula engine: cell refs, `+ - * /`, ranges, `SUM`/`AVG`/…, reactive recompute and cycle detection.                                                                                                                                                                                       |
+| `patterns`      | Previews the window background patterns (`none`, `solid`, `dots`, `lines`, `diagonal`, `cross-stitch`): press `p` to cycle the pattern and `c` to cycle the color. Every app draws one behind its widgets — default `superlight` `diagonal`, overridable with `SAUDADE_WINDOW_PATTERN` / `SAUDADE_WINDOW_PATTERN_COLOR` (e.g. `SAUDADE_WINDOW_PATTERN=dots SAUDADE_WINDOW_PATTERN_COLOR=light`). |
 
 ```console
 $ cargo run --example notepad        # or: filer, picker, counter, temperature,
@@ -40,10 +45,10 @@ $ cargo run --example notepad        # or: filer, picker, counter, temperature,
                                      #     cells, patterns
 ```
 
-saudade was extracted from *retrofetch*, whose about-box dialog
-(`Container` + `Label` + `Button` + `Image` + `Bevel`) was the original
-demo; that project now lives in its own repository.
-
+Saudade was extracted from
+[_retrofetch_](https://github.com/roblillack/retrofetch), whose about-box
+dialog (`Container` + `Label` + `Button` + `Image` + `Bevel`) was the
+original demo; that project now lives in its own repository.
 
 ## At a glance
 
@@ -65,53 +70,55 @@ fn main() {
 }
 ```
 
+## Adding Saudade to your project
 
-## Adding saudade to your project
+Saudade is on [crates.io](https://crates.io/crates/saudade); add it the
+usual way:
 
-saudade isn't on crates.io yet — it'll be published as a regular crate
-once the API has settled. Until then, add it as a git dependency:
+```console
+$ cargo add saudade
+```
+
+or list it directly in your `Cargo.toml`:
 
 ```toml
 # Cargo.toml
 [dependencies]
-saudade = { git = "https://github.com/roblillack/saudade" }
+saudade = "0.1"
 ```
 
 The reference apps under `examples/` are plain Cargo examples built against
 this crate; see those for a working setup, and run them with
 `cargo run --example <name>`.
 
-
 ## Design philosophy
 
-saudade follows the architecture sketched in `saudade.md`:
+Saudade follows a small set of architectural principles:
 
-* widgets are ordinary Rust values implementing the `Widget` trait
-* events are typed Rust enums — no integer message IDs
-* widgets request repaint / window-close / focus via a small `EventCtx`
-* the runtime drives `winit` and writes pixels through `softbuffer`
-* widgets paint in **logical pixels**; the library handles DPI
+- widgets are ordinary Rust values implementing the `Widget` trait
+- events are typed Rust enums — no integer message IDs
+- widgets request repaint / window-close / focus via a small `EventCtx`
+- the runtime drives `winit` and writes pixels through `softbuffer`
+- widgets paint in **logical pixels**; the library handles DPI
 
 The mental model is closer to "a typed, ownership-safe GUI runtime" than
 to an object-oriented UI framework.
 
-
 ## Module map
 
-| Module    | Contents                                                        |
-|-----------|-----------------------------------------------------------------|
-| geometry  | `Point`, `Size`, `Rect`, `Color`                                |
-| event     | `Event`, `MouseButton`, `Key`, `NamedKey`, `Modifiers`, `EventCtx` |
-| theme     | `Theme`, default `Theme::windows_31()` palette                  |
-| painter   | `Painter` — drawing primitives + Win 3.1 chrome helpers         |
-| font      | `Font` — system font lookup + glyph rasterization               |
-| widget    | `Widget` trait (paint / event / focus / overlay hooks)          |
-| widgets   | `Container`, `Column`, `Row`, `Label`, `Button`, `Checkbox`, `Bevel`, `Image`, `MenuBar`, `Menu`, `MenuItem`, `ScrollBar`, `Slider`, `ProgressBar`, `List`, `Modal`, `Dialog`, `TextInput`, `TextEditor` |
-| app       | `App`, `WindowConfig` — runtime entry point                     |
+| Module   | Contents                                                                                                                                                                                                 |
+| -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| geometry | `Point`, `Size`, `Rect`, `Color`                                                                                                                                                                         |
+| event    | `Event`, `MouseButton`, `Key`, `NamedKey`, `Modifiers`, `EventCtx`                                                                                                                                       |
+| theme    | `Theme`, default `Theme::windows_31()` palette                                                                                                                                                           |
+| painter  | `Painter` — drawing primitives + Win 3.1 chrome helpers                                                                                                                                                  |
+| font     | `Font` — system font lookup + glyph rasterization                                                                                                                                                        |
+| widget   | `Widget` trait (paint / event / focus / overlay hooks)                                                                                                                                                   |
+| widgets  | `Container`, `Column`, `Row`, `Label`, `Button`, `Checkbox`, `Bevel`, `Image`, `MenuBar`, `Menu`, `MenuItem`, `ScrollBar`, `Slider`, `ProgressBar`, `List`, `Modal`, `Dialog`, `TextInput`, `TextEditor` |
+| app      | `App`, `WindowConfig` — runtime entry point                                                                                                                                                              |
 
 Everything user-facing is re-exported from the crate root; you generally
 just `use saudade::*;`.
-
 
 ## Core types
 
@@ -144,9 +151,8 @@ assert_eq!(r.bottom(), 44);
 let inset = r.inset(2); // shrinks by 2 px on every side
 ```
 
-All coordinates are *logical* pixels (i32). The library multiplies by the
+All coordinates are _logical_ pixels (i32). The library multiplies by the
 OS-reported scale factor when drawing.
-
 
 ## Events
 
@@ -182,7 +188,7 @@ including `Scroll`, so containers route a wheel turn to the widget under the
 pointer — or `None` for `PointerLeave` and keyboard events.
 `Event::is_keyboard()` distinguishes the three keyboard variants.
 
-`Scroll` carries the wheel / trackpad movement in document *lines*, positive
+`Scroll` carries the wheel / trackpad movement in document _lines_, positive
 toward the content's end (`delta_y` down, `delta_x` right). One wheel notch is
 three lines; trackpad pixel deltas become a fractional line count, which the
 backends normalize so both kinds of scroll feed widgets the same units.
@@ -190,8 +196,8 @@ backends normalize so both kinds of scroll feed widgets the same units.
 whenever the pointer is anywhere over the field, leaving the selection and
 caret untouched.
 
-`KeyDown` / `KeyUp` are for *keys* — useful for Backspace, arrows, and
-modifier-bearing shortcuts. `Char` is for *text input* — what the
+`KeyDown` / `KeyUp` are for _keys_ — useful for Backspace, arrows, and
+modifier-bearing shortcuts. `Char` is for _text input_ — what the
 keyboard layout decided the user typed. The runtime suppresses `Char`
 when a command modifier (Ctrl / Alt / Logo) is held so editors don't
 ingest "\x01" for Ctrl+A; the matching `KeyDown` still fires.
@@ -218,7 +224,6 @@ Widgets never poke at the runtime directly. The runtime collects the
 requests after a dispatch completes and applies them all at once, which
 keeps event handling deterministic and re-entrancy-free.
 
-
 ## Theme
 
 ```rust
@@ -241,7 +246,6 @@ face, white top/left highlight, mid-gray bottom/right shadow, black outer
 border, navy/white selection, 11pt text. Pass an alternative via
 `App::with_theme(...)` if you want to skin the same widgets differently.
 
-
 ## Built-in widgets
 
 All widgets implement `Widget` and own their own state. Coordinates are
@@ -249,14 +253,14 @@ always in logical pixels.
 
 ### Layout vs. absolute positioning
 
-saudade ships with two top-level container styles:
+Saudade ships with two top-level container styles:
 
-* **`Container`** — children are placed at absolute logical-pixel positions.
-  This is what you want for *dialogs* (about boxes, simple alerts) that
+- **`Container`** — children are placed at absolute logical-pixel positions.
+  This is what you want for _dialogs_ (about boxes, simple alerts) that
   have a fixed design size and shouldn't reflow. If the OS gives the
   window a larger buffer than the design, the runtime centers the
   Container and fills the surroundings with `theme.background`.
-* **`Column`** — children are stacked top-to-bottom and *flex* with the
+- **`Column`** — children are stacked top-to-bottom and _flex_ with the
   window. Each child is either `add_fixed(widget, height)` (takes a
   declared height) or `add_fill(widget)` (shares whatever space is left
   over). On every window resize, the runtime calls `layout` on the root
@@ -284,15 +288,15 @@ let root = Column::new()
 `Column` also handles capture, focus, accelerator routing, and the
 overlay pass — same contract as `Container`.
 
-* **`Row`** — the horizontal sibling of `Column`. Same `add_fixed(widget,
-  width)` / `add_fill(widget)` API, laying children left-to-right across the
+- **`Row`** — the horizontal sibling of `Column`. Same `add_fixed(widget,
+width)` / `add_fill(widget)` API, laying children left-to-right across the
   full height, with the same capture / focus / accelerator / Tab handling.
   Unlike `Column` it carries no overlay layer — keep modal dialogs on the
   top-level container so there's a single overlay owner.
 
 Both `Column` and `Row` expose `focus_child(index)` to choose a non-default
 initial focus target (e.g. focus a content list instead of a leading toolbar
-field). Custom container widgets outside the crate can reuse saudade's focus
+field). Custom container widgets outside the crate can reuse Saudade's focus
 protocol via `EventCtx::is_focus_requested` / `is_focus_released` /
 `clear_focus_flags`.
 
@@ -300,22 +304,22 @@ protocol via `EventCtx::is_focus_requested` / `is_focus_released` /
 
 A flat collection of widgets at absolute positions. The container handles:
 
-* **hit testing** — pointer events go to the top-most child whose bounds
+- **hit testing** — pointer events go to the top-most child whose bounds
   contain the cursor;
-* **pointer capture** — a child whose `captures_pointer()` returns true
+- **pointer capture** — a child whose `captures_pointer()` returns true
   keeps receiving pointer events until it un-captures (used by `Button`
   and `MenuBar`);
-* **keyboard focus** — clicking a focusable child makes it the keyboard
+- **keyboard focus** — clicking a focusable child makes it the keyboard
   target; keyboard events route there only;
-* **focus cycling** — Tab and Shift+Tab walk forward / backward through
+- **focus cycling** — Tab and Shift+Tab walk forward / backward through
   focusable children, wrapping at either end. The container looks at
   each child's `focusable()` and calls `focus_first` on the new target,
   so wrapper widgets that delegate focus to a nested leaf are handled
   transparently;
-* **accelerator routing** — keyboard events also go to any child whose
+- **accelerator routing** — keyboard events also go to any child whose
   `accepts_accelerators()` returns true (used by `MenuBar` to catch
   Alt+letter combos while a sibling holds focus);
-* **overlay pass** — every widget's `paint_overlay` runs after every
+- **overlay pass** — every widget's `paint_overlay` runs after every
   widget's regular `paint`, so popups (menus, tooltips) draw on top of
   siblings.
 
@@ -466,14 +470,14 @@ top-level menus. Click outside (or press Esc) to dismiss.
 
 **Keyboard navigation** (active while a menu is open):
 
-| Key             | Effect                                              |
-|-----------------|-----------------------------------------------------|
-| ↑ / ↓           | move highlight to the previous / next action (skipping separators; wraps) |
-| Home / End      | jump to first / last action                         |
-| ← / →           | switch to the previous / next top-level menu        |
-| Enter           | fire the currently highlighted action               |
-| letter          | fire the action whose mnemonic matches              |
-| Esc             | dismiss the menu                                    |
+| Key        | Effect                                                                    |
+| ---------- | ------------------------------------------------------------------------- |
+| ↑ / ↓      | move highlight to the previous / next action (skipping separators; wraps) |
+| Home / End | jump to first / last action                                               |
+| ← / →      | switch to the previous / next top-level menu                              |
+| Enter      | fire the currently highlighted action                                     |
+| letter     | fire the action whose mnemonic matches                                    |
+| Esc        | dismiss the menu                                                          |
 
 Menus opened with Alt+letter (or arrow-switched left/right) always
 pre-highlight the **first** action of the newly opened menu — the
@@ -488,14 +492,14 @@ widget below — typing in an open menu doesn't leak into the editor.
 spawns a borderless window for the popup, sized exactly to its
 contents and behaving like Chrome / Firefox menus on each backend:
 
-* **X11** (through winit): an *override-redirect* window with the
+- **X11** (through winit): an _override-redirect_ window with the
   `_NET_WM_WINDOW_TYPE_DROPDOWN_MENU` hint. The WM is bypassed
   entirely, so the popup appears instantly at the requested position
   and size and can extend beyond the main window's edges. The runtime
   also re-anchors it via `Window::set_outer_position` whenever the
   main window emits a `Moved` event, so the popup follows window
   drags.
-* **Wayland** (through smithay-client-toolkit): a real `xdg_popup`
+- **Wayland** (through smithay-client-toolkit): a real `xdg_popup`
   surface created with an `xdg_positioner` anchored to the parent
   surface. The compositor handles placement, follow-on-drag, and
   auto-dismiss (sending `popup_done`, which we translate into a
@@ -523,12 +527,12 @@ bar.set_line_step(1);
 
 Interaction:
 
-| Input              | Effect                                            |
-|--------------------|---------------------------------------------------|
-| click arrow        | scroll by `line_step` toward the arrow            |
-| click track        | scroll by `viewport` (one page) toward the click  |
-| drag thumb         | scroll proportionally to the drag distance        |
-| mouse wheel        | scroll three lines per notch along the bar's axis |
+| Input       | Effect                                            |
+| ----------- | ------------------------------------------------- |
+| click arrow | scroll by `line_step` toward the arrow            |
+| click track | scroll by `viewport` (one page) toward the click  |
+| drag thumb  | scroll proportionally to the drag distance        |
+| mouse wheel | scroll three lines per notch along the bar's axis |
 
 The thumb is sized as `track_extent × viewport / (viewport + max)` with a
 sane minimum so it stays grabbable even on huge documents. Use
@@ -538,7 +542,7 @@ sane minimum so it stays grabbable even on huge documents. Use
 
 A Win 3.1 trackbar: a thin sunken groove with a raised, draggable thumb that
 picks an integer value in an inclusive `[min, max]` range. Unlike `ScrollBar`
-(which models a *scroll position* over a viewport), a `Slider` is a plain value
+(which models a _scroll position_ over a viewport), a `Slider` is a plain value
 control — use it to dial a number.
 
 ```rust
@@ -555,16 +559,16 @@ let v: i32 = slider.value();
 
 Interaction:
 
-| Input                | Effect                                            |
-|----------------------|---------------------------------------------------|
-| click / drag         | move the thumb to the cursor (fires `on_change` live) |
-| ← / ↓                | decrease by `step`                                |
-| → / ↑                | increase by `step`                                |
-| PageUp / PageDown    | jump by a tenth of the range                      |
-| Home / End           | snap to `min` / `max`                             |
+| Input             | Effect                                                |
+| ----------------- | ----------------------------------------------------- |
+| click / drag      | move the thumb to the cursor (fires `on_change` live) |
+| ← / ↓             | decrease by `step`                                    |
+| → / ↑             | increase by `step`                                    |
+| PageUp / PageDown | jump by a tenth of the range                          |
+| Home / End        | snap to `min` / `max`                                 |
 
 The slider is focusable and draws a dotted focus rectangle inside the thumb
-when focused. `on_change` fires *during* a drag, not just on release, so a
+when focused. `on_change` fires _during_ a drag, not just on release, so a
 gauge or label bound to it updates as the user moves the thumb. Use
 `set_on_change` to install the handler after construction (when the slider is
 held behind an `Rc<RefCell<…>>`).
@@ -613,23 +617,23 @@ the proportional default — pick whichever font you want per call via
 
 Editing operations:
 
-| Input               | Effect                                         |
-|---------------------|------------------------------------------------|
-| typing              | inserts the character (replaces selection)     |
-| Backspace           | deletes the previous char or the selection     |
-| Delete              | deletes the next char or the selection         |
-| Enter               | splits the line (replacing the selection)      |
-| ← / →               | move cursor one character                      |
-| ↑ / ↓               | move cursor one line, clamping column          |
-| Home / End          | jump to line start / end                       |
-| PageUp / PageDown   | jump by one viewport                           |
-| Shift + any move    | extends the selection                          |
-| Ctrl + A            | select all                                     |
-| Ctrl + C            | copy selection to the OS clipboard             |
-| Ctrl + X            | cut selection to the OS clipboard              |
-| Ctrl + V            | paste at the cursor (replaces selection)       |
-| left click          | place the cursor                               |
-| drag with left      | extend the selection                           |
+| Input             | Effect                                     |
+| ----------------- | ------------------------------------------ |
+| typing            | inserts the character (replaces selection) |
+| Backspace         | deletes the previous char or the selection |
+| Delete            | deletes the next char or the selection     |
+| Enter             | splits the line (replacing the selection)  |
+| ← / →             | move cursor one character                  |
+| ↑ / ↓             | move cursor one line, clamping column      |
+| Home / End        | jump to line start / end                   |
+| PageUp / PageDown | jump by one viewport                       |
+| Shift + any move  | extends the selection                      |
+| Ctrl + A          | select all                                 |
+| Ctrl + C          | copy selection to the OS clipboard         |
+| Ctrl + X          | cut selection to the OS clipboard          |
+| Ctrl + V          | paste at the cursor (replaces selection)   |
+| left click        | place the cursor                           |
+| drag with left    | extend the selection                       |
 
 Selected text renders with `theme.highlight_bg` (navy) behind it and
 `theme.highlight_text` (white) on top. Multi-line selections show a
@@ -653,7 +657,7 @@ the native `wlr-data-control` protocol; clipboard exchange with other
 Wayland-native apps works without needing XWayland.
 
 `TextEditor` keeps content as `Vec<String>` (one entry per line) and
-tracks `(row, col)` in *characters*, not bytes — multi-byte UTF-8 is
+tracks `(row, col)` in _characters_, not bytes — multi-byte UTF-8 is
 handled correctly. Per-character widths are cached during paint so a
 click can be mapped to a column position without a `Painter` at event
 time — and the cache is keyed by row, so only rows currently on screen
@@ -661,7 +665,6 @@ contribute work. The scrollbar's canonical position is its own
 `value()`; the editor reads it (no duplicate state). Clicking focuses
 the widget; the cursor only renders while focused; vertical scroll
 follows the cursor automatically.
-
 
 ### `Dropdown`
 
@@ -688,21 +691,21 @@ let label: Option<&str> = flight_type.selected_text();
 `Vec<String>`); the first item becomes the initial selection. Use
 `set_on_change` to install the handler after construction when the dropdown is
 held behind an `Rc<RefCell<…>>` and needs to talk to widgets built later — the
-pattern the flight booker uses. `set_selected` updates the value *without*
+pattern the flight booker uses. `set_selected` updates the value _without_
 firing `on_change`, mirroring the other widgets' setters.
 
 Interaction:
 
-| Input                     | Effect                                          |
-|---------------------------|-------------------------------------------------|
-| click field               | open / close the list                           |
-| click a row               | select it and close                             |
-| click outside / Esc       | dismiss without changing the selection          |
-| ↑ / ↓ (closed)            | step the selection in place                     |
-| Space (closed)            | open the list                                   |
-| ↑ / ↓ (open)              | move the highlight (clamped, no wrap)           |
-| Home / End (open)         | highlight the first / last row                  |
-| Enter / Space (open)      | commit the highlight and close                  |
+| Input                | Effect                                 |
+| -------------------- | -------------------------------------- |
+| click field          | open / close the list                  |
+| click a row          | select it and close                    |
+| click outside / Esc  | dismiss without changing the selection |
+| ↑ / ↓ (closed)       | step the selection in place            |
+| Space (closed)       | open the list                          |
+| ↑ / ↓ (open)         | move the highlight (clamped, no wrap)  |
+| Home / End (open)    | highlight the first / last row         |
+| Enter / Space (open) | commit the highlight and close         |
 
 The dropdown is focusable and draws a dotted focus rectangle inside the field.
 While the list is open it captures the pointer, so popup clicks and
@@ -714,7 +717,7 @@ An open dropdown also owns the keyboard: `Container` / `Column` suppress the
 accelerator pass while the focused child is capturing, so a sibling **default
 `Button`** doesn't steal Enter — the keystroke commits the highlighted row
 instead. Once the list closes, Enter fires the default button again. The flight
-booker relies on this: its Book button is the default action *and* lives next to
+booker relies on this: its Book button is the default action _and_ lives next to
 the flight-type dropdown.
 
 ### Disabled controls
@@ -727,7 +730,7 @@ on a button, greyed text elsewhere), refuses keyboard focus, and ignores every
 input event — a disabled default `Button` even gives up its Enter accelerator.
 The flight booker uses this to grey out the return-date field for one-way
 flights and to block the Book button until the dates are valid; it surfaces an
-*ill-formatted* date not by recoloring the field but with a small red `Label`
+_ill-formatted_ date not by recoloring the field but with a small red `Label`
 beside it.
 
 ## The `Widget` trait
@@ -750,30 +753,30 @@ pub trait Widget {
 }
 ```
 
-* `bounds` is the widget's logical-pixel hit rectangle.
-* `paint` draws the widget using `Painter` and the active `Theme`.
-* `paint_overlay` runs after every sibling's `paint` — for popups,
+- `bounds` is the widget's logical-pixel hit rectangle.
+- `paint` draws the widget using `Painter` and the active `Theme`.
+- `paint_overlay` runs after every sibling's `paint` — for popups,
   tooltips, drag previews. Default: no-op.
-* `event` reacts to typed input; default is no-op.
-* `captures_pointer` keeps pointer events flowing to this widget while
+- `event` reacts to typed input; default is no-op.
+- `captures_pointer` keeps pointer events flowing to this widget while
   it's true, even if the cursor leaves its bounds (used by buttons
   during press, by menus while open).
-* `focusable` flags the widget as a keyboard target. The container only
+- `focusable` flags the widget as a keyboard target. The container only
   routes keyboard events to focused children.
-* `set_focused` is called when the widget gains or loses focus — use
+- `set_focused` is called when the widget gains or loses focus — use
   this to show/hide a cursor, commit pending input, etc.
-* `accepts_accelerators` makes the widget receive keyboard events even
+- `accepts_accelerators` makes the widget receive keyboard events even
   without focus — used by menu bars for Alt+letter combos.
-* `layout` is called by a layout-aware parent (e.g., `Column`) whenever
+- `layout` is called by a layout-aware parent (e.g., `Column`) whenever
   the available rect changes. Widgets used in absolutely-positioned
   layouts ignore it; flexible widgets store the new rect and propagate
   it to their own children.
-* `focus_first` is called by the runtime on the root widget once the
+- `focus_first` is called by the runtime on the root widget once the
   window is configured. The default focuses `self` if `focusable()` is
   true; `Container` and `Column` override it to walk their children and
   delegate, so the first focusable widget in the tree becomes the
   initial keyboard target without any manual wiring.
-* `popup_request` returns `Some` while the widget wants the runtime to
+- `popup_request` returns `Some` while the widget wants the runtime to
   host a popup (e.g., menubar dropdowns) in its own top-level window.
   Containers propagate it from their children; the runtime polls it
   after each event burst and opens / repositions / closes the popup
@@ -793,7 +796,6 @@ impl Widget for ColorBox {
     }
 }
 ```
-
 
 ## Painter API
 
@@ -841,7 +843,6 @@ let s = p.size();    // physical buffer size in pixels
 let z = p.scale();   // f32 logical-to-physical scale (e.g. 1.0, 1.25, 2.0)
 ```
 
-
 ## Font handling
 
 `Font::load_system()` walks `fontdb` for a reasonable proportional sans
@@ -861,12 +862,11 @@ none of those match, fontdb's monospace flag is used as a fallback.
 `Painter::text` / `Painter::measure_text` keep using the proportional
 default.
 
-saudade does **not** ship a bundled bitmap font, so its text rendering
+Saudade does **not** ship a bundled bitmap font, so its text rendering
 inherits the local system font. The Win 3.1 chrome still looks right,
 but the typography will be Liberation Sans on most Linux boxes rather
 than MS Sans Serif — close enough for retro nostalgia, not faithful to
 the pixel.
-
 
 ## Runtime
 
@@ -898,17 +898,16 @@ until the user closes the window or a widget calls `EventCtx::close`.
 You can have at most one `App` per process today; multi-window support
 is on the roadmap.
 
-
 ## Backends
 
-saudade picks the windowing backend at startup based on the session:
+Saudade picks the windowing backend at startup based on the session:
 
-* If `WAYLAND_DISPLAY` is set and non-empty, the runtime talks **pure
+- If `WAYLAND_DISPLAY` is set and non-empty, the runtime talks **pure
   smithay-client-toolkit** — no winit on the Wayland code path.
   This is what gets us real `xdg_popup` popups and lets us drop
   winit's `wayland-csd-adwaita` and `wayland-dlopen` features from
   the dependency tree.
-* Otherwise (X11, including XWayland when `WAYLAND_DISPLAY` is unset)
+- Otherwise (X11, including XWayland when `WAYLAND_DISPLAY` is unset)
   the runtime drives winit 0.30 with only the `x11` feature enabled.
   Popups are X11 override-redirect windows.
 
@@ -916,30 +915,29 @@ The widget tree, painter, fonts, clipboard, theme, and every public
 API are identical across both paths — only `app.rs` + `wayland.rs`
 differ.
 
-
 ## DPI and resizing
 
 Widgets always work in **logical pixels**. The library handles the
 transformation to physical pixels itself.
 
-* The window is requested at `LogicalSize(size.w, size.h)`. winit + the
+- The window is requested at `LogicalSize(size.w, size.h)`. winit + the
   compositor pick the physical buffer for the monitor's actual DPI.
-* The `Painter` uses `winit.scale_factor()` (a possibly-fractional `f32`,
+- The `Painter` uses `winit.scale_factor()` (a possibly-fractional `f32`,
   e.g. 1.0, 1.25, 1.5, 2.0) directly.
-* Rectangle edges are snapped independently to physical pixels —
+- Rectangle edges are snapped independently to physical pixels —
   adjacent rects always share an exact pixel boundary, so chrome stays
   crisp regardless of DPI.
-* Text is rasterized once at `font_size × scale` physical pixels via
+- Text is rasterized once at `font_size × scale` physical pixels via
   fontdue. No upscale, no resample, no blur.
 
 When the window is resized larger than the design size, **content does
 not stretch** — it stays at its natural logical size. What happens
 around it depends on the root widget:
 
-* a `Container` (absolute positioning) keeps its design size; the
+- a `Container` (absolute positioning) keeps its design size; the
   runtime centers it and fills the surroundings with `theme.background`,
   so dialogs always look the same regardless of window size;
-* a `Column` (layout container) receives the new bounds via
+- a `Column` (layout container) receives the new bounds via
   `Widget::layout` and reflows its children so the window's chrome and
   content fill the available space — pixels stay the same physical size
   but, e.g., the editor grows wider and taller.
@@ -953,7 +951,6 @@ physical width rounds to 1 vs 2 pixels. The variation is invisible in
 practice on the dialogs we've built; if you hit a case where it
 matters, draw chrome at a fixed `round(scale)` thickness using
 `Painter::scale()`.
-
 
 ## End-to-end example: a Notepad-style editor
 
@@ -1016,40 +1013,32 @@ A more complete version, including Open/Save against a path passed as
 `argv[1]`, lives in `examples/notepad.rs` in this repository
 (`cargo run --example notepad`).
 
-
 ## Non-goals
 
 The library does **not**:
 
-* emulate HTML/CSS
-* embed a browser engine
-* provide immediate-mode-only APIs
-* rely on heavy procedural-macro DSLs
-* hide ownership semantics
-* support GPU rendering, animation, or accessibility yet
+- emulate HTML/CSS
+- embed a browser engine
+- provide immediate-mode-only APIs
+- rely on heavy procedural-macro DSLs
+- hide ownership semantics
+- support GPU rendering, animation, or accessibility yet
 
 It is meant to stay small enough that you can hold the whole codebase in
 your head.
 
-
 ## Roadmap
 
-Things that would fit saudade's spirit but aren't there yet:
+Things that would fit Saudade's spirit but aren't there yet:
 
-* `Grid` container (the horizontal `Row` sibling of `Column` now exists)
-* `RadioButton` (single-line `TextInput`, `Checkbox` and `List` now exist)
-* Horizontal scrolling in `TextEditor` (a horizontal `ScrollBar` is
+- `Grid` container (the horizontal `Row` sibling of `Column` now exists)
+- `RadioButton` (single-line `TextInput`, `Checkbox` and `List` now exist)
+- Horizontal scrolling in `TextEditor` (a horizontal `ScrollBar` is
   already implemented; the editor just doesn't ride it yet)
-* Mouse-wheel scroll events
-* Undo / redo in `TextEditor`
-* Save-As / Open file dialogs
-* Optional bitmap fonts for fully retro-faithful text
-* Multi-window support
-* Native menu bars where the platform offers them
-
-Things explicitly **not** on the roadmap: a 3D scene graph, async
-runtimes, plugin systems, themable web components.
-
+- Undo / redo in `TextEditor`
+- Save-As / Open file dialogs
+- Multi-window support
+- Native menu bars where the platform offers them
 
 ## License
 
