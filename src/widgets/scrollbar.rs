@@ -37,6 +37,11 @@ pub struct ScrollBar {
     /// While dragging the thumb, the pointer's offset from the thumb's
     /// leading edge (top for vertical, left for horizontal).
     drag_offset: Option<i32>,
+    /// Sub-line scroll-wheel remainder. Wheel / trackpad deltas arrive in
+    /// fractional lines; we accumulate them here and only move `value` once a
+    /// whole line has built up, so a high-resolution trackpad scrolls smoothly
+    /// instead of snapping a line at a time.
+    wheel_accum: f32,
 }
 
 impl ScrollBar {
@@ -49,6 +54,7 @@ impl ScrollBar {
             viewport: 0,
             line_step: 1,
             drag_offset: None,
+            wheel_accum: 0.0,
         }
     }
 
@@ -180,6 +186,30 @@ impl ScrollBar {
         self.set_value(self.value.saturating_add(delta));
     }
 
+    /// Apply a wheel / trackpad scroll measured in (possibly fractional)
+    /// lines along this bar's axis. Sub-line movement is banked in
+    /// `wheel_accum` until it adds up to a whole line. Returns `true` if
+    /// `value` actually moved, so callers can decide whether to repaint.
+    fn scroll_lines(&mut self, lines: f32) -> bool {
+        self.wheel_accum += lines;
+        let whole = self.wheel_accum.trunc();
+        self.wheel_accum -= whole;
+        let step = whole as i32;
+        if step == 0 {
+            return false;
+        }
+        let before = self.value;
+        self.scroll_by(step);
+        if self.value == before {
+            // Saturated at an end — drop the leftover so reversing direction
+            // responds on the very next notch instead of unwinding the bank.
+            self.wheel_accum = 0.0;
+            false
+        } else {
+            true
+        }
+    }
+
     fn page_step(&self) -> i32 {
         self.viewport.max(1)
     }
@@ -291,6 +321,17 @@ impl Widget for ScrollBar {
             } if self.drag_offset.is_some() => {
                 self.drag_offset = None;
                 ctx.request_paint();
+            }
+            Event::Scroll {
+                delta_x, delta_y, ..
+            } => {
+                let lines = match self.orientation {
+                    Orientation::Vertical => *delta_y,
+                    Orientation::Horizontal => *delta_x,
+                };
+                if self.scroll_lines(lines) {
+                    ctx.request_paint();
+                }
             }
             _ => {}
         }

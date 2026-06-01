@@ -244,6 +244,51 @@ fn scrollbar_horizontal_mid() {
     });
 }
 
+/// The mouse wheel drives the scroll position directly: positive `delta_y`
+/// moves toward the end, negative back toward the start, sub-line deltas bank
+/// until they make a whole line, and the value saturates at both ends. A
+/// vertical bar reads `delta_y`; a horizontal bar reads `delta_x`.
+#[test]
+fn scrollbar_mouse_wheel_moves_value() {
+    use saudade::mock::MockBackend;
+
+    let backend = MockBackend::new(40, 160);
+    let scroll = |dx: f32, dy: f32| Event::Scroll {
+        pos: saudade::Point::new(10, 80),
+        delta_x: dx,
+        delta_y: dy,
+    };
+
+    let mut bar = ScrollBar::vertical(Rect::new(2, 2, 16, 156));
+    bar.set_range(/* viewport */ 5, /* max */ 40);
+
+    backend.dispatch(&mut bar, &scroll(0.0, 3.0));
+    assert_eq!(bar.value(), 3, "positive delta_y scrolls toward the end");
+    backend.dispatch(&mut bar, &scroll(0.0, -1.0));
+    assert_eq!(bar.value(), 2, "negative delta_y scrolls back");
+    backend.dispatch(&mut bar, &scroll(7.0, 0.0));
+    assert_eq!(bar.value(), 2, "a vertical bar ignores delta_x");
+
+    backend.dispatch(&mut bar, &scroll(0.0, 0.5));
+    assert_eq!(bar.value(), 2, "half a line banks without moving yet");
+    backend.dispatch(&mut bar, &scroll(0.0, 0.5));
+    assert_eq!(bar.value(), 3, "the second half completes a whole line");
+
+    backend.dispatch(&mut bar, &scroll(0.0, -100.0));
+    assert_eq!(bar.value(), 0, "value saturates at the start");
+    backend.dispatch(&mut bar, &scroll(0.0, 100.0));
+    assert_eq!(bar.value(), 40, "value saturates at the end");
+
+    let mut hbar = ScrollBar::horizontal(Rect::new(2, 2, 156, 16));
+    hbar.set_range(5, 40);
+    backend.dispatch(&mut hbar, &scroll(2.0, 9.0));
+    assert_eq!(
+        hbar.value(),
+        2,
+        "a horizontal bar reads delta_x, not delta_y"
+    );
+}
+
 // ---------------------------------------------------------------- ProgressBar
 
 #[test]
@@ -699,6 +744,74 @@ fn list_scrolls() {
                 .add(list),
         )
     });
+}
+
+/// The same overflowing list as `list_scrolls`, but after a few mouse-wheel
+/// notches have rolled the viewport down to later entries.
+#[test]
+fn list_scrolls_with_wheel() {
+    snapshot_at_all_scales("list_scrolls_with_wheel", 200, 100, || {
+        let mut items = Vec::new();
+        for n in 1..=20 {
+            items
+                .push(ListItem::new(format!("entry {:>2}", n)).with_icon(swatch_icon(Color::NAVY)));
+        }
+        let mut list = laid_out_list(Rect::new(8, 8, 184, 84), items);
+        // Six lines down: the top of the field now starts a few rows in.
+        saudade::mock::MockBackend::new(200, 100).dispatch(
+            &mut list,
+            &Event::Scroll {
+                pos: saudade::Point::new(60, 40),
+                delta_x: 0.0,
+                delta_y: 6.0,
+            },
+        );
+        Box::new(
+            Container::new(200, 100)
+                .with_background(Color::LIGHT_GRAY)
+                .add(list),
+        )
+    });
+}
+
+/// The wheel scrolls the list only while the pointer is over it, and never
+/// disturbs the selection.
+#[test]
+fn list_mouse_wheel_scrolls_when_hovered() {
+    use saudade::mock::MockBackend;
+
+    let rect = Rect::new(8, 8, 184, 84);
+    let items: Vec<ListItem> = (0..40).map(|n| ListItem::new(format!("row {n}"))).collect();
+    let mut list = laid_out_list(rect, items);
+    let backend = MockBackend::new(200, 100);
+
+    let over = backend.dispatch(
+        &mut list,
+        &Event::Scroll {
+            pos: saudade::Point::new(50, 40),
+            delta_x: 0.0,
+            delta_y: 9.0,
+        },
+    );
+    assert!(over.paint_requested, "scrolling over the list repaints it");
+    assert_eq!(
+        list.selected_index(),
+        None,
+        "a wheel scroll leaves the selection alone"
+    );
+
+    let away = backend.dispatch(
+        &mut list,
+        &Event::Scroll {
+            pos: saudade::Point::new(300, 300),
+            delta_x: 0.0,
+            delta_y: 9.0,
+        },
+    );
+    assert!(
+        !away.paint_requested,
+        "a scroll outside the list's bounds is ignored"
+    );
 }
 
 #[test]

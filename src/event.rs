@@ -1,5 +1,17 @@
 use crate::geometry::Point;
 
+/// How many document lines one mouse-wheel detent (notch) scrolls. Matches the
+/// modern desktop default of three lines per notch. The platform backends
+/// multiply a raw wheel step by this when building an [`Event::Scroll`], so the
+/// "3 lines per notch" policy lives in one place rather than in every widget.
+pub(crate) const WHEEL_LINES_PER_DETENT: f32 = 3.0;
+
+/// Nominal logical-pixel height of one line. The backends divide a continuous
+/// (trackpad / high-resolution) pixel scroll delta by this to express it in the
+/// same line units a wheel detent uses, so both kinds of scroll feed widgets a
+/// single currency.
+pub(crate) const SCROLL_PIXELS_PER_LINE: f32 = 16.0;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MouseButton {
     Left,
@@ -87,6 +99,19 @@ pub enum Event {
         button: MouseButton,
     },
     PointerLeave,
+    /// The mouse wheel turned or a trackpad scroll gesture moved. `delta` is
+    /// measured in document *lines*, and positive values scroll toward the end
+    /// of the content — down for `delta_y`, right for `delta_x` — the same
+    /// direction a [`ScrollBar`](crate::widgets::ScrollBar)'s value grows. One
+    /// wheel notch is [`WHEEL_LINES_PER_DETENT`] lines; trackpad pixel deltas
+    /// are converted to a fractional line count, which is why the fields are
+    /// `f32`. `pos` is the cursor's position when the wheel turned, so a
+    /// container can route the gesture to the widget under the pointer.
+    Scroll {
+        pos: Point,
+        delta_x: f32,
+        delta_y: f32,
+    },
     KeyDown {
         key: Key,
         modifiers: Modifiers,
@@ -111,7 +136,8 @@ impl Event {
         match self {
             Event::PointerMove { pos }
             | Event::PointerDown { pos, .. }
-            | Event::PointerUp { pos, .. } => Some(*pos),
+            | Event::PointerUp { pos, .. }
+            | Event::Scroll { pos, .. } => Some(*pos),
             _ => None,
         }
     }

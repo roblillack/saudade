@@ -156,6 +156,7 @@ pub enum Event {
     PointerDown  { pos: Point, button: MouseButton },
     PointerUp    { pos: Point, button: MouseButton },
     PointerLeave,
+    Scroll       { pos: Point, delta_x: f32, delta_y: f32 },
     KeyDown      { key: Key, modifiers: Modifiers },
     KeyUp        { key: Key, modifiers: Modifiers },
     Char         { ch: char, modifiers: Modifiers },
@@ -176,9 +177,18 @@ pub enum NamedKey {
 pub struct Modifiers { pub shift: bool, pub control: bool, pub alt: bool, pub logo: bool }
 ```
 
-`Event::position()` returns the cursor `Point` for positional events, or
-`None` for `PointerLeave` and keyboard events. `Event::is_keyboard()`
-distinguishes the three keyboard variants.
+`Event::position()` returns the cursor `Point` for positional events —
+including `Scroll`, so containers route a wheel turn to the widget under the
+pointer — or `None` for `PointerLeave` and keyboard events.
+`Event::is_keyboard()` distinguishes the three keyboard variants.
+
+`Scroll` carries the wheel / trackpad movement in document *lines*, positive
+toward the content's end (`delta_y` down, `delta_x` right). One wheel notch is
+three lines; trackpad pixel deltas become a fractional line count, which the
+backends normalize so both kinds of scroll feed widgets the same units.
+`ScrollBar`, `List`, and `TextEditor` all honor it; the latter two scroll
+whenever the pointer is anywhere over the field, leaving the selection and
+caret untouched.
 
 `KeyDown` / `KeyUp` are for *keys* — useful for Backspace, arrows, and
 modifier-bearing shortcuts. `Char` is for *text input* — what the
@@ -518,6 +528,7 @@ Interaction:
 | click arrow        | scroll by `line_step` toward the arrow            |
 | click track        | scroll by `viewport` (one page) toward the click  |
 | drag thumb         | scroll proportionally to the drag distance        |
+| mouse wheel        | scroll three lines per notch along the bar's axis |
 
 The thumb is sized as `track_extent × viewport / (viewport + max)` with a
 sane minimum so it stays grabbable even on huge documents. Use

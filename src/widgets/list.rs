@@ -380,6 +380,15 @@ impl Widget for List {
             self.v_scrollbar.event(event, ctx);
             return;
         }
+        // The wheel scrolls the field whenever the pointer is anywhere over
+        // it — not just over the scrollbar gutter — without disturbing the
+        // selection, matching native list boxes.
+        if let Event::Scroll { pos, .. } = event {
+            if self.rect.contains(*pos) {
+                self.v_scrollbar.event(event, ctx);
+            }
+            return;
+        }
         if let Some(pos) = event.position()
             && self.v_scrollbar.rect().contains(pos)
         {

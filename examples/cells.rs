@@ -860,6 +860,16 @@ impl Widget for Grid {
             ctx.request_paint();
             return;
         }
+        // Mouse wheel over the sheet scrolls both axes: the vertical wheel
+        // moves rows, a horizontal wheel (or tilt) moves columns.
+        if let Event::Scroll { pos, .. } = event {
+            if viewport_rect().contains(*pos) {
+                self.vbar.event(event, ctx);
+                self.hbar.event(event, ctx);
+                ctx.request_paint();
+            }
+            return;
+        }
         if let Some(pos) = event.position() {
             if vbar_rect().contains(pos) {
                 self.vbar.event(event, ctx);
