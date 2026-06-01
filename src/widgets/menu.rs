@@ -11,6 +11,8 @@ const BAR_LABEL_INSET_Y: i32 = 1;
 const POPUP_PADDING_X: i32 = 18;
 const POPUP_PADDING_Y: i32 = 3;
 const ITEM_HEIGHT: i32 = 18;
+/// Gap between an item's label and its right-aligned accelerator hint.
+const ACCEL_GAP: i32 = 24;
 const ITEM_TEXT_INSET_Y: i32 = 1;
 const SEPARATOR_HEIGHT: i32 = 6;
 const SHADOW_SIZE: i32 = 2;
@@ -23,6 +25,10 @@ pub enum MenuItem {
     Action {
         /// Raw label as supplied; may contain `&X` to mark the mnemonic.
         label: String,
+        /// Optional accelerator hint (e.g. `"Ctrl+Enter"`) shown right-aligned
+        /// in the drop-down. Display only — the binding itself is wired by the
+        /// application; the menu never acts on it.
+        accel: Option<String>,
         callback: Box<dyn FnMut(&mut EventCtx)>,
     },
     Separator,
@@ -35,8 +41,18 @@ impl MenuItem {
     {
         MenuItem::Action {
             label: label.into(),
+            accel: None,
             callback: Box::new(callback),
         }
+    }
+
+    /// Attach a right-aligned accelerator hint to an action item, advertising
+    /// the keyboard shortcut the application binds for it. No-op on separators.
+    pub fn with_accel(mut self, accel: impl Into<String>) -> Self {
+        if let MenuItem::Action { accel: slot, .. } = &mut self {
+            *slot = Some(accel.into());
+        }
+        self
     }
 
     pub fn separator() -> Self {
@@ -198,8 +214,9 @@ impl MenuBar {
         let menu = &self.menus[menu_idx];
 
         let mut max_label = 0;
+        let mut max_accel = 0;
         for item in &menu.items {
-            if let MenuItem::Action { label, .. } = item {
+            if let MenuItem::Action { label, accel, .. } = item {
                 let parsed = parse_label(label);
                 let w = painter
                     .measure_text(&parsed.display, theme.menu_font_size)
@@ -207,9 +224,22 @@ impl MenuBar {
                 if w > max_label {
                     max_label = w;
                 }
+                if let Some(accel) = accel {
+                    let aw = painter.measure_text(accel, theme.menu_font_size).w;
+                    if aw > max_accel {
+                        max_accel = aw;
+                    }
+                }
             }
         }
-        let width = max_label + POPUP_PADDING_X * 2;
+        // The accelerator column only widens the popup when some item carries
+        // one, so accelerator-free menus keep their original width.
+        let accel_col = if max_accel > 0 {
+            ACCEL_GAP + max_accel
+        } else {
+            0
+        };
+        let width = max_label + accel_col + POPUP_PADDING_X * 2;
         let mut height = POPUP_PADDING_Y * 2;
         for item in &menu.items {
             height += item.height();
@@ -399,7 +429,7 @@ impl Widget for MenuBar {
         let mut y = popup.y + POPUP_PADDING_Y;
         for (i, item) in self.menus[menu_idx].items.iter().enumerate() {
             match item {
-                MenuItem::Action { label, .. } => {
+                MenuItem::Action { label, accel, .. } => {
                     let row = Rect::new(popup.x + 1, y, popup.w - 2, ITEM_HEIGHT);
                     let parsed = parse_label(label);
                     let (bg, fg) = if self.hovered_item == Some(i) {
@@ -417,6 +447,19 @@ impl Widget for MenuBar {
                         theme.menu_font_size,
                         fg,
                     );
+                    // Accelerator hint, right-aligned with the same inset the
+                    // label carries on the left.
+                    if let Some(accel) = accel {
+                        let aw = painter.measure_text(accel, theme.menu_font_size).w;
+                        let ax = row.right() - (POPUP_PADDING_X - 4) - aw;
+                        painter.text(
+                            ax,
+                            row.y + ITEM_TEXT_INSET_Y,
+                            accel,
+                            theme.menu_font_size,
+                            fg,
+                        );
+                    }
                     y += ITEM_HEIGHT;
                 }
                 MenuItem::Separator => {
