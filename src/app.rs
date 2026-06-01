@@ -240,6 +240,21 @@ impl ApplicationHandler for AppHandler {
             p.needs_redraw = false;
         }
     }
+
+    fn exiting(&mut self, _event_loop: &ActiveEventLoop) {
+        // Tear the windows (and the softbuffer surfaces holding `Rc<Window>`
+        // clones) down here, while the event loop is still alive. On macOS a
+        // winit `Window` dropped *after* `run_app` returns calls into a
+        // by-then-deconfigured `NSApplication` delegate and panics inside
+        // `Window::drop` — and a panic in `drop` can't unwind, so the process
+        // aborts. Releasing every `Rc<Window>` now drops the windows while the
+        // delegate is still configured. Order: surfaces/context before the
+        // window handles, since they hold the other `Rc` clones.
+        self.popup = None;
+        self.main_surface = None;
+        self.context = None;
+        self.main_win = None;
+    }
 }
 
 impl AppHandler {
