@@ -133,6 +133,17 @@ impl Column {
         if let Some(idx) = self.captured {
             return Some(idx);
         }
+        // A child holding an open popup (e.g. a `MenuBar` opened from the
+        // keyboard) owns pointer events even though no press ever established
+        // capture — otherwise a click would fall through to whatever sits behind
+        // the popup that's drawn on top (the icon underneath an open menu).
+        if let Some(idx) = self
+            .children
+            .iter()
+            .position(|c| c.widget.accepts_accelerators() && c.widget.captures_pointer())
+        {
+            return Some(idx);
+        }
         let pos = event.position()?;
         (0..self.children.len())
             .rev()
@@ -437,5 +448,111 @@ impl Widget for Column {
     fn wants_ticks(&self) -> bool {
         self.children.iter().any(|c| c.widget.wants_ticks())
             || self.overlays.iter().any(|o| o.wants_ticks())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::event::{Key, Modifiers, MouseButton};
+    use crate::geometry::Point;
+    use crate::painter::Painter;
+    use crate::theme::Theme;
+    use crate::widgets::{Menu, MenuBar, MenuItem};
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    /// A focusable leaf that records whether it ever received a pointer-down.
+    struct Sensor {
+        rect: Rect,
+        hit: Rc<Cell<bool>>,
+    }
+
+    impl Widget for Sensor {
+        fn bounds(&self) -> Rect {
+            self.rect
+        }
+        fn layout(&mut self, bounds: Rect) {
+            self.rect = bounds;
+        }
+        fn paint(&mut self, _: &mut Painter, _: &Theme) {}
+        fn event(&mut self, event: &Event, _: &mut EventCtx) {
+            if let Event::PointerDown { .. } = event {
+                self.hit.set(true);
+            }
+        }
+        fn focusable(&self) -> bool {
+            true
+        }
+    }
+
+    #[test]
+    fn keyboard_opened_menu_owns_the_pointer() {
+        let hit = Rc::new(Cell::new(false));
+        let bar = MenuBar::new(Rect::new(0, 0, 200, 20))
+            .add_menu(Menu::new("&File", vec![MenuItem::action("&New", |_| {})]));
+        let sensor = Sensor {
+            rect: Rect::new(0, 0, 0, 0),
+            hit: hit.clone(),
+        };
+        let mut col = Column::new().add_fixed(bar, 20).add_fill(sensor);
+        col.layout(Rect::new(0, 0, 200, 200));
+        col.focus_first(); // focus lands on the sensor (the bar isn't focusable)
+
+        // Open the File menu from the keyboard (Alt+F). No mouse ever touched
+        // the bar, so the old code never marked it as capturing the pointer.
+        let alt = Modifiers {
+            alt: true,
+            ..Modifiers::default()
+        };
+        let mut ctx = EventCtx::new();
+        col.event(
+            &Event::KeyDown {
+                key: Key::Char('f'),
+                modifiers: alt,
+            },
+            &mut ctx,
+        );
+
+        // A press down in the sensor's area — below the bar, where the open
+        // menu's popup is drawn on top — must be owned by the menu, not leak
+        // through to the widget behind the popup.
+        let mut ctx = EventCtx::new();
+        col.event(
+            &Event::PointerDown {
+                pos: Point::new(40, 100),
+                button: MouseButton::Left,
+            },
+            &mut ctx,
+        );
+        assert!(
+            !hit.get(),
+            "an open menu must swallow clicks over the popup, not pass them to the widget underneath"
+        );
+    }
+
+    #[test]
+    fn closed_menu_lets_clicks_reach_the_widget_below() {
+        // The same setup, but without opening the menu: a press must reach the
+        // widget under the cursor as usual.
+        let hit = Rc::new(Cell::new(false));
+        let bar = MenuBar::new(Rect::new(0, 0, 200, 20))
+            .add_menu(Menu::new("&File", vec![MenuItem::action("&New", |_| {})]));
+        let sensor = Sensor {
+            rect: Rect::new(0, 0, 0, 0),
+            hit: hit.clone(),
+        };
+        let mut col = Column::new().add_fixed(bar, 20).add_fill(sensor);
+        col.layout(Rect::new(0, 0, 200, 200));
+
+        let mut ctx = EventCtx::new();
+        col.event(
+            &Event::PointerDown {
+                pos: Point::new(40, 100),
+                button: MouseButton::Left,
+            },
+            &mut ctx,
+        );
+        assert!(hit.get(), "with no menu open, the click reaches the sensor");
     }
 }
