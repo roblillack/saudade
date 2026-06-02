@@ -104,7 +104,11 @@ fn closed_dropdown_surfaces_only_the_dialog() {
 
     let mut popups = Vec::new();
     modal.collect_popups(&mut popups);
-    assert_eq!(popups.len(), 1, "only the dialog when the dropdown is closed");
+    assert_eq!(
+        popups.len(),
+        1,
+        "only the dialog when the dropdown is closed"
+    );
     assert_eq!(popups[0].kind, PopupKind::Dialog);
 }
 

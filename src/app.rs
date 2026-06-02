@@ -353,12 +353,7 @@ impl AppHandler {
         }
     }
 
-    fn handle_popup_event(
-        &mut self,
-        idx: usize,
-        event: WindowEvent,
-        event_loop: &ActiveEventLoop,
-    ) {
+    fn handle_popup_event(&mut self, idx: usize, event: WindowEvent, event_loop: &ActiveEventLoop) {
         match event {
             WindowEvent::CloseRequested => {
                 self.dismiss_via_escape(event_loop);
