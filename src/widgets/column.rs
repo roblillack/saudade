@@ -423,6 +423,17 @@ impl Widget for Column {
         None
     }
 
+    fn collect_popups(&self, out: &mut Vec<PopupRequest>) {
+        // Overlays first (a modal dialog sits over the page), then the page
+        // children — so a dropdown opened inside a modal nests after it.
+        for overlay in &self.overlays {
+            overlay.collect_popups(out);
+        }
+        for child in &self.children {
+            child.widget.collect_popups(out);
+        }
+    }
+
     fn wants_ticks(&self) -> bool {
         self.children.iter().any(|c| c.widget.wants_ticks())
             || self.overlays.iter().any(|o| o.wants_ticks())

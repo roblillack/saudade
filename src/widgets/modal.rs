@@ -233,6 +233,19 @@ impl Widget for Modal {
         })
     }
 
+    fn collect_popups(&self, out: &mut Vec<PopupRequest>) {
+        // The dialog's own window first, then any popup the hosted content
+        // wants (e.g. a `Dropdown` list opened inside the dialog) — that nested
+        // request would otherwise be lost, since the dialog is the only popup
+        // the tree surfaced before.
+        if let Some(req) = self.popup_request() {
+            out.push(req);
+            if let Some(content) = self.content.as_ref() {
+                content.collect_popups(out);
+            }
+        }
+    }
+
     fn wants_ticks(&self) -> bool {
         self.open && self.content.as_ref().is_some_and(|c| c.wants_ticks())
     }

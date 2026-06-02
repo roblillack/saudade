@@ -133,7 +133,12 @@ impl MockBackend {
             root.paint(&mut painter, &self.theme);
         }
 
-        if let Some(req) = root.popup_request() {
+        // Composite the popup stack outermost-first, so a dropdown opened
+        // inside a dialog lands on top of the dialog — exactly the layering the
+        // live runtime produces with its stack of popup windows.
+        let mut popups = Vec::new();
+        root.collect_popups(&mut popups);
+        for req in &popups {
             let popup_phys_x = origin_x + (req.rect.x as f32 * self.scale).round() as i32;
             let popup_phys_y = origin_y + (req.rect.y as f32 * self.scale).round() as i32;
             let popup_phys_w = (req.rect.w as f32 * self.scale).round() as i32;

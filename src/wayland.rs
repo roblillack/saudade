@@ -44,6 +44,7 @@ use wayland_client::{Connection, Dispatch, Proxy, QueueHandle};
 use wayland_protocols::xdg::dialog::v1::client::xdg_dialog_v1::XdgDialogV1;
 use wayland_protocols::xdg::dialog::v1::client::xdg_wm_dialog_v1::XdgWmDialogV1;
 use wayland_protocols::xdg::shell::client::xdg_positioner::{Anchor, Gravity, XdgPositioner};
+use wayland_protocols::xdg::shell::client::xdg_surface::XdgSurface as XdgSurfaceObj;
 
 use crate::app::App;
 use crate::background::BackgroundState;
@@ -136,7 +137,7 @@ pub(crate) fn run(app: App) {
         bg: BackgroundState::from_env(),
         cursor: None,
 
-        popup: None,
+        popups: Vec::new(),
         qh: qh.clone(),
         loop_handle: event_loop.handle(),
     };
@@ -196,7 +197,9 @@ struct State {
     /// cursor is over a popup).
     cursor: Option<Point>,
 
-    popup: Option<PopupState>,
+    /// Stack of popup windows, outermost first — a dropdown opened inside a
+    /// dialog nests a second entry on top of it.
+    popups: Vec<PopupState>,
     qh: QueueHandle<State>,
     /// Calloop handle, captured during startup so the keyboard-acquire
     /// path in `new_capability` can hand it to SCTK's `get_keyboard_with_repeat`
@@ -231,6 +234,15 @@ impl ChildSurface {
         match self {
             ChildSurface::Popup(_) => PopupKind::Popup,
             ChildSurface::Dialog { .. } => PopupKind::Dialog,
+        }
+    }
+
+    /// The `xdg_surface` to parent a *nested* popup to (a dropdown opened inside
+    /// this dialog, say).
+    fn xdg_surface(&self) -> &XdgSurfaceObj {
+        match self {
+            ChildSurface::Popup(p) => p.xdg_surface(),
+            ChildSurface::Dialog { window, .. } => window.xdg_surface(),
         }
     }
 }
@@ -280,15 +292,20 @@ impl State {
             self.draw_main();
             self.needs_redraw = false;
         }
-        let popup_should_draw = matches!(
-            self.popup.as_ref(),
-            Some(p) if p.configured && p.needs_redraw
-        );
-        if popup_should_draw
-            && self.draw_popup()
-            && let Some(p) = self.popup.as_mut()
-        {
-            p.needs_redraw = false;
+        for idx in 0..self.popups.len() {
+            let should_draw = self.popups[idx].configured && self.popups[idx].needs_redraw;
+            if should_draw && self.draw_popup(idx) {
+                self.popups[idx].needs_redraw = false;
+            }
+        }
+    }
+
+    /// Mark every popup window dirty — the right thing after any dispatch, since
+    /// one event can change widgets shown across several popups (e.g. closing a
+    /// nested dropdown repaints the dialog beneath it).
+    fn mark_popups_dirty(&mut self) {
+        for p in &mut self.popups {
+            p.needs_redraw = true;
         }
     }
 
@@ -309,9 +326,7 @@ impl State {
         self.root.event(&event, &mut ctx);
         if ctx.paint_requested {
             self.needs_redraw = true;
-            if let Some(p) = self.popup.as_mut() {
-                p.needs_redraw = true;
-            }
+            self.mark_popups_dirty();
         }
         if ctx.close_requested {
             self.exit = true;
@@ -364,10 +379,10 @@ impl State {
         surface.commit();
     }
 
-    /// Draw the popup window. Returns true if anything was drawn.
-    fn draw_popup(&mut self) -> bool {
+    /// Draw the popup window at `idx`. Returns true if anything was drawn.
+    fn draw_popup(&mut self, idx: usize) -> bool {
         let scale = self.scale.max(1);
-        let Some(p) = self.popup.as_mut() else {
+        let Some(p) = self.popups.get_mut(idx) else {
             return false;
         };
         let buf_w = (p.surface_w.max(1) * scale as u32) as i32;
@@ -417,32 +432,52 @@ impl State {
         true
     }
 
-    /// Sync the popup window state with the widget tree's
-    /// `popup_request`. Opens, destroys, or repositions as needed.
+    /// Sync the popup window stack with the widget tree's active popups.
+    /// Opens, destroys, or rebuilds windows so the stack matches the request
+    /// list (outermost first). Keeping the longest matching prefix means
+    /// opening a nested dropdown adds a window without disturbing the dialog
+    /// beneath it.
     fn sync_popup(&mut self) {
-        let request = self.root.popup_request();
-        let existing = self.popup.as_ref().map(|p| (p.anchor, p.surface.kind()));
-        match (request, existing) {
-            (None, Some(_)) => {
-                self.popup = None;
+        let mut requests = Vec::new();
+        self.root.collect_popups(&mut requests);
+
+        let keep = self
+            .popups
+            .iter()
+            .zip(requests.iter())
+            .take_while(|(p, req)| p.anchor == req.rect && p.surface.kind() == req.kind)
+            .count();
+        self.popups.truncate(keep);
+
+        for req in requests.into_iter().skip(keep) {
+            // Parent a nested popup to the current top of the stack (the dialog
+            // it lives in); the first popup parents to the main window.
+            let made = match self.popups.last() {
+                Some(parent) => {
+                    let parent_anchor = parent.anchor;
+                    let parent_xdg = parent.surface.xdg_surface();
+                    self.create_popup(&req, parent_anchor, Some(parent_xdg))
+                }
+                None => self.create_popup(&req, Rect::new(0, 0, 0, 0), None),
+            };
+            match made {
+                Some(p) => self.popups.push(p),
+                // A child popup must not outlive a parent we couldn't create.
+                None => break,
             }
-            (Some(req), None) => {
-                self.open_popup(req);
-            }
-            (Some(req), Some((existing_anchor, existing_kind)))
-                if existing_anchor != req.rect || existing_kind != req.kind =>
-            {
-                // Anchor changed (slide-over), or the widget asked for a
-                // different host-window kind. Easiest correct path: close
-                // + reopen with the new positioner / toplevel.
-                self.popup = None;
-                self.open_popup(req);
-            }
-            _ => {}
         }
     }
 
-    fn open_popup(&mut self, request: PopupRequest) {
+    /// Create one popup window for `request`. `parent_anchor` / `parent_xdg`
+    /// describe the surface it nests into — `None` means the main window. Popup
+    /// anchors are in root-widget coordinates, so the positioner is offset by
+    /// the parent's anchor to land in the parent surface's local space.
+    fn create_popup(
+        &self,
+        request: &PopupRequest,
+        parent_anchor: Rect,
+        parent_xdg: Option<&XdgSurfaceObj>,
+    ) -> Option<PopupState> {
         let anchor = request.rect;
         // Buffer dimensions == surface dimensions (we don't set
         // buffer_scale). Anchor is already in surface coords.
@@ -451,26 +486,29 @@ impl State {
 
         let surface = match request.kind {
             PopupKind::Popup => {
-                // Build a positioner anchored to a 1×1 rect at the
-                // popup's top-left in the parent surface. Gravity goes
-                // BottomRight so the popup extends down/right from the
-                // anchor — same shape as a classic dropdown menu.
+                // Build a positioner anchored to a 1×1 rect at the popup's
+                // top-left *in the parent surface*. Gravity goes BottomRight so
+                // the popup extends down/right from the anchor — same shape as a
+                // classic dropdown menu.
+                let rel_x = anchor.x - parent_anchor.x;
+                let rel_y = anchor.y - parent_anchor.y;
                 let positioner: XdgPositioner =
                     self.xdg_shell.xdg_wm_base().create_positioner(&self.qh, ());
                 positioner.set_size(anchor.w.max(1), anchor.h.max(1));
-                positioner.set_anchor_rect(anchor.x, anchor.y, 1, 1);
+                positioner.set_anchor_rect(rel_x, rel_y, 1, 1);
                 positioner.set_anchor(Anchor::BottomLeft);
                 positioner.set_gravity(Gravity::BottomRight);
 
+                let parent = parent_xdg.unwrap_or_else(|| self.window.xdg_surface());
                 let popup = match Popup::new(
-                    self.window.xdg_surface(),
+                    parent,
                     &positioner,
                     &self.qh,
                     &self.compositor,
                     &self.xdg_shell,
                 ) {
                     Ok(p) => p,
-                    Err(_) => return,
+                    Err(_) => return None,
                 };
                 positioner.destroy();
                 ChildSurface::Popup(popup)
@@ -521,10 +559,10 @@ impl State {
         let pool_bytes = (phys_w * phys_h * max_scale * max_scale * 4) as usize * 2;
         let pool = match SlotPool::new(pool_bytes, &self.shm) {
             Ok(p) => p,
-            Err(_) => return,
+            Err(_) => return None,
         };
 
-        self.popup = Some(PopupState {
+        Some(PopupState {
             surface,
             pool,
             anchor,
@@ -533,7 +571,7 @@ impl State {
             configured: false,
             needs_redraw: true,
             cursor: None,
-        });
+        })
     }
 
     fn physical_to_logical(&self, surface_x: f64, surface_y: f64) -> Point {
@@ -569,9 +607,7 @@ impl CompositorHandler for State {
         }
         self.scale = new;
         self.needs_redraw = true;
-        if let Some(p) = self.popup.as_mut() {
-            p.needs_redraw = true;
-        }
+        self.mark_popups_dirty();
         self.relayout();
     }
 
@@ -632,10 +668,10 @@ impl WindowHandler for State {
         // Dialog window close-request: synthesize Escape so the dialog
         // widget's dismiss path runs (which clears `open`, the next
         // sync_popup tear-down then destroys the toplevel).
-        if let Some(p) = self.popup.as_ref()
-            && let ChildSurface::Dialog { window: dialog, .. } = &p.surface
-            && dialog.xdg_toplevel() == window.xdg_toplevel()
-        {
+        if self.popups.iter().any(|p| {
+            matches!(&p.surface, ChildSurface::Dialog { window: dialog, .. }
+                if dialog.xdg_toplevel() == window.xdg_toplevel())
+        }) {
             let mods = self.modifiers;
             self.dispatch(Event::KeyDown {
                 key: Key::Named(NamedKey::Escape),
@@ -686,10 +722,10 @@ impl WindowHandler for State {
         // time). Since a Wayland client owns its buffer dimensions, the
         // window snaps back to our size and any resize drag has no
         // effect.
-        if let Some(p) = self.popup.as_mut()
-            && let ChildSurface::Dialog { window: dialog, .. } = &p.surface
-            && dialog.xdg_toplevel() == window.xdg_toplevel()
-        {
+        if let Some(p) = self.popups.iter_mut().find(|p| {
+            matches!(&p.surface, ChildSurface::Dialog { window: dialog, .. }
+                if dialog.xdg_toplevel() == window.xdg_toplevel())
+        }) {
             // surface_w / surface_h left untouched on purpose.
             p.configured = true;
             p.needs_redraw = true;
@@ -705,10 +741,10 @@ impl PopupHandler for State {
         popup: &Popup,
         configure: PopupConfigure,
     ) {
-        if let Some(p) = self.popup.as_mut()
-            && let ChildSurface::Popup(existing) = &p.surface
-            && existing.xdg_popup() == popup.xdg_popup()
-        {
+        if let Some(p) = self.popups.iter_mut().find(|p| {
+            matches!(&p.surface, ChildSurface::Popup(existing)
+                if existing.xdg_popup() == popup.xdg_popup())
+        }) {
             p.surface_w = configure.width.max(1) as u32;
             p.surface_h = configure.height.max(1) as u32;
             p.configured = true;
@@ -885,42 +921,37 @@ impl PointerHandler for State {
         events: &[PointerEvent],
     ) {
         for event in events {
-            let in_popup = self
-                .popup
-                .as_ref()
-                .map(|p| p.surface.wl_surface().id() == event.surface.id())
-                .unwrap_or(false);
-            let pos = if in_popup {
-                let anchor = self.popup.as_ref().unwrap().anchor;
-                Point::new(
-                    event.position.0.floor() as i32 + anchor.x,
-                    event.position.1.floor() as i32 + anchor.y,
-                )
-            } else {
-                self.physical_to_logical(event.position.0, event.position.1)
+            // Which surface is the event on — the main window, or one of the
+            // stacked popups? Popup anchors are in root coords, so we add the
+            // matching popup's anchor to land back in the widget tree's space.
+            let popup_idx = self
+                .popups
+                .iter()
+                .position(|p| p.surface.wl_surface().id() == event.surface.id());
+            let pos = match popup_idx {
+                Some(i) => {
+                    let anchor = self.popups[i].anchor;
+                    Point::new(
+                        event.position.0.floor() as i32 + anchor.x,
+                        event.position.1.floor() as i32 + anchor.y,
+                    )
+                }
+                None => self.physical_to_logical(event.position.0, event.position.1),
             };
 
             match event.kind {
                 PointerEventKind::Enter { .. } | PointerEventKind::Motion { .. } => {
-                    if in_popup {
-                        if let Some(p) = self.popup.as_mut() {
-                            p.cursor = Some(pos);
-                        }
-                    } else {
-                        self.cursor = Some(pos);
+                    match popup_idx {
+                        Some(i) => self.popups[i].cursor = Some(pos),
+                        None => self.cursor = Some(pos),
                     }
                     self.dispatch(Event::PointerMove { pos });
-                    if in_popup && let Some(p) = self.popup.as_mut() {
-                        p.needs_redraw = true;
-                    }
+                    self.mark_popups_dirty();
                 }
                 PointerEventKind::Leave { .. } => {
-                    if in_popup {
-                        if let Some(p) = self.popup.as_mut() {
-                            p.cursor = None;
-                        }
-                    } else {
-                        self.cursor = None;
+                    match popup_idx {
+                        Some(i) => self.popups[i].cursor = None,
+                        None => self.cursor = None,
                     }
                     self.dispatch(Event::PointerLeave);
                 }
@@ -929,18 +960,14 @@ impl PointerHandler for State {
                         continue;
                     };
                     self.dispatch(Event::PointerDown { pos, button: b });
-                    if in_popup && let Some(p) = self.popup.as_mut() {
-                        p.needs_redraw = true;
-                    }
+                    self.mark_popups_dirty();
                 }
                 PointerEventKind::Release { button, .. } => {
                     let Some(b) = map_button(button) else {
                         continue;
                     };
                     self.dispatch(Event::PointerUp { pos, button: b });
-                    if in_popup && let Some(p) = self.popup.as_mut() {
-                        p.needs_redraw = true;
-                    }
+                    self.mark_popups_dirty();
                 }
                 PointerEventKind::Axis {
                     horizontal,
@@ -966,9 +993,7 @@ impl PointerHandler for State {
                             delta_x,
                             delta_y,
                         });
-                        if in_popup && let Some(p) = self.popup.as_mut() {
-                            p.needs_redraw = true;
-                        }
+                        self.mark_popups_dirty();
                     }
                 }
             }

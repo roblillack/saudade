@@ -135,7 +135,10 @@ struct AppHandler {
     /// Background pattern + color for the main window, toggled with the
     /// `p` / `c` debug keys. Popups/dialogs ignore it and stay white.
     bg: BackgroundState,
-    popup: Option<PopupWindow>,
+    /// Stack of popup windows, outermost first. Usually empty or one entry (a
+    /// menu / dropdown / dialog); a dropdown opened *inside* a dialog nests a
+    /// second entry on top.
+    popups: Vec<PopupWindow>,
     /// Last `Event::Tick` we dispatched. `None` until the first tick is
     /// fired. The runtime uses this to pace ticks while a widget
     /// reports `wants_ticks()`.
@@ -166,7 +169,7 @@ impl AppHandler {
             modifiers: Modifiers::default(),
             needs_redraw: true,
             bg: BackgroundState::from_env(),
-            popup: None,
+            popups: Vec::new(),
             last_tick: None,
         }
     }
@@ -219,10 +222,8 @@ impl ApplicationHandler for AppHandler {
     ) {
         if Some(window_id) == self.main_id {
             self.handle_main_event(event, event_loop);
-        } else if let Some(p) = self.popup.as_ref()
-            && p.win_id == window_id
-        {
-            self.handle_popup_event(event, event_loop);
+        } else if let Some(idx) = self.popups.iter().position(|p| p.win_id == window_id) {
+            self.handle_popup_event(idx, event, event_loop);
         }
     }
 
@@ -236,11 +237,11 @@ impl ApplicationHandler for AppHandler {
             win.request_redraw();
             self.needs_redraw = false;
         }
-        if let Some(p) = self.popup.as_mut()
-            && p.needs_redraw
-        {
-            p.win.request_redraw();
-            p.needs_redraw = false;
+        for p in &mut self.popups {
+            if p.needs_redraw {
+                p.win.request_redraw();
+                p.needs_redraw = false;
+            }
         }
     }
 
@@ -253,7 +254,7 @@ impl ApplicationHandler for AppHandler {
         // aborts. Releasing every `Rc<Window>` now drops the windows while the
         // delegate is still configured. Order: surfaces/context before the
         // window handles, since they hold the other `Rc` clones.
-        self.popup = None;
+        self.popups.clear();
         self.main_surface = None;
         self.context = None;
         self.main_win = None;
@@ -346,50 +347,51 @@ impl AppHandler {
             }
             WindowEvent::RedrawRequested => {
                 self.paint_main();
-                if let Some(p) = self.popup.as_mut() {
-                    p.needs_redraw = true;
-                }
+                self.mark_popups_dirty();
             }
             _ => {}
         }
     }
 
-    fn handle_popup_event(&mut self, event: WindowEvent, event_loop: &ActiveEventLoop) {
+    fn handle_popup_event(
+        &mut self,
+        idx: usize,
+        event: WindowEvent,
+        event_loop: &ActiveEventLoop,
+    ) {
         match event {
             WindowEvent::CloseRequested => {
                 self.dismiss_via_escape(event_loop);
             }
             WindowEvent::Resized(new_size) => {
-                if let Some(p) = self.popup.as_mut() {
+                if let Some(p) = self.popups.get_mut(idx) {
                     p.physical = new_size;
                     resize_surface(&mut p.surface, new_size);
                     p.needs_redraw = true;
                 }
             }
             WindowEvent::CursorMoved { position, .. } => {
-                let Some(p) = self.popup.as_mut() else { return };
+                let Some(p) = self.popups.get_mut(idx) else {
+                    return;
+                };
                 let pos = popup_position_to_widget(position, p);
                 p.cursor = Some(pos);
                 self.dispatch(&Event::PointerMove { pos }, event_loop);
-                if let Some(p) = self.popup.as_mut() {
-                    p.needs_redraw = true;
-                }
+                self.mark_popups_dirty();
             }
             WindowEvent::CursorLeft { .. } => {
-                if let Some(p) = self.popup.as_mut() {
+                if let Some(p) = self.popups.get_mut(idx) {
                     p.cursor = None;
                 }
                 self.dispatch(&Event::PointerLeave, event_loop);
-                if let Some(p) = self.popup.as_mut() {
-                    p.needs_redraw = true;
-                }
+                self.mark_popups_dirty();
             }
             WindowEvent::MouseInput {
                 state,
                 button: winit_button,
                 ..
             } => {
-                let Some(pos) = self.popup.as_ref().and_then(|p| p.cursor) else {
+                let Some(pos) = self.popups.get(idx).and_then(|p| p.cursor) else {
                     return;
                 };
                 let Some(button) = map_button(winit_button) else {
@@ -400,9 +402,7 @@ impl AppHandler {
                     ElementState::Released => Event::PointerUp { pos, button },
                 };
                 self.dispatch(&event, event_loop);
-                if let Some(p) = self.popup.as_mut() {
-                    p.needs_redraw = true;
-                }
+                self.mark_popups_dirty();
             }
             WindowEvent::ModifiersChanged(new_mods) => {
                 let s = new_mods.state();
@@ -418,14 +418,21 @@ impl AppHandler {
             }
             WindowEvent::KeyboardInput { event: key, .. } => {
                 self.dispatch_key(&key, event_loop);
-                if let Some(p) = self.popup.as_mut() {
-                    p.needs_redraw = true;
-                }
+                self.mark_popups_dirty();
             }
             WindowEvent::RedrawRequested => {
-                self.paint_popup();
+                self.paint_popup(idx);
             }
             _ => {}
+        }
+    }
+
+    /// Mark every popup window dirty. Cheap, and the right thing after any
+    /// dispatch: a single event can change widgets shown in several popups at
+    /// once (e.g. closing a nested dropdown repaints the dialog beneath it).
+    fn mark_popups_dirty(&mut self) {
+        for p in &mut self.popups {
+            p.needs_redraw = true;
         }
     }
 
@@ -434,6 +441,7 @@ impl AppHandler {
         self.root.event(event, &mut ctx);
         if ctx.paint_requested {
             self.needs_redraw = true;
+            self.mark_popups_dirty();
         }
         if ctx.close_requested {
             event_loop.exit();
@@ -546,8 +554,10 @@ impl AppHandler {
             .expect("saudade: failed to present buffer");
     }
 
-    fn paint_popup(&mut self) {
-        let Some(p) = self.popup.as_mut() else { return };
+    fn paint_popup(&mut self, idx: usize) {
+        let Some(p) = self.popups.get_mut(idx) else {
+            return;
+        };
         let origin_x = -((p.anchor.x as f32 * p.scale).round() as i32);
         let origin_y = -((p.anchor.y as f32 * p.scale).round() as i32);
         let popup_phys_w = (p.anchor.w as f32 * p.scale).round() as i32;
@@ -583,47 +593,48 @@ impl AppHandler {
     /// are managed top-levels so the WM moves them on its own — we only
     /// reposition popup-kind children.
     fn reposition_popup(&mut self) {
-        let Some(popup) = self.popup.as_ref() else {
-            return;
-        };
-        if popup.kind != PopupKind::Popup {
-            return;
-        }
         let Some(main_win) = self.main_win.as_ref() else {
             return;
         };
         let Ok(inner) = main_win.inner_position() else {
             return;
         };
-        let px = inner.x + ((popup.anchor.x as f32) * self.scale).round() as i32;
-        let py = inner.y + ((popup.anchor.y as f32) * self.scale).round() as i32;
-        popup.win.set_outer_position(PhysicalPosition::new(px, py));
+        // Every popup anchor is in root-widget coordinates, so each
+        // override-redirect popup — nested or not — re-anchors the same way:
+        // main-window inner position plus the anchor offset.
+        for popup in &self.popups {
+            if popup.kind != PopupKind::Popup {
+                continue;
+            }
+            let px = inner.x + ((popup.anchor.x as f32) * self.scale).round() as i32;
+            let py = inner.y + ((popup.anchor.y as f32) * self.scale).round() as i32;
+            popup.win.set_outer_position(PhysicalPosition::new(px, py));
+        }
     }
 
     fn sync_popup(&mut self, event_loop: &ActiveEventLoop) {
-        let request = self.root.popup_request();
-        match (request, self.popup.as_mut()) {
-            (None, Some(_)) => {
-                self.popup = None;
+        let mut requests = Vec::new();
+        self.root.collect_popups(&mut requests);
+
+        // Keep the longest prefix of existing popup windows that still matches
+        // the requested stack (same anchor + kind). The first mismatch — and
+        // everything above it — is torn down and rebuilt, so opening a nested
+        // dropdown adds a window without disturbing the dialog beneath it, and a
+        // menu sliding to a new anchor rebuilds just that one.
+        let keep = self
+            .popups
+            .iter()
+            .zip(requests.iter())
+            .take_while(|(p, req)| p.anchor == req.rect && p.kind == req.kind)
+            .count();
+        self.popups.truncate(keep);
+        for req in requests.into_iter().skip(keep) {
+            match self.open_popup(req, event_loop) {
+                Some(p) => self.popups.push(p),
+                // If a popup can't be created, stop — a child popup must not
+                // outlive a missing parent.
+                None => break,
             }
-            (Some(req), None) => {
-                if let Some(p) = self.open_popup(req, event_loop) {
-                    self.popup = Some(p);
-                }
-            }
-            (Some(req), Some(existing))
-                if existing.anchor != req.rect || existing.kind != req.kind =>
-            {
-                // Anchor moved (slide-over between top-level menus), or
-                // the widget switched between Popup and Dialog hosting.
-                // Tear the child window down and rebuild — fastest
-                // reliable path that works the same on every backend.
-                self.popup = None;
-                if let Some(p) = self.open_popup(req, event_loop) {
-                    self.popup = Some(p);
-                }
-            }
-            _ => {}
         }
     }
 

@@ -343,6 +343,12 @@ impl Widget for Row {
         None
     }
 
+    fn collect_popups(&self, out: &mut Vec<PopupRequest>) {
+        for child in &self.children {
+            child.widget.collect_popups(out);
+        }
+    }
+
     fn wants_ticks(&self) -> bool {
         self.children.iter().any(|c| c.widget.wants_ticks())
     }
