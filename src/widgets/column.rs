@@ -30,6 +30,11 @@ pub struct Column {
     overlays: Vec<Box<dyn Widget>>,
     captured: Option<usize>,
     focused: Option<usize>,
+    /// True while the focused child's focus is *visually* suspended because a
+    /// menu is open and owns the keyboard. The focus index in `focused` is kept
+    /// so it can be handed straight back when the menu closes; only the child's
+    /// `set_focused` flag is toggled. See [`Column::sync_menu_focus`].
+    focus_suspended: bool,
 }
 
 struct Child {
@@ -55,6 +60,7 @@ impl Column {
             overlays: Vec::new(),
             captured: None,
             focused: None,
+            focus_suspended: false,
         }
     }
 
@@ -148,6 +154,33 @@ impl Column {
         (0..self.children.len())
             .rev()
             .find(|&i| self.children[i].widget.bounds().contains(pos))
+    }
+
+    /// True while a child menu is open and owns the keyboard.
+    fn menu_capturing(&self) -> bool {
+        self.children
+            .iter()
+            .any(|c| c.widget.accepts_accelerators() && c.widget.captures_pointer())
+    }
+
+    /// Suspend the focused child's focus visual while a menu is open, and hand
+    /// it back when the menu closes — so the content behind an open menu reads
+    /// as unfocused (e.g. a gray rather than blue selection) and focus clearly
+    /// belongs to the menu. The focus *index* is preserved throughout; only the
+    /// child's `set_focused` flag is toggled, so the same widget regains focus
+    /// the moment the menu goes away. Idempotent: the `focus_suspended` latch
+    /// means each transition fires `set_focused` exactly once.
+    fn sync_menu_focus(&mut self) {
+        let menu_open = self.menu_capturing();
+        if menu_open == self.focus_suspended {
+            return;
+        }
+        self.focus_suspended = menu_open;
+        if let Some(idx) = self.focused
+            && let Some(child) = self.children.get_mut(idx)
+        {
+            child.widget.set_focused(!menu_open);
+        }
     }
 
     /// Index of the first overlay that's currently asserting pre-emptive
@@ -289,6 +322,10 @@ impl Widget for Column {
     }
 
     fn paint(&mut self, painter: &mut Painter, theme: &Theme) {
+        // Reconcile the focus visual with menu state just before drawing, so an
+        // open menu's keyboard ownership is reflected (suspended content focus)
+        // regardless of which event-dispatch path opened or closed it.
+        self.sync_menu_focus();
         if let Some(bg) = self.background {
             painter.fill_rect(self.bounds, bg);
         }
@@ -454,7 +491,7 @@ impl Widget for Column {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::event::{Key, Modifiers, MouseButton};
+    use crate::event::{Key, Modifiers, MouseButton, NamedKey};
     use crate::geometry::Point;
     use crate::painter::Painter;
     use crate::theme::Theme;
@@ -462,10 +499,12 @@ mod tests {
     use std::cell::Cell;
     use std::rc::Rc;
 
-    /// A focusable leaf that records whether it ever received a pointer-down.
+    /// A focusable leaf that records whether it ever received a pointer-down
+    /// and tracks its current focus state.
     struct Sensor {
         rect: Rect,
         hit: Rc<Cell<bool>>,
+        focused: Rc<Cell<bool>>,
     }
 
     impl Widget for Sensor {
@@ -484,23 +523,33 @@ mod tests {
         fn focusable(&self) -> bool {
             true
         }
+        fn set_focused(&mut self, focused: bool) {
+            self.focused.set(focused);
+        }
     }
 
-    #[test]
-    fn keyboard_opened_menu_owns_the_pointer() {
+    /// A `Column` of a one-menu bar above a [`Sensor`] fill child, plus the
+    /// cells the sensor reports through. Laid out and focused (focus lands on
+    /// the sensor — the bar isn't focusable).
+    fn menu_over_sensor() -> (Column, Rc<Cell<bool>>, Rc<Cell<bool>>) {
         let hit = Rc::new(Cell::new(false));
+        let focused = Rc::new(Cell::new(false));
         let bar = MenuBar::new(Rect::new(0, 0, 200, 20))
             .add_menu(Menu::new("&File", vec![MenuItem::action("&New", |_| {})]));
         let sensor = Sensor {
             rect: Rect::new(0, 0, 0, 0),
             hit: hit.clone(),
+            focused: focused.clone(),
         };
         let mut col = Column::new().add_fixed(bar, 20).add_fill(sensor);
         col.layout(Rect::new(0, 0, 200, 200));
-        col.focus_first(); // focus lands on the sensor (the bar isn't focusable)
+        col.focus_first();
+        (col, hit, focused)
+    }
 
-        // Open the File menu from the keyboard (Alt+F). No mouse ever touched
-        // the bar, so the old code never marked it as capturing the pointer.
+    fn open_file_menu(col: &mut Column) {
+        // Alt+F. No mouse ever touches the bar, so the old code never marked it
+        // as capturing the pointer.
         let alt = Modifiers {
             alt: true,
             ..Modifiers::default()
@@ -513,18 +562,27 @@ mod tests {
             },
             &mut ctx,
         );
+    }
 
-        // A press down in the sensor's area — below the bar, where the open
-        // menu's popup is drawn on top — must be owned by the menu, not leak
-        // through to the widget behind the popup.
+    fn press(col: &mut Column, x: i32, y: i32) {
         let mut ctx = EventCtx::new();
         col.event(
             &Event::PointerDown {
-                pos: Point::new(40, 100),
+                pos: Point::new(x, y),
                 button: MouseButton::Left,
             },
             &mut ctx,
         );
+    }
+
+    #[test]
+    fn keyboard_opened_menu_owns_the_pointer() {
+        let (mut col, hit, _focused) = menu_over_sensor();
+        open_file_menu(&mut col);
+        // A press in the sensor's area — below the bar, where the open menu's
+        // popup is drawn on top — must be owned by the menu, not leak through to
+        // the widget behind the popup.
+        press(&mut col, 40, 100);
         assert!(
             !hit.get(),
             "an open menu must swallow clicks over the popup, not pass them to the widget underneath"
@@ -535,24 +593,36 @@ mod tests {
     fn closed_menu_lets_clicks_reach_the_widget_below() {
         // The same setup, but without opening the menu: a press must reach the
         // widget under the cursor as usual.
-        let hit = Rc::new(Cell::new(false));
-        let bar = MenuBar::new(Rect::new(0, 0, 200, 20))
-            .add_menu(Menu::new("&File", vec![MenuItem::action("&New", |_| {})]));
-        let sensor = Sensor {
-            rect: Rect::new(0, 0, 0, 0),
-            hit: hit.clone(),
-        };
-        let mut col = Column::new().add_fixed(bar, 20).add_fill(sensor);
-        col.layout(Rect::new(0, 0, 200, 200));
+        let (mut col, hit, _focused) = menu_over_sensor();
+        press(&mut col, 40, 100);
+        assert!(hit.get(), "with no menu open, the click reaches the sensor");
+    }
 
+    #[test]
+    fn open_menu_suspends_content_focus_then_restores_it() {
+        let (mut col, _hit, focused) = menu_over_sensor();
+        assert!(focused.get(), "the sensor starts focused");
+
+        // Opening the menu (reconciled at paint time) suspends the content's
+        // focus visual so focus reads as belonging to the menu.
+        open_file_menu(&mut col);
+        let backend = crate::mock::MockBackend::new(200, 200);
+        backend.render(&mut col);
+        assert!(
+            !focused.get(),
+            "content focus is suspended while the menu is open"
+        );
+
+        // Closing the menu (Escape) hands the same focus straight back.
         let mut ctx = EventCtx::new();
         col.event(
-            &Event::PointerDown {
-                pos: Point::new(40, 100),
-                button: MouseButton::Left,
+            &Event::KeyDown {
+                key: Key::Named(NamedKey::Escape),
+                modifiers: Modifiers::default(),
             },
             &mut ctx,
         );
-        assert!(hit.get(), "with no menu open, the click reaches the sensor");
+        backend.render(&mut col);
+        assert!(focused.get(), "focus is restored once the menu closes");
     }
 }
