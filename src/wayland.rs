@@ -331,6 +331,28 @@ impl State {
         if ctx.close_requested {
             self.exit = true;
         }
+        if let Some(factor) = ctx.scale_request {
+            self.apply_scale(factor);
+        }
+    }
+
+    /// Override the logical→physical scale factor. Wayland compositors
+    /// hand us integer buffer scales, so the requested factor is rounded
+    /// to the nearest positive integer before being applied — the value a
+    /// widget passes in is still useful (rounded to 1 vs 2 vs 3) but
+    /// fractional steps land on the closest supported one. Mirrors the
+    /// winit-side `apply_scale`: triggers relayout, marks every surface
+    /// dirty, and drops open popups so they're re-built at the new scale.
+    fn apply_scale(&mut self, factor: f32) {
+        let new_scale = factor.round().max(1.0) as i32;
+        if new_scale == self.scale {
+            return;
+        }
+        self.scale = new_scale;
+        self.popups.clear();
+        self.relayout();
+        self.needs_redraw = true;
+        self.mark_popups_dirty();
     }
 
     fn draw_main(&mut self) {

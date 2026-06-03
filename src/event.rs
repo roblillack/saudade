@@ -169,6 +169,10 @@ pub struct EventCtx {
     /// an event to its content, runs its `on_dismiss` handler, and tears the
     /// dialog down — the same protocol a message box's OK button uses.
     pub(crate) dismiss_requested: bool,
+    /// Set when a widget calls [`Self::set_scale_factor`] to override the
+    /// runtime's logical→physical scale factor. Applied by the runtime
+    /// after dispatch, alongside [`Self::request_paint`] and [`Self::close`].
+    pub(crate) scale_request: Option<f32>,
 }
 
 impl EventCtx {
@@ -180,6 +184,7 @@ impl EventCtx {
             focus_released: false,
             consumed: false,
             dismiss_requested: false,
+            scale_request: None,
         }
     }
 
@@ -257,5 +262,20 @@ impl EventCtx {
     /// event to its content.
     pub fn is_dismiss_requested(&self) -> bool {
         self.dismiss_requested
+    }
+
+    /// Override the runtime's logical→physical scale factor. The new value
+    /// replaces what the OS reported (and what subsequent `paint` /
+    /// `layout` passes see) until the OS itself reports a different scale.
+    /// To *read* the current scale, use [`Painter::scale`](crate::Painter::scale)
+    /// inside [`Widget::paint`](crate::Widget::paint) — that's the canonical
+    /// source and works equally well in both event and paint paths.
+    ///
+    /// Values are clamped to a small positive minimum to keep buffers
+    /// non-degenerate. The change is applied after the current event
+    /// finishes dispatching and the runtime triggers a repaint, so
+    /// callers do not need to call [`Self::request_paint`] separately.
+    pub fn set_scale_factor(&mut self, factor: f32) {
+        self.scale_request = Some(factor.max(0.1));
     }
 }

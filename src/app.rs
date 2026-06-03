@@ -126,6 +126,11 @@ struct AppHandler {
     context: Option<softbuffer::Context<Rc<Window>>>,
     main_surface: Option<softbuffer::Surface<Rc<Window>, Rc<Window>>>,
     physical: PhysicalSize<u32>,
+    /// Logical→physical scale factor. Initially adopted from
+    /// [`Window::scale_factor`] (and refreshed when the compositor reports
+    /// a [`ScaleFactorChanged`](winit::event::WindowEvent::ScaleFactorChanged)
+    /// event), but widgets can override it at runtime via
+    /// [`EventCtx::set_scale_factor`](crate::event::EventCtx::set_scale_factor).
     scale: f32,
 
     // Per-frame state:
@@ -447,6 +452,29 @@ impl AppHandler {
         if ctx.close_requested {
             event_loop.exit();
         }
+        if let Some(factor) = ctx.scale_request {
+            self.apply_scale(factor);
+        }
+    }
+
+    /// Override the logical→physical scale factor the runtime applies on
+    /// top of the OS-reported size. Triggered by widgets calling
+    /// [`EventCtx::set_scale_factor`]; relays through `relayout` so the
+    /// widget tree picks up the new effective logical area, marks every
+    /// surface dirty so the next paint pass uses the new scale, and tears
+    /// down any open popups so they're rebuilt at the new scale.
+    fn apply_scale(&mut self, factor: f32) {
+        let factor = factor.max(0.1);
+        if (factor - self.scale).abs() < f32::EPSILON {
+            return;
+        }
+        self.scale = factor;
+        // Popups stash the scale at open time; the simplest correct thing
+        // is to dismiss them and let the widget tree recreate them at the
+        // new scale on the next sync_popup pass.
+        self.popups.clear();
+        relayout(&mut self.root, self.physical, self.scale, self.design_size);
+        self.needs_redraw = true;
     }
 
     /// Drive animation ticks: if any widget in the tree wants ticks,
