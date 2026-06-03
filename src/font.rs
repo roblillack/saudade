@@ -123,6 +123,13 @@ fn load_face(db: &fontdb::Database, id: fontdb::ID) -> Option<fontdue::Font> {
 fn load_family_chain(families: &[&str], monospace_fallback: bool) -> Option<Font> {
     let mut db = fontdb::Database::new();
     db.load_system_fonts();
+    // fontdb's fontconfig loader hardcodes /etc/fonts/fonts.conf, but the
+    // FreeBSD port installs fontconfig at /usr/local/etc/fonts/fonts.conf —
+    // so on a stock FreeBSD desktop load_system_fonts ends up with zero
+    // faces. Fall back to the conventional ports font directory.
+    if db.faces().next().is_none() {
+        db.load_fonts_dir("/usr/local/share/fonts");
+    }
 
     for family in families {
         let query = fontdb::Query {
