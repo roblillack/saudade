@@ -241,8 +241,24 @@ struct MessageBody {
     icon: DialogIcon,
     message: String,
     rect: Rect,
-    button_pressed: bool,
+    /// Active press source on the OK button. `None` is the resting state;
+    /// `Mouse` is a pointer press in progress, `Keyboard` is Enter / Space
+    /// held while the dialog has focus.
+    button_press: BodyPress,
+    /// Whether the active press is currently "armed" — pointer still over the
+    /// button, or Escape hasn't canceled the keyboard arm yet. A release
+    /// (PointerUp / KeyUp) fires the action only when this is `true`.
     button_armed: bool,
+}
+
+/// Source of an in-progress button press inside a dialog body. Pointer and
+/// keyboard presses are tracked separately so a keyboard release doesn't
+/// fire a button the mouse is still holding, and vice versa.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum BodyPress {
+    None,
+    Mouse,
+    Keyboard,
 }
 
 impl MessageBody {
@@ -251,7 +267,7 @@ impl MessageBody {
             icon,
             message,
             rect: Rect::new(0, 0, 0, 0),
-            button_pressed: false,
+            button_press: BodyPress::None,
             button_armed: false,
         }
     }
@@ -295,7 +311,7 @@ impl Widget for MessageBody {
         // OK button — default-styled (1-px outer black border) so Enter is the
         // obvious confirm key.
         let btn = self.button_rect();
-        let pressed = self.button_pressed && self.button_armed;
+        let pressed = self.button_press != BodyPress::None && self.button_armed;
         painter.button(btn, theme, pressed, true);
         let inset = if pressed { 1 } else { 0 };
         painter.text_centered(
@@ -312,12 +328,12 @@ impl Widget for MessageBody {
             Event::PointerDown {
                 pos,
                 button: MouseButton::Left,
-            } if btn.contains(*pos) => {
-                self.button_pressed = true;
+            } if btn.contains(*pos) && self.button_press == BodyPress::None => {
+                self.button_press = BodyPress::Mouse;
                 self.button_armed = true;
                 ctx.request_paint();
             }
-            Event::PointerMove { pos } if self.button_pressed => {
+            Event::PointerMove { pos } if self.button_press == BodyPress::Mouse => {
                 let in_btn = btn.contains(*pos);
                 if in_btn != self.button_armed {
                     self.button_armed = in_btn;
@@ -327,21 +343,49 @@ impl Widget for MessageBody {
             Event::PointerUp {
                 pos,
                 button: MouseButton::Left,
-            } if self.button_pressed => {
+            } if self.button_press == BodyPress::Mouse => {
                 let fire = self.button_armed && btn.contains(*pos);
-                self.button_pressed = false;
+                self.button_press = BodyPress::None;
                 self.button_armed = false;
                 ctx.request_paint();
                 if fire {
                     ctx.request_dismiss();
                 }
             }
-            // Enter / Space confirm; Escape is handled by the hosting `Modal`.
+            // Enter / Space arm the OK button on KeyDown; the matching KeyUp
+            // fires the dismiss. Autorepeat just re-arms and never fires,
+            // mirroring how a mouse press waits for the release. Escape is
+            // handled by the hosting `Modal`, but if a keyboard press is
+            // in progress we clear it here first so the matching KeyUp is
+            // a no-op (and the Modal still gets the Escape to dismiss).
             Event::KeyDown {
                 key: Key::Named(NamedKey::Enter | NamedKey::Space),
+                modifiers,
+            } if !modifiers.has_command() && self.button_press == BodyPress::None => {
+                self.button_press = BodyPress::Keyboard;
+                self.button_armed = true;
+                ctx.request_paint();
+            }
+            Event::KeyUp {
+                key: Key::Named(NamedKey::Enter | NamedKey::Space),
+                modifiers,
+            } if !modifiers.has_command() && self.button_press == BodyPress::Keyboard => {
+                let fire = self.button_armed;
+                self.button_press = BodyPress::None;
+                self.button_armed = false;
+                ctx.request_paint();
+                if fire {
+                    ctx.request_dismiss();
+                }
+            }
+            Event::KeyDown {
+                key: Key::Named(NamedKey::Escape),
                 ..
-            } => {
-                ctx.request_dismiss();
+            } if self.button_press == BodyPress::Keyboard => {
+                self.button_press = BodyPress::None;
+                self.button_armed = false;
+                ctx.request_paint();
+                ctx.consume_event();
             }
             _ => {}
         }
@@ -364,9 +408,15 @@ struct ConfirmBody {
     /// measure the labels) and read back when hit-testing pointer events.
     affirm_rect: Rect,
     cancel_rect: Rect,
-    /// Which button a press is held on (`Some(true)` = affirmative), and
-    /// whether the pointer is still over it.
+    /// Which button a press is held on — `Some(true)` = affirmative,
+    /// `Some(false)` = Cancel — and whether the pointer is still over it.
+    /// The cancel button binds to Enter (default) so Enter / Space dismiss
+    /// without confirming.
     pressed: Option<bool>,
+    /// Source of the active press. Keeps a keyboard release from firing a
+    /// mouse-held button and vice versa, and lets Escape cancel an in-flight
+    /// keyboard press without disturbing a parallel mouse press.
+    press_source: BodyPress,
     armed: bool,
 }
 
@@ -381,6 +431,7 @@ impl ConfirmBody {
             affirm_rect: Rect::new(0, 0, 0, 0),
             cancel_rect: Rect::new(0, 0, 0, 0),
             pressed: None,
+            press_source: BodyPress::None,
             armed: false,
         }
     }
@@ -473,18 +524,20 @@ impl Widget for ConfirmBody {
             Event::PointerDown {
                 pos,
                 button: MouseButton::Left,
-            } => {
+            } if self.press_source == BodyPress::None => {
                 if self.affirm_rect.contains(*pos) {
                     self.pressed = Some(true);
+                    self.press_source = BodyPress::Mouse;
                     self.armed = true;
                     ctx.request_paint();
                 } else if self.cancel_rect.contains(*pos) {
                     self.pressed = Some(false);
+                    self.press_source = BodyPress::Mouse;
                     self.armed = true;
                     ctx.request_paint();
                 }
             }
-            Event::PointerMove { pos } if self.pressed.is_some() => {
+            Event::PointerMove { pos } if self.press_source == BodyPress::Mouse => {
                 let rect = if self.pressed == Some(true) {
                     self.affirm_rect
                 } else {
@@ -499,7 +552,7 @@ impl Widget for ConfirmBody {
             Event::PointerUp {
                 pos,
                 button: MouseButton::Left,
-            } if self.pressed.is_some() => {
+            } if self.press_source == BodyPress::Mouse => {
                 let affirm = self.pressed == Some(true);
                 let rect = if affirm {
                     self.affirm_rect
@@ -508,6 +561,7 @@ impl Widget for ConfirmBody {
                 };
                 let fire = self.armed && rect.contains(*pos);
                 self.pressed = None;
+                self.press_source = BodyPress::None;
                 self.armed = false;
                 ctx.request_paint();
                 if fire {
@@ -517,13 +571,42 @@ impl Widget for ConfirmBody {
                     ctx.request_dismiss();
                 }
             }
-            // Enter / Space close without confirming (the safe default); Escape
-            // is handled by the hosting `Modal`.
+            // Enter / Space arm the Cancel button (the default) on KeyDown; the
+            // matching KeyUp dismisses without confirming. Autorepeated KeyDowns
+            // re-arm but never fire — fire is reserved for the release, like a
+            // mouse click. Escape during the keyboard press cancels the arm and
+            // is left for the hosting `Modal` to also dismiss the dialog.
             Event::KeyDown {
                 key: Key::Named(NamedKey::Enter | NamedKey::Space),
+                modifiers,
+            } if !modifiers.has_command() && self.press_source == BodyPress::None => {
+                self.pressed = Some(false);
+                self.press_source = BodyPress::Keyboard;
+                self.armed = true;
+                ctx.request_paint();
+            }
+            Event::KeyUp {
+                key: Key::Named(NamedKey::Enter | NamedKey::Space),
+                modifiers,
+            } if !modifiers.has_command() && self.press_source == BodyPress::Keyboard => {
+                let fire = self.armed;
+                self.pressed = None;
+                self.press_source = BodyPress::None;
+                self.armed = false;
+                ctx.request_paint();
+                if fire {
+                    ctx.request_dismiss();
+                }
+            }
+            Event::KeyDown {
+                key: Key::Named(NamedKey::Escape),
                 ..
-            } => {
-                ctx.request_dismiss();
+            } if self.press_source == BodyPress::Keyboard => {
+                self.pressed = None;
+                self.press_source = BodyPress::None;
+                self.armed = false;
+                ctx.request_paint();
+                ctx.consume_event();
             }
             _ => {}
         }

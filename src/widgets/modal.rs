@@ -206,21 +206,25 @@ impl Widget for Modal {
         if !self.open {
             return;
         }
-        // Escape (and the window-manager close button, routed to Escape by the
-        // runtime) dismisses the dialog.
-        if let Event::KeyDown {
-            key: Key::Named(NamedKey::Escape),
-            ..
-        } = event
-        {
-            self.fire_dismiss(ctx);
-            return;
-        }
+        // Forward to content *first*, including Escape — so a widget inside
+        // (e.g. a button mid keyboard-press) can intercept Esc to cancel its
+        // own in-flight activation and consume the event. We only treat
+        // Escape as a dismiss when nothing inside handled it.
         if let Some(content) = self.content.as_mut() {
             content.event(event, ctx);
         }
-        // Content asked to close (e.g. an OK button) — honor it.
         if ctx.is_dismiss_requested() {
+            self.fire_dismiss(ctx);
+            return;
+        }
+        if matches!(
+            event,
+            Event::KeyDown {
+                key: Key::Named(NamedKey::Escape),
+                ..
+            }
+        ) && !ctx.is_consumed()
+        {
             self.fire_dismiss(ctx);
         }
     }

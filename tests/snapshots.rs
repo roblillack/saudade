@@ -984,19 +984,27 @@ fn tab_propagates_through_single_child_outer_container() {
         ch: '\t',
         modifiers: Modifiers::default(),
     };
-    let enter = Event::KeyDown {
+    let enter_down = Event::KeyDown {
         key: Key::Named(NamedKey::Enter),
         modifiers: Modifiers::default(),
     };
+    let enter_up = Event::KeyUp {
+        key: Key::Named(NamedKey::Enter),
+        modifiers: Modifiers::default(),
+    };
+    let press_enter = |w: &mut dyn saudade::Widget| {
+        backend.dispatch(w, &enter_down);
+        backend.dispatch(w, &enter_up);
+    };
 
     // Initial focus on A (Container.focus_first picks first focusable).
-    backend.dispatch(&mut outer, &enter);
+    press_enter(&mut outer);
     assert_eq!(fired.borrow().as_deref(), Some("A"));
 
     fired.borrow_mut().take();
     backend.dispatch(&mut outer, &tab);
     backend.dispatch(&mut outer, &tab_char);
-    backend.dispatch(&mut outer, &enter);
+    press_enter(&mut outer);
     assert_eq!(
         fired.borrow().as_deref(),
         Some("B"),
@@ -1006,7 +1014,7 @@ fn tab_propagates_through_single_child_outer_container() {
     fired.borrow_mut().take();
     backend.dispatch(&mut outer, &tab);
     backend.dispatch(&mut outer, &tab_char);
-    backend.dispatch(&mut outer, &enter);
+    press_enter(&mut outer);
     assert_eq!(
         fired.borrow().as_deref(),
         Some("C"),
@@ -1016,7 +1024,7 @@ fn tab_propagates_through_single_child_outer_container() {
     fired.borrow_mut().take();
     backend.dispatch(&mut outer, &tab);
     backend.dispatch(&mut outer, &tab_char);
-    backend.dispatch(&mut outer, &enter);
+    press_enter(&mut outer);
     assert_eq!(
         fired.borrow().as_deref(),
         Some("A"),
@@ -1062,14 +1070,22 @@ fn default_button_fires_on_enter_from_any_focus() {
     assert_eq!(c.focused_index(), Some(0));
 
     let backend = MockBackend::new(300, 80).with_scale(1.0);
-    let enter = Event::KeyDown {
+    let enter_down = Event::KeyDown {
         key: Key::Named(NamedKey::Enter),
         modifiers: Modifiers::default(),
+    };
+    let enter_up = Event::KeyUp {
+        key: Key::Named(NamedKey::Enter),
+        modifiers: Modifiers::default(),
+    };
+    let press_enter = |w: &mut dyn saudade::Widget| {
+        backend.dispatch(w, &enter_down);
+        backend.dispatch(w, &enter_up);
     };
 
     // Enter while the list is focused fires the default button (OK), not
     // the list's own Enter handler.
-    backend.dispatch(&mut c, &enter);
+    press_enter(&mut c);
     assert_eq!(*fired.borrow(), vec!["OK".to_string()]);
 
     // Focus the Cancel button via Tab and confirm Enter still fires OK
@@ -1090,7 +1106,7 @@ fn default_button_fires_on_enter_from_any_focus() {
     backend.dispatch(&mut c, &tab_char);
     assert_eq!(c.focused_index(), Some(2), "Cancel should be focused");
 
-    backend.dispatch(&mut c, &enter);
+    press_enter(&mut c);
     assert_eq!(
         *fired.borrow(),
         vec!["OK".to_string()],
@@ -1118,7 +1134,7 @@ fn default_button_fires_on_enter_from_any_focus() {
     backend.dispatch(&mut c, &shift_tab);
     backend.dispatch(&mut c, &shift_tab_char);
     assert_eq!(c.focused_index(), Some(1), "OK should be focused");
-    backend.dispatch(&mut c, &enter);
+    press_enter(&mut c);
     assert_eq!(*fired.borrow(), vec!["OK".to_string()]);
 }
 
@@ -1245,11 +1261,16 @@ fn open_dropdown_blocks_default_button_enter() {
         key: Key::Named(k),
         modifiers: Modifiers::default(),
     };
+    let key_up = |k| Event::KeyUp {
+        key: Key::Named(k),
+        modifiers: Modifiers::default(),
+    };
 
     // Click the field to open, move the highlight to "b", then Enter.
     backend.dispatch(&mut container, &down(20, 20));
     backend.dispatch(&mut container, &key(NamedKey::Down));
     backend.dispatch(&mut container, &key(NamedKey::Enter));
+    backend.dispatch(&mut container, &key_up(NamedKey::Enter));
     assert_eq!(
         *changes.borrow(),
         vec![1],
@@ -1263,6 +1284,7 @@ fn open_dropdown_blocks_default_button_enter() {
 
     // List closed now → Enter fires the default Book button.
     backend.dispatch(&mut container, &key(NamedKey::Enter));
+    backend.dispatch(&mut container, &key_up(NamedKey::Enter));
     assert_eq!(*booked.borrow(), 1, "Enter books once the list is closed");
 }
 
