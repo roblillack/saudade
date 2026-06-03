@@ -353,7 +353,7 @@ impl State {
 
         // Buffer holds physical pixels; the painter multiplies the
         // widget tree's logical coords by `scale` to land on them.
-        let mut painter = Painter::with_popup_pass(
+        let mut painter = Painter::with_popup_anchor(
             pixels,
             buf_w,
             buf_h,
@@ -362,7 +362,7 @@ impl State {
             0,
             self.font.as_ref(),
             self.mono_font.as_ref(),
-            false,
+            None,
         );
         painter.fill_pattern(self.theme.background, self.bg.pattern, self.bg.color);
         self.root.paint(&mut painter, &self.theme);
@@ -407,7 +407,7 @@ impl State {
         let clip_w = (anchor.w as f32 * scale_f).round() as i32;
         let clip_h = (anchor.h as f32 * scale_f).round() as i32;
 
-        let mut painter = Painter::with_popup_pass(
+        let mut painter = Painter::with_popup_anchor(
             pixels,
             buf_w,
             buf_h,
@@ -416,7 +416,7 @@ impl State {
             origin_y,
             self.font.as_ref(),
             self.mono_font.as_ref(),
-            true,
+            Some(anchor),
         );
         painter.fill(self.theme.background);
         painter.set_clip_phys(0, 0, clip_w, clip_h);

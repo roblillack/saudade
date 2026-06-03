@@ -358,6 +358,12 @@ impl AppHandler {
             WindowEvent::CloseRequested => {
                 self.dismiss_via_escape(event_loop);
             }
+            WindowEvent::Moved(_) => {
+                // A managed popup (typically a dialog) was dragged by the
+                // user / WM. Override-redirect popups nested inside it
+                // (e.g. an open dropdown) need to follow.
+                self.reposition_popup();
+            }
             WindowEvent::Resized(new_size) => {
                 if let Some(p) = self.popups.get_mut(idx) {
                     p.physical = new_size;
@@ -531,7 +537,7 @@ impl AppHandler {
         let mut surface_buf = surface
             .buffer_mut()
             .expect("saudade: failed to acquire surface buffer");
-        let mut painter = Painter::with_popup_pass(
+        let mut painter = Painter::with_popup_anchor(
             &mut surface_buf,
             self.physical.width as i32,
             self.physical.height as i32,
@@ -540,7 +546,7 @@ impl AppHandler {
             origin_y,
             self.font.as_ref(),
             self.mono_font.as_ref(),
-            false,
+            None,
         );
         painter.fill_pattern(self.theme.background, self.bg.pattern, self.bg.color);
         self.root.paint(&mut painter, &self.theme);
@@ -557,11 +563,12 @@ impl AppHandler {
         let origin_y = -((p.anchor.y as f32 * p.scale).round() as i32);
         let popup_phys_w = (p.anchor.w as f32 * p.scale).round() as i32;
         let popup_phys_h = (p.anchor.h as f32 * p.scale).round() as i32;
+        let anchor = p.anchor;
         let mut surface_buf = p
             .surface
             .buffer_mut()
             .expect("saudade: failed to acquire popup buffer");
-        let mut painter = Painter::with_popup_pass(
+        let mut painter = Painter::with_popup_anchor(
             &mut surface_buf,
             p.physical.width as i32,
             p.physical.height as i32,
@@ -570,7 +577,7 @@ impl AppHandler {
             origin_y,
             self.font.as_ref(),
             self.mono_font.as_ref(),
-            true,
+            Some(anchor),
         );
         painter.fill(self.theme.background);
         painter.set_clip_phys(0, 0, popup_phys_w, popup_phys_h);
@@ -581,28 +588,34 @@ impl AppHandler {
             .expect("saudade: failed to present popup buffer");
     }
 
-    /// Re-anchor the popup window to the main window's current screen
-    /// position. Called when the main window emits `Moved`. No-op when
-    /// there's no popup or when the platform doesn't support querying
-    /// the main window's inner position (e.g., Wayland). Dialog windows
-    /// are managed top-levels so the WM moves them on its own — we only
-    /// reposition popup-kind children.
+    /// Re-anchor every override-redirect popup to follow the window above
+    /// it in the stack (the main window for the outermost popup, the
+    /// dialog above for a nested dropdown). Called when the main window —
+    /// or a popup window — moves, since override-redirect popups are
+    /// unmanaged top-levels that the WM doesn't drag along. Managed
+    /// dialogs (`PopupKind::Dialog`) keep their own screen position.
     fn reposition_popup(&mut self) {
         let Some(main_win) = self.main_win.as_ref() else {
             return;
         };
-        let Ok(inner) = main_win.inner_position() else {
-            return;
-        };
-        // Every popup anchor is in root-widget coordinates, so each
-        // override-redirect popup — nested or not — re-anchors the same way:
-        // main-window inner position plus the anchor offset.
-        for popup in &self.popups {
+        for idx in 0..self.popups.len() {
+            let popup = &self.popups[idx];
             if popup.kind != PopupKind::Popup {
                 continue;
             }
-            let px = inner.x + ((popup.anchor.x as f32) * self.scale).round() as i32;
-            let py = inner.y + ((popup.anchor.y as f32) * self.scale).round() as i32;
+            // Outermost popup anchors to the main window; nested popups
+            // anchor to the popup directly above them.
+            let (parent_inner, parent_origin) = if idx == 0 {
+                (main_win.inner_position(), Rect::new(0, 0, 0, 0))
+            } else {
+                let parent = &self.popups[idx - 1];
+                (parent.win.inner_position(), parent.anchor)
+            };
+            let Ok(inner) = parent_inner else { continue };
+            let dx = (popup.anchor.x - parent_origin.x) as f32;
+            let dy = (popup.anchor.y - parent_origin.y) as f32;
+            let px = inner.x + (dx * self.scale).round() as i32;
+            let py = inner.y + (dy * self.scale).round() as i32;
             popup.win.set_outer_position(PhysicalPosition::new(px, py));
         }
     }
@@ -624,7 +637,14 @@ impl AppHandler {
             .count();
         self.popups.truncate(keep);
         for req in requests.into_iter().skip(keep) {
-            match self.open_popup(req, event_loop) {
+            // Nested popups anchor against the popup *above* them in the
+            // stack (e.g. a dropdown opened inside a dialog tracks the
+            // dialog's actual screen position, not the main window's —
+            // otherwise the WM moving the dialog leaves the dropdown
+            // floating over the parent window). The outermost popup keeps
+            // anchoring to the main window.
+            let parent = self.popups.last();
+            match self.open_popup(req, parent, event_loop) {
                 Some(p) => self.popups.push(p),
                 // If a popup can't be created, stop — a child popup must not
                 // outlive a missing parent.
@@ -636,6 +656,7 @@ impl AppHandler {
     fn open_popup(
         &self,
         request: PopupRequest,
+        parent: Option<&PopupWindow>,
         event_loop: &ActiveEventLoop,
     ) -> Option<PopupWindow> {
         let main_win = self.main_win.as_ref()?;
@@ -670,15 +691,25 @@ impl AppHandler {
                         .with_x11_window_type(vec![XWindowType::DropdownMenu]);
                 }
 
-                // Absolute screen position = main window inner position +
-                // popup offset in physical pixels. On X11 with
-                // override-redirect this is honored exactly. On Wayland
-                // (no popup support yet) winit creates a top-level window
-                // and the compositor places it on its own — the position
-                // request is ignored.
-                if let Ok(inner) = main_win.inner_position() {
-                    let px = inner.x + ((rect.x as f32) * self.scale).round() as i32;
-                    let py = inner.y + ((rect.y as f32) * self.scale).round() as i32;
+                // Absolute screen position = anchor window inner position
+                // + popup offset, where the anchor is the parent popup
+                // (for a nested popup) or the main window otherwise.
+                // Popup rects are in *root* coords as they would be if the
+                // parent were at its own anchor — translate by the parent
+                // anchor's origin so the offset is parent-local. On X11
+                // with override-redirect this is honored exactly. On
+                // Wayland (no popup support yet) winit creates a top-level
+                // window and the compositor places it on its own — the
+                // position request is ignored.
+                let anchor_inner = parent
+                    .map(|p| p.win.inner_position())
+                    .unwrap_or_else(|| main_win.inner_position());
+                let parent_origin = parent.map(|p| p.anchor).unwrap_or(Rect::new(0, 0, 0, 0));
+                if let Ok(inner) = anchor_inner {
+                    let dx = (rect.x - parent_origin.x) as f32;
+                    let dy = (rect.y - parent_origin.y) as f32;
+                    let px = inner.x + (dx * self.scale).round() as i32;
+                    let py = inner.y + (dy * self.scale).round() as i32;
                     attrs = attrs.with_position(PhysicalPosition::new(px, py));
                 }
             }

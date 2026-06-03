@@ -347,9 +347,16 @@ impl Widget for Dropdown {
 
     fn paint_overlay(&mut self, painter: &mut Painter, theme: &Theme) {
         // The list lives in a separate top-level popup window — only draw it
-        // when the painter is running that popup pass, so the main window
-        // leaves the footprint clear for the real popup surface.
-        if !painter.is_popup_pass() || !self.open {
+        // when the painter is running *that* popup pass, so neither the main
+        // window nor any other popup in the stack (e.g. a dialog hosting this
+        // dropdown) ends up with a duplicate copy in its framebuffer.
+        if !self.open {
+            return;
+        }
+        let Some(req) = self.popup_request() else {
+            return;
+        };
+        if painter.popup_anchor() != Some(req.rect) {
             return;
         }
         let popup = self.popup_rect();

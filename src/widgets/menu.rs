@@ -388,10 +388,10 @@ impl Widget for MenuBar {
     }
 
     fn paint_overlay(&mut self, painter: &mut Painter, theme: &Theme) {
-        // The popup lives in a separate top-level window — only draw it
-        // when the painter is running in popup-pass mode. In the main
-        // window's overlay pass we deliberately leave the popup area
-        // untouched so the runtime can place a real popup window there.
+        // The popup lives in a separate top-level window — only draw it when
+        // the painter is running *that* popup pass, so neither the main
+        // window nor an unrelated popup in the stack (e.g. a dialog) ends up
+        // with a duplicate copy in its framebuffer.
         if !painter.is_popup_pass() {
             return;
         }
@@ -404,6 +404,11 @@ impl Widget for MenuBar {
                 p
             }
         };
+        // The cache is populated now; the anchor check has to come after so
+        // popup_request can report a rect.
+        if painter.popup_anchor() != self.popup_request().map(|r| r.rect) {
+            return;
+        }
 
         // L-shape drop shadow drawn first so the popup overlays it on the
         // top/left edges.

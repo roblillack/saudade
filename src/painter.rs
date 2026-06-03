@@ -38,11 +38,15 @@ pub struct Painter<'a> {
     /// per-character advances. May be the same physical face as `font` on
     /// systems where no dedicated monospace face was discovered.
     mono_font: Option<&'a Font>,
-    /// `true` when this painter is drawing into a popup top-level window
-    /// rather than the main window. Widgets that maintain floating overlays
-    /// (menu popups, tooltips) inspect this in `paint_overlay` so they only
-    /// draw on the surface that actually hosts them.
-    popup_pass: bool,
+    /// `Some(anchor)` when this painter is drawing into a popup top-level
+    /// window, where `anchor` is the popup's [`PopupRequest::rect`] (the
+    /// same value the runtime opened the popup window with). `None` in the
+    /// main pass. Widgets that maintain floating overlays (menu popups,
+    /// tooltips) inspect this in `paint_overlay` so they only draw on the
+    /// surface that actually hosts them — and, when several popups are
+    /// stacked (e.g. a dropdown opened inside a dialog), only into the one
+    /// whose anchor matches their own [`Widget::popup_request`].
+    popup_anchor: Option<Rect>,
     /// Physical-pixel clip rectangle. When set, all draws are restricted to
     /// pixels inside this rect. The runtime uses this to keep the popup
     /// pass from leaking widget content past the popup's footprint.
@@ -61,16 +65,20 @@ impl<'a> Painter<'a> {
         font: Option<&'a Font>,
         mono_font: Option<&'a Font>,
     ) -> Self {
-        Self::with_popup_pass(
-            pixels, width, height, scale, origin_x, origin_y, font, mono_font, false,
+        Self::with_popup_anchor(
+            pixels, width, height, scale, origin_x, origin_y, font, mono_font, None,
         )
     }
 
-    /// Like [`Painter::new`] but explicitly marks the painter as running
-    /// in a popup top-level window. Use this from the runtime when
-    /// rendering a separate popup surface.
+    /// Like [`Painter::new`] but tags the painter as running inside a
+    /// popup top-level window whose [`PopupRequest::rect`] is `anchor`.
+    /// `None` means the main window pass (equivalent to [`Painter::new`]).
+    /// Widgets compare `anchor` against their own popup request in
+    /// `paint_overlay` so that, when several popups are stacked, the
+    /// dropdown / menu / dialog body is drawn only into the surface that
+    /// actually hosts it.
     #[allow(clippy::too_many_arguments)]
-    pub fn with_popup_pass(
+    pub fn with_popup_anchor(
         pixels: &'a mut [u32],
         width: i32,
         height: i32,
@@ -79,7 +87,7 @@ impl<'a> Painter<'a> {
         origin_y: i32,
         font: Option<&'a Font>,
         mono_font: Option<&'a Font>,
-        popup_pass: bool,
+        popup_anchor: Option<Rect>,
     ) -> Self {
         Self {
             pixels,
@@ -90,13 +98,22 @@ impl<'a> Painter<'a> {
             origin_y,
             font,
             mono_font,
-            popup_pass,
+            popup_anchor,
             clip: None,
         }
     }
 
     pub fn is_popup_pass(&self) -> bool {
-        self.popup_pass
+        self.popup_anchor.is_some()
+    }
+
+    /// [`PopupRequest::rect`] of the popup this painter is drawing into,
+    /// or `None` in the main pass. Widgets that report a
+    /// [`Widget::popup_request`](crate::Widget::popup_request) use this in
+    /// `paint_overlay` to decide whether the current popup pass is *theirs*
+    /// — only then should they draw their popup body.
+    pub fn popup_anchor(&self) -> Option<Rect> {
+        self.popup_anchor
     }
 
     /// Restrict all subsequent drawing to a physical-pixel rectangle. Used

@@ -118,7 +118,7 @@ impl MockBackend {
         let (origin_x, origin_y) = origin_centered(self.logical_size, self.scale, physical);
 
         {
-            let mut painter = Painter::with_popup_pass(
+            let mut painter = Painter::with_popup_anchor(
                 &mut pixels,
                 physical.w,
                 physical.h,
@@ -127,7 +127,7 @@ impl MockBackend {
                 origin_y,
                 self.font.as_ref(),
                 self.mono_font.as_ref(),
-                false,
+                None,
             );
             painter.fill(self.theme.background);
             root.paint(&mut painter, &self.theme);
@@ -143,7 +143,7 @@ impl MockBackend {
             let popup_phys_y = origin_y + (req.rect.y as f32 * self.scale).round() as i32;
             let popup_phys_w = (req.rect.w as f32 * self.scale).round() as i32;
             let popup_phys_h = (req.rect.h as f32 * self.scale).round() as i32;
-            let mut painter = Painter::with_popup_pass(
+            let mut painter = Painter::with_popup_anchor(
                 &mut pixels,
                 physical.w,
                 physical.h,
@@ -152,7 +152,7 @@ impl MockBackend {
                 origin_y,
                 self.font.as_ref(),
                 self.mono_font.as_ref(),
-                true,
+                Some(req.rect),
             );
             painter.set_clip_phys(popup_phys_x, popup_phys_y, popup_phys_w, popup_phys_h);
             root.paint(&mut painter, &self.theme);
