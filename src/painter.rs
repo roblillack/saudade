@@ -449,27 +449,12 @@ impl<'a> Painter<'a> {
             self.v_line(rect.x, rect.y + 1, rect.h - 2, theme.border);
             self.v_line(rect.right() - 1, rect.y + 1, rect.h - 2, theme.border);
         }
-        let inner_outer = rect.inset(1);
-        // Fill the face across the whole inner area first. For default
-        // buttons, overlay a 1-*physical*-pixel black indicator frame
-        // right inside the outer rounded border on top of the face —
-        // unlike the rounded outer border, which scales with DPI, the
-        // default indicator stays hairline at every scale so it reads
-        // as a marker rather than a second thick border. The bevel then
-        // sits one *logical* pixel inside the indicator (same offset
-        // as the non-physical-pixel version had at 1.0x), leaving a
-        // thin face-coloured ring between the indicator and the bevel
-        // at scales > 1.
-        self.fill_rect(inner_outer, theme.face);
-        let inner = if default {
-            let phys_inner = self.rect_to_physical(inner_outer);
-            let saved = self.push_physical_pixels();
-            self.stroke_rect(phys_inner, theme.border);
-            self.restore_scale(saved);
-            inner_outer.inset(1)
-        } else {
-            inner_outer
-        };
+        let mut inner = rect.inset(1);
+        if default {
+            self.stroke_rect(inner, theme.border);
+            inner = inner.inset(1);
+        }
+        self.fill_rect(inner, theme.face);
         if pressed {
             self.sunken_bevel(inner, theme.highlight, theme.shadow);
             let inner2 = inner.inset(1);
