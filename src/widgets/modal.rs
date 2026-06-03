@@ -176,16 +176,28 @@ impl Widget for Modal {
     }
 
     fn paint_overlay(&mut self, painter: &mut Painter, theme: &Theme) {
-        // Only draw into the popup-pass surface the runtime opens for us — the
-        // main window's overlay pass leaves the dialog's footprint untouched.
+        // Skip the main pass entirely — the dialog lives in its own top-level
+        // window opened by the runtime.
         if !self.open || !painter.is_popup_pass() {
             return;
         }
-        // Plain background fill across the client area; the WM / compositor
-        // draws the surrounding chrome (title bar, close button).
-        painter.fill_rect(self.rect(), theme.background);
+        let rect = self.rect();
+        // Each popup window in a nested stack (e.g. our dialog and a Dropdown
+        // opened inside it) runs the same paint pass against the root, so
+        // every paint_overlay sees every popup pass. Only stamp the dialog
+        // body when this pass is *ours*; for nested-popup passes we just
+        // forward to the content so the nested widget can find its own pass.
+        let is_our_pass = painter.popup_anchor() == Some(rect);
+        if is_our_pass {
+            // Plain background fill across the client area; the WM /
+            // compositor draws the surrounding chrome (title bar, close
+            // button).
+            painter.fill_rect(rect, theme.background);
+        }
         if let Some(content) = self.content.as_mut() {
-            content.paint(painter, theme);
+            if is_our_pass {
+                content.paint(painter, theme);
+            }
             content.paint_overlay(painter, theme);
         }
     }
@@ -231,6 +243,19 @@ impl Widget for Modal {
             kind: PopupKind::Dialog,
             title: Some(self.title.clone()),
         })
+    }
+
+    fn collect_popups(&self, out: &mut Vec<PopupRequest>) {
+        // The dialog's own window first, then any popup the hosted content
+        // wants (e.g. a `Dropdown` list opened inside the dialog) — that nested
+        // request would otherwise be lost, since the dialog is the only popup
+        // the tree surfaced before.
+        if let Some(req) = self.popup_request() {
+            out.push(req);
+            if let Some(content) = self.content.as_ref() {
+                content.collect_popups(out);
+            }
+        }
     }
 
     fn wants_ticks(&self) -> bool {

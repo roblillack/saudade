@@ -102,8 +102,29 @@ pub trait Widget {
     /// window at the indicated logical-coord rect so the popup can extend
     /// past the main window's edges. Container widgets propagate this from
     /// their children. Default: no popup.
+    ///
+    /// Most callers should use [`collect_popups`](Widget::collect_popups),
+    /// which gathers the *whole* active popup stack (e.g. a dropdown opened
+    /// inside a dialog) rather than just one request.
     fn popup_request(&self) -> Option<PopupRequest> {
         None
+    }
+
+    /// Collect every popup this widget and its descendants currently want the
+    /// runtime to host, outermost first.
+    ///
+    /// The runtime hosts these as a *stack* of popup windows: index 0 is the
+    /// outermost (e.g. a modal dialog), later entries nest inside it (e.g. a
+    /// [`Dropdown`](crate::widgets::Dropdown) list opened *within* that dialog).
+    /// The default pushes this widget's own
+    /// [`popup_request`](Widget::popup_request); container widgets override it
+    /// to walk their children, and [`Modal`](crate::widgets::Modal) overrides it
+    /// to also descend into its hosted content — that's what lets a dropdown in
+    /// a dialog get its own popup window instead of being clipped to the dialog.
+    fn collect_popups(&self, out: &mut Vec<PopupRequest>) {
+        if let Some(req) = self.popup_request() {
+            out.push(req);
+        }
     }
 
     /// Try to give keyboard focus to this widget or one of its descendants.

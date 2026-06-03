@@ -80,6 +80,17 @@ impl Container {
         if let Some(idx) = self.captured {
             return Some(idx);
         }
+        // A child holding an open popup (e.g. a `MenuBar` opened from the
+        // keyboard) owns pointer events even though no press ever established
+        // capture — otherwise a click would fall through to whatever sits behind
+        // the popup that's drawn on top (the icon underneath an open menu).
+        if let Some(idx) = self
+            .children
+            .iter()
+            .position(|c| c.accepts_accelerators() && c.captures_pointer())
+        {
+            return Some(idx);
+        }
         let pos = event.position()?;
         (0..self.children.len())
             .rev()
@@ -300,6 +311,12 @@ impl Widget for Container {
             }
         }
         None
+    }
+
+    fn collect_popups(&self, out: &mut Vec<PopupRequest>) {
+        for child in &self.children {
+            child.collect_popups(out);
+        }
     }
 
     fn wants_ticks(&self) -> bool {

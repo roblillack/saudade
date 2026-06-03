@@ -388,10 +388,10 @@ impl Widget for MenuBar {
     }
 
     fn paint_overlay(&mut self, painter: &mut Painter, theme: &Theme) {
-        // The popup lives in a separate top-level window — only draw it
-        // when the painter is running in popup-pass mode. In the main
-        // window's overlay pass we deliberately leave the popup area
-        // untouched so the runtime can place a real popup window there.
+        // The popup lives in a separate top-level window — only draw it when
+        // the painter is running *that* popup pass, so neither the main
+        // window nor an unrelated popup in the stack (e.g. a dialog) ends up
+        // with a duplicate copy in its framebuffer.
         if !painter.is_popup_pass() {
             return;
         }
@@ -404,6 +404,11 @@ impl Widget for MenuBar {
                 p
             }
         };
+        // The cache is populated now; the anchor check has to come after so
+        // popup_request can report a rect.
+        if painter.popup_anchor() != self.popup_request().map(|r| r.rect) {
+            return;
+        }
 
         // L-shape drop shadow drawn first so the popup overlays it on the
         // top/left edges.
@@ -542,53 +547,75 @@ impl Widget for MenuBar {
                         ctx.request_paint();
                     }
                 }
-            Event::KeyDown { key, modifiers } => match key {
-                Key::Named(NamedKey::Escape) if self.open.is_some() => {
-                    self.open = None;
-                    self.hovered_item = None;
-                    ctx.request_paint();
-                }
-                Key::Named(NamedKey::Down) if self.open.is_some() => {
-                    self.move_selection(1, ctx);
-                }
-                Key::Named(NamedKey::Up) if self.open.is_some() => {
-                    self.move_selection(-1, ctx);
-                }
-                Key::Named(NamedKey::Right) if self.open.is_some() => {
-                    self.switch_top_level(1, ctx);
-                }
-                Key::Named(NamedKey::Left) if self.open.is_some() => {
-                    self.switch_top_level(-1, ctx);
-                }
-                Key::Named(NamedKey::Home) if self.open.is_some() => {
-                    self.hovered_item = self.first_action();
-                    ctx.request_paint();
-                }
-                Key::Named(NamedKey::End) if self.open.is_some() => {
-                    self.hovered_item = self.last_action();
-                    ctx.request_paint();
-                }
-                Key::Named(NamedKey::Enter) if self.open.is_some() => {
-                    if let Some(item) = self.hovered_item {
-                        self.fire(item, ctx);
+            Event::KeyDown { key, modifiers } => {
+                // Whether the menu was already open *before* handling this key.
+                // It matters because firing an item (Enter / a mnemonic) closes
+                // the menu in this same dispatch — and we must still swallow that
+                // keystroke (see the consume below) so it doesn't also reach the
+                // focused widget behind the bar.
+                let was_open = self.open.is_some();
+                match key {
+                    Key::Named(NamedKey::Escape) if was_open => {
                         self.open = None;
                         self.hovered_item = None;
                         ctx.request_paint();
                     }
-                }
-                Key::Char(ch)
-                    if self.handle_mnemonic(*ch, *modifiers, ctx) => {
-                        // consumed
+                    Key::Named(NamedKey::Down) if was_open => {
+                        self.move_selection(1, ctx);
                     }
-                _ => {}
-            },
+                    Key::Named(NamedKey::Up) if was_open => {
+                        self.move_selection(-1, ctx);
+                    }
+                    Key::Named(NamedKey::Right) if was_open => {
+                        self.switch_top_level(1, ctx);
+                    }
+                    Key::Named(NamedKey::Left) if was_open => {
+                        self.switch_top_level(-1, ctx);
+                    }
+                    Key::Named(NamedKey::Home) if was_open => {
+                        self.hovered_item = self.first_action();
+                        ctx.request_paint();
+                    }
+                    Key::Named(NamedKey::End) if was_open => {
+                        self.hovered_item = self.last_action();
+                        ctx.request_paint();
+                    }
+                    Key::Named(NamedKey::Enter) if was_open => {
+                        if let Some(item) = self.hovered_item {
+                            self.fire(item, ctx);
+                            self.open = None;
+                            self.hovered_item = None;
+                            ctx.request_paint();
+                        }
+                    }
+                    Key::Char(ch) => {
+                        self.handle_mnemonic(*ch, *modifiers, ctx);
+                    }
+                    _ => {}
+                }
+                // An open menu owns the keyboard: swallow the keystroke so it
+                // can't *also* act on the focused widget behind the bar — the
+                // bug where Enter both fired the menu item and activated the
+                // control underneath. We consume when the menu was already open
+                // (it captures every key while up, even ones it ignores) or when
+                // this key just opened one (a top-level mnemonic). A key pressed
+                // against a closed bar that opens nothing falls through.
+                if was_open || self.open.is_some() {
+                    ctx.consume_event();
+                }
+            }
             Event::Char { ch, modifiers }
                 // Some platforms route mnemonic characters through Char with
                 // Alt held; treat the same way. AltGr is excluded so composed
                 // characters still reach the focused text widget.
-                if modifiers.mnemonic_alt() => {
-                    self.handle_mnemonic(*ch, *modifiers, ctx);
+                if modifiers.mnemonic_alt() =>
+            {
+                let was_open = self.open.is_some();
+                self.handle_mnemonic(*ch, *modifiers, ctx);
+                if was_open || self.open.is_some() {
+                    ctx.consume_event();
                 }
+            }
             _ => {}
         }
     }
@@ -727,5 +754,88 @@ impl MenuBar {
             return true;
         }
         false
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    fn bar_with_help(fired: Rc<Cell<bool>>) -> MenuBar {
+        MenuBar::new(Rect::new(0, 0, 200, 20)).add_menu(Menu::new(
+            "&Help",
+            vec![MenuItem::action("&About", move |_| fired.set(true))],
+        ))
+    }
+
+    fn keydown(key: Key) -> Event {
+        Event::KeyDown {
+            key,
+            modifiers: Modifiers::default(),
+        }
+    }
+
+    #[test]
+    fn open_menu_consumes_the_enter_that_fires_an_item() {
+        let fired = Rc::new(Cell::new(false));
+        let mut bar = bar_with_help(fired.clone());
+        bar.open(0);
+        // Highlight the first item …
+        let mut ctx = EventCtx::new();
+        bar.event(&keydown(Key::Named(NamedKey::Down)), &mut ctx);
+        // … then Enter fires it.
+        let mut ctx = EventCtx::new();
+        bar.event(&keydown(Key::Named(NamedKey::Enter)), &mut ctx);
+        assert!(fired.get(), "Enter fires the highlighted item");
+        assert!(
+            ctx.is_consumed(),
+            "an open menu must swallow the Enter so it can't also reach the focused widget"
+        );
+    }
+
+    #[test]
+    fn open_menu_swallows_keys_it_ignores() {
+        // Space isn't a menu command, but while the menu is up it must not leak
+        // to the focused widget behind the bar either.
+        let mut bar = bar_with_help(Rc::new(Cell::new(false)));
+        bar.open(0);
+        let mut ctx = EventCtx::new();
+        bar.event(&keydown(Key::Named(NamedKey::Space)), &mut ctx);
+        assert!(ctx.is_consumed());
+    }
+
+    #[test]
+    fn closed_bar_lets_plain_keys_through() {
+        let mut bar = bar_with_help(Rc::new(Cell::new(false)));
+        let mut ctx = EventCtx::new();
+        bar.event(&keydown(Key::Char('x')), &mut ctx);
+        assert!(
+            !ctx.is_consumed(),
+            "a plain key against a closed bar must reach the focused widget"
+        );
+    }
+
+    #[test]
+    fn alt_mnemonic_opening_a_menu_is_consumed() {
+        let mut bar = bar_with_help(Rc::new(Cell::new(false)));
+        let alt = Modifiers {
+            alt: true,
+            ..Modifiers::default()
+        };
+        let mut ctx = EventCtx::new();
+        bar.event(
+            &Event::KeyDown {
+                key: Key::Char('h'),
+                modifiers: alt,
+            },
+            &mut ctx,
+        );
+        assert!(bar.open.is_some(), "Alt+H opens the Help menu");
+        assert!(
+            ctx.is_consumed(),
+            "and that mnemonic keystroke is swallowed"
+        );
     }
 }

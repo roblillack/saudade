@@ -226,6 +226,9 @@ impl Widget for Dialog {
     fn popup_request(&self) -> Option<PopupRequest> {
         self.modal.popup_request()
     }
+    fn collect_popups(&self, out: &mut Vec<PopupRequest>) {
+        self.modal.collect_popups(out);
+    }
     fn wants_ticks(&self) -> bool {
         self.modal.wants_ticks()
     }
