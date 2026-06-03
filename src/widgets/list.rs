@@ -298,10 +298,23 @@ impl Widget for List {
     fn paint(&mut self, painter: &mut Painter, theme: &Theme) {
         self.sync_scrollbar();
         let text = self.text_area();
+        let crisp = painter.wants_crisp_chrome();
 
+        // Field background stays at the full logical bounds; the chrome
+        // edges (sunken bevel + 1-px outer border) are drawn at exact
+        // physical pixels in the `[0.9, 1.5)` crisp range so they don't
+        // alias against the row separators or the scrollbar gutter.
         painter.fill_rect(text, Color::WHITE);
-        painter.sunken_bevel(text, theme.highlight, theme.shadow);
-        painter.stroke_rect(text, theme.border);
+        if crisp {
+            let phys_text = painter.rect_to_physical(text);
+            let saved = painter.push_physical_pixels();
+            painter.sunken_bevel(phys_text, theme.highlight, theme.shadow);
+            painter.stroke_rect(phys_text, theme.border);
+            painter.restore_scale(saved);
+        } else {
+            painter.sunken_bevel(text, theme.highlight, theme.shadow);
+            painter.stroke_rect(text, theme.border);
+        }
 
         // Confine every row to the field interior so a label wider than the
         // row (or a forced partial row in a field too short for one) is clipped
@@ -360,11 +373,15 @@ impl Widget for List {
             && idx < scroll_top + visible
         {
             let y = text_y0 + (idx - scroll_top) as i32 * ROW_HEIGHT;
-            draw_focus_rect(
-                painter,
-                Rect::new(text_x, y, row_w.max(0), ROW_HEIGHT),
-                theme.text,
-            );
+            let focus = Rect::new(text_x, y, row_w.max(0), ROW_HEIGHT);
+            if crisp {
+                let phys = painter.rect_to_physical(focus);
+                let saved = painter.push_physical_pixels();
+                draw_focus_rect(painter, phys, theme.text);
+                painter.restore_scale(saved);
+            } else {
+                draw_focus_rect(painter, focus, theme.text);
+            }
         }
 
         painter.restore_clip(saved_clip);

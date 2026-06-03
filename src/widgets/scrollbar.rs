@@ -279,26 +279,57 @@ impl Widget for ScrollBar {
 
         let up = self.neg_arrow_rect();
         let down = self.pos_arrow_rect();
-        painter.button(up, theme, false, false);
-        painter.button(down, theme, false, false);
-        draw_arrow(
-            painter,
-            up,
-            self.orientation,
-            ArrowDir::Negative,
-            theme.text,
-        );
-        draw_arrow(
-            painter,
-            down,
-            self.orientation,
-            ArrowDir::Positive,
-            theme.text,
-        );
+        let thumb_opt = (self.max > 0).then(|| self.thumb_rect());
 
-        if self.max > 0 {
-            let thumb = self.thumb_rect();
-            painter.button(thumb, theme, false, false);
+        // Arrow buttons, thumb chrome, and the small triangle glyphs are
+        // all 1-logical-pixel chrome that aliases at fractional scales.
+        // Draw the whole chrome pass at exact physical pixels in the
+        // `[0.9, 1.5)` crisp range so the bevels and arrows stay sharp.
+        if painter.wants_crisp_chrome() {
+            let phys_up = painter.rect_to_physical(up);
+            let phys_down = painter.rect_to_physical(down);
+            let phys_thumb = thumb_opt.map(|t| painter.rect_to_physical(t));
+            let saved = painter.push_physical_pixels();
+            painter.button(phys_up, theme, false, false);
+            painter.button(phys_down, theme, false, false);
+            draw_arrow(
+                painter,
+                phys_up,
+                self.orientation,
+                ArrowDir::Negative,
+                theme.text,
+            );
+            draw_arrow(
+                painter,
+                phys_down,
+                self.orientation,
+                ArrowDir::Positive,
+                theme.text,
+            );
+            if let Some(phys_thumb) = phys_thumb {
+                painter.button(phys_thumb, theme, false, false);
+            }
+            painter.restore_scale(saved);
+        } else {
+            painter.button(up, theme, false, false);
+            painter.button(down, theme, false, false);
+            draw_arrow(
+                painter,
+                up,
+                self.orientation,
+                ArrowDir::Negative,
+                theme.text,
+            );
+            draw_arrow(
+                painter,
+                down,
+                self.orientation,
+                ArrowDir::Positive,
+                theme.text,
+            );
+            if let Some(thumb) = thumb_opt {
+                painter.button(thumb, theme, false, false);
+            }
         }
     }
 

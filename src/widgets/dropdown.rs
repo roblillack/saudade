@@ -310,21 +310,38 @@ impl Widget for Dropdown {
         } else {
             theme.face
         };
-        painter.fill_rect(self.rect, bg);
-        painter.sunken_bevel(self.rect, theme.highlight, theme.shadow);
-        painter.stroke_rect(self.rect, theme.border);
-
-        // Raised drop-arrow button (pressed-looking while the list is open).
         let btn = self.arrow_rect();
-        painter.button(btn, theme, self.open, false);
         let arrow_color = if self.enabled {
             theme.text
         } else {
             theme.disabled_text
         };
-        draw_down_arrow(painter, btn, arrow_color);
+        let crisp = painter.wants_crisp_chrome();
 
-        // Selected label, clipped to the area left of the button.
+        // Chrome pass — sunken field + outer border + raised arrow button
+        // + arrow glyph. At scales in `[0.9, 1.5)` everything chrome-thin
+        // is drawn at exact physical pixels so adjacent edges share a
+        // consistent thickness.
+        if crisp {
+            let phys_field = painter.rect_to_physical(self.rect);
+            let phys_btn = painter.rect_to_physical(btn);
+            let saved = painter.push_physical_pixels();
+            painter.fill_rect(phys_field, bg);
+            painter.sunken_bevel(phys_field, theme.highlight, theme.shadow);
+            painter.stroke_rect(phys_field, theme.border);
+            painter.button(phys_btn, theme, self.open, false);
+            draw_down_arrow(painter, phys_btn, arrow_color);
+            painter.restore_scale(saved);
+        } else {
+            painter.fill_rect(self.rect, bg);
+            painter.sunken_bevel(self.rect, theme.highlight, theme.shadow);
+            painter.stroke_rect(self.rect, theme.border);
+            painter.button(btn, theme, self.open, false);
+            draw_down_arrow(painter, btn, arrow_color);
+        }
+
+        // Selected label, clipped to the area left of the button. Text
+        // always renders at the actual scale so glyphs stay legible.
         if let Some(text) = self.selected_text() {
             let area = self.text_area();
             let saved = painter.push_clip(area);
@@ -341,7 +358,15 @@ impl Widget for Dropdown {
 
         // Dotted focus rectangle inside the text area, Win 3.1-style.
         if self.focused && self.enabled {
-            draw_focus_rect(painter, self.text_area().inset(1), theme.text);
+            let focus = self.text_area().inset(1);
+            if crisp {
+                let phys = painter.rect_to_physical(focus);
+                let saved = painter.push_physical_pixels();
+                draw_focus_rect(painter, phys, theme.text);
+                painter.restore_scale(saved);
+            } else {
+                draw_focus_rect(painter, focus, theme.text);
+            }
         }
     }
 

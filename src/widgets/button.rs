@@ -113,7 +113,24 @@ impl Widget for Button {
 
     fn paint(&mut self, painter: &mut Painter, theme: &Theme) {
         let pressed_visual = self.press != Press::None && self.armed;
-        painter.button(self.rect, theme, pressed_visual, self.default);
+        // At scales in `[0.9, 1.5)` the 1-logical-pixel chrome edges that
+        // make up the bevel would round inconsistently — neighbouring
+        // lines snap to 1 or 2 physical pixels depending on where they
+        // happen to fall. Draw the frame at exact physical pixels there,
+        // using the same recipe as the 1.0x pass but executed against
+        // the button's *physical* bounds. Every chrome line ends up
+        // exactly 1 physical pixel thick: the lines look slightly
+        // thinner relative to the (larger) face, but every edge is
+        // crisp.
+        let crisp = painter.wants_crisp_chrome();
+        if crisp {
+            let phys_rect = painter.rect_to_physical(self.rect);
+            let saved = painter.push_physical_pixels();
+            painter.button(phys_rect, theme, pressed_visual, self.default);
+            painter.restore_scale(saved);
+        } else {
+            painter.button(self.rect, theme, pressed_visual, self.default);
+        }
 
         // When pressed, push the label one pixel down/right for tactile feel.
         let mut label_rect = self.rect;
@@ -140,11 +157,22 @@ impl Widget for Button {
 
         // Dotted focus rectangle inside the bevel — the same chrome Win 3.1
         // drew on its focused buttons. Keep it inset enough that it doesn't
-        // collide with the raised bevel highlights.
+        // collide with the raised bevel highlights. Mirror the frame's
+        // crisp-mode treatment: at scales in `[0.9, 1.5)` the dot/gap
+        // pattern would otherwise alias (a 1-logical-pixel dot snaps to
+        // either 1 or 2 physical pixels), so draw it at exact physical
+        // pixels there.
         if self.focused && self.enabled {
             let inset = if self.default { 4 } else { 3 };
             let r = self.rect.inset(inset);
-            draw_focus_rect(painter, r, theme.text);
+            if crisp {
+                let phys_r = painter.rect_to_physical(r);
+                let saved = painter.push_physical_pixels();
+                draw_focus_rect(painter, phys_r, theme.text);
+                painter.restore_scale(saved);
+            } else {
+                draw_focus_rect(painter, r, theme.text);
+            }
         }
     }
 

@@ -187,14 +187,32 @@ impl Widget for Slider {
         let gx = self.rect.x + THUMB_W / 2;
         let gw = (self.rect.w - THUMB_W).max(0);
         let groove = Rect::new(gx, gy, gw, GROOVE_H);
-        painter.fill_rect(groove, theme.face);
-        painter.sunken_bevel(groove, theme.highlight, theme.shadow);
-
-        // Raised thumb, same chrome as a (small) button.
         let thumb = self.thumb_rect();
-        painter.button(thumb, theme, false, false);
-        if self.focused && self.enabled {
-            draw_focus_rect(painter, thumb.inset(3), theme.text);
+        let focus = thumb.inset(3);
+
+        // In the `[0.9, 1.5)` crisp range, every chrome edge (groove
+        // bevel, thumb bevel, focus dots) is drawn at exact physical
+        // pixels — otherwise 1-logical-pixel chrome rounds to either 1
+        // or 2 physical pixels and the thumb's bevel looks lopsided.
+        if painter.wants_crisp_chrome() {
+            let phys_groove = painter.rect_to_physical(groove);
+            let phys_thumb = painter.rect_to_physical(thumb);
+            let phys_focus = painter.rect_to_physical(focus);
+            let saved = painter.push_physical_pixels();
+            painter.fill_rect(phys_groove, theme.face);
+            painter.sunken_bevel(phys_groove, theme.highlight, theme.shadow);
+            painter.button(phys_thumb, theme, false, false);
+            if self.focused && self.enabled {
+                draw_focus_rect(painter, phys_focus, theme.text);
+            }
+            painter.restore_scale(saved);
+        } else {
+            painter.fill_rect(groove, theme.face);
+            painter.sunken_bevel(groove, theme.highlight, theme.shadow);
+            painter.button(thumb, theme, false, false);
+            if self.focused && self.enabled {
+                draw_focus_rect(painter, focus, theme.text);
+            }
         }
     }
 

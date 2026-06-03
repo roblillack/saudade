@@ -468,8 +468,20 @@ impl Widget for TextInput {
             theme.face
         };
         painter.fill_rect(self.rect, field_bg);
-        painter.sunken_bevel(self.rect, theme.highlight, theme.shadow);
-        painter.stroke_rect(self.rect, theme.border);
+        // Chrome edges (sunken bevel + 1-px outer border) at exact
+        // physical pixels in the `[0.9, 1.5)` crisp range so the field
+        // doesn't alias against the selection band or neighbouring
+        // widgets at fractional DPI.
+        if painter.wants_crisp_chrome() {
+            let phys = painter.rect_to_physical(self.rect);
+            let saved = painter.push_physical_pixels();
+            painter.sunken_bevel(phys, theme.highlight, theme.shadow);
+            painter.stroke_rect(phys, theme.border);
+            painter.restore_scale(saved);
+        } else {
+            painter.sunken_bevel(self.rect, theme.highlight, theme.shadow);
+            painter.stroke_rect(self.rect, theme.border);
+        }
 
         self.rebuild_widths(painter, font_size);
         let visible_w = (self.rect.w - PADDING_X * 2).max(0);
