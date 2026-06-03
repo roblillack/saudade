@@ -31,9 +31,10 @@ pub struct Column {
     captured: Option<usize>,
     focused: Option<usize>,
     /// True while the focused child's focus is *visually* suspended because a
-    /// menu is open and owns the keyboard. The focus index in `focused` is kept
-    /// so it can be handed straight back when the menu closes; only the child's
-    /// `set_focused` flag is toggled. See [`Column::sync_menu_focus`].
+    /// menu or a modal overlay is up and owns the keyboard. The focus index in
+    /// `focused` is kept so it can be handed straight back when the menu or
+    /// overlay goes away; only the child's `set_focused` flag is toggled. See
+    /// [`Column::sync_focus_suspend`].
     focus_suspended: bool,
 }
 
@@ -163,23 +164,29 @@ impl Column {
             .any(|c| c.widget.accepts_accelerators() && c.widget.captures_pointer())
     }
 
-    /// Suspend the focused child's focus visual while a menu is open, and hand
-    /// it back when the menu closes — so the content behind an open menu reads
-    /// as unfocused (e.g. a gray rather than blue selection) and focus clearly
-    /// belongs to the menu. The focus *index* is preserved throughout; only the
-    /// child's `set_focused` flag is toggled, so the same widget regains focus
-    /// the moment the menu goes away. Idempotent: the `focus_suspended` latch
-    /// means each transition fires `set_focused` exactly once.
-    fn sync_menu_focus(&mut self) {
-        let menu_open = self.menu_capturing();
-        if menu_open == self.focus_suspended {
+    /// Suspend the focused child's focus visual while a menu or modal overlay
+    /// owns the keyboard, and hand it back when they go away — so the content
+    /// behind an open menu / dialog reads as unfocused (e.g. a gray rather than
+    /// blue selection) and, crucially, *also* drops out of keyboard-handling
+    /// paths gated on its `focused` flag. Without this, an Enter that an open
+    /// modal handles can — when the dispatcher or the windowing layer routes
+    /// it twice (e.g. on X11, where focus across our own pop-up windows is
+    /// the WM's call) — also reach the iconbox / list behind the dialog and
+    /// reactivate it. The focus *index* is preserved throughout; only the
+    /// child's `set_focused` flag is toggled, so the same widget regains
+    /// focus the moment the menu / overlay goes away. Idempotent: the
+    /// `focus_suspended` latch means each transition fires `set_focused`
+    /// exactly once.
+    fn sync_focus_suspend(&mut self) {
+        let suspended = self.menu_capturing() || self.active_overlay().is_some();
+        if suspended == self.focus_suspended {
             return;
         }
-        self.focus_suspended = menu_open;
+        self.focus_suspended = suspended;
         if let Some(idx) = self.focused
             && let Some(child) = self.children.get_mut(idx)
         {
-            child.widget.set_focused(!menu_open);
+            child.widget.set_focused(!suspended);
         }
     }
 
@@ -322,10 +329,11 @@ impl Widget for Column {
     }
 
     fn paint(&mut self, painter: &mut Painter, theme: &Theme) {
-        // Reconcile the focus visual with menu state just before drawing, so an
-        // open menu's keyboard ownership is reflected (suspended content focus)
-        // regardless of which event-dispatch path opened or closed it.
-        self.sync_menu_focus();
+        // Reconcile the focus visual with menu / overlay state just before
+        // drawing, so an open menu or modal's keyboard ownership is reflected
+        // (suspended content focus) regardless of which event-dispatch path
+        // opened or closed it.
+        self.sync_focus_suspend();
         if let Some(bg) = self.background {
             painter.fill_rect(self.bounds, bg);
         }
@@ -351,6 +359,12 @@ impl Widget for Column {
     }
 
     fn event(&mut self, event: &Event, ctx: &mut EventCtx) {
+        // Reconcile the focus visual *before* dispatching, so widgets that gate
+        // their handlers on `self.focused` (the iconbox's Enter activation, the
+        // list's keyboard nav) stop firing the moment a menu / overlay takes
+        // over the keyboard — even if the windowing layer happens to leak the
+        // same key event back to them after the overlay handled it.
+        self.sync_focus_suspend();
         // Modal capture: any overlay that's actively capturing swallows
         // every event before normal dispatch can see it. Returns must
         // happen before any borrow of self.children is taken.
