@@ -298,23 +298,14 @@ impl Widget for List {
     fn paint(&mut self, painter: &mut Painter, theme: &Theme) {
         self.sync_scrollbar();
         let text = self.text_area();
-        let crisp = painter.wants_crisp_chrome();
 
-        // Field background stays at the full logical bounds; the chrome
-        // edges (sunken bevel + 1-px outer border) are drawn at exact
-        // physical pixels in the `[0.9, 1.5)` crisp range so they don't
-        // alias against the row separators or the scrollbar gutter.
+        // Field background stays at the full logical bounds; the chrome edges
+        // (sunken bevel + 1-px outer border) self-manage the crisp physical-
+        // pixel pass so they don't alias against the row separators or the
+        // scrollbar gutter.
         painter.fill_rect(text, Color::WHITE);
-        if crisp {
-            let phys_text = painter.rect_to_physical(text);
-            let saved = painter.push_physical_pixels();
-            painter.sunken_bevel(phys_text, theme.highlight, theme.shadow);
-            painter.stroke_rect(phys_text, theme.border);
-            painter.restore_scale(saved);
-        } else {
-            painter.sunken_bevel(text, theme.highlight, theme.shadow);
-            painter.stroke_rect(text, theme.border);
-        }
+        painter.sunken_bevel(text, theme.highlight, theme.shadow);
+        painter.stroke_rect(text, theme.border);
 
         // Confine every row to the field interior so a label wider than the
         // row (or a forced partial row in a field too short for one) is clipped

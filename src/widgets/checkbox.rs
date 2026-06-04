@@ -101,7 +101,6 @@ impl Widget for Checkbox {
     fn paint(&mut self, painter: &mut Painter, theme: &Theme) {
         let box_rect = self.box_rect();
         let pressed_visual = self.pressed && self.armed;
-        let crisp = painter.wants_crisp_chrome();
 
         let fg = if self.enabled {
             theme.text
@@ -115,18 +114,19 @@ impl Widget for Checkbox {
         };
 
         // 1px black outline around a flat field — enough to stay visible on a
-        // white window background without leaning on a sunken bevel. In the
-        // crisp range the outline + check glyph are drawn at exact
-        // physical pixels so the thin chrome doesn't alias.
-        if crisp {
-            let phys_box = painter.rect_to_physical(box_rect);
-            let saved = painter.push_physical_pixels();
-            painter.fill_rect(phys_box.inset(1), box_fill);
-            painter.stroke_rect(phys_box, theme.border);
-            if self.checked {
-                draw_check(painter, phys_box, fg);
-            }
-            painter.restore_scale(saved);
+        // white window background without leaning on a sunken bevel. The
+        // outline + check glyph are kept together in one physical-pixel pass
+        // in the crisp range: the inset face fill must snap against the *same*
+        // physical box as the outline, so it can't be pulled out to a plain
+        // logical call without shifting an edge pixel.
+        if painter.wants_1x_crispness() {
+            painter.physical(box_rect, |p, r| {
+                p.fill_rect(r.inset(1), box_fill);
+                p.stroke_rect(r, theme.border);
+                if self.checked {
+                    draw_check(p, r, fg);
+                }
+            });
         } else {
             painter.fill_rect(box_rect.inset(1), box_fill);
             painter.stroke_rect(box_rect, theme.border);

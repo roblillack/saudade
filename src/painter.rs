@@ -17,11 +17,6 @@ use crate::theme::Theme;
 #[derive(Clone, Copy)]
 pub struct SavedClip(Option<(i32, i32, i32, i32)>);
 
-/// Opaque scale-stack token returned by [`Painter::push_physical_pixels`].
-/// Pass it back to [`Painter::restore_scale`] to leave physical-pixel mode.
-#[derive(Clone, Copy)]
-pub struct SavedScale(f32);
-
 pub struct Painter<'a> {
     pixels: &'a mut [u32],
     /// Physical buffer width in pixels.
@@ -176,59 +171,15 @@ impl<'a> Painter<'a> {
     }
 
     /// Translate a logical-pixel `rect` to the physical-pixel rectangle it
-    /// would occupy on the buffer, snapping each edge independently the
-    /// same way the draw primitives do. Pair with
-    /// [`Self::push_physical_pixels`] to draw chrome at exact physical
-    /// pixel positions — useful when a logical-pixel-thin line would
-    /// otherwise round inconsistently at fractional scales.
-    pub fn rect_to_physical(&self, rect: Rect) -> Rect {
+    /// would occupy on the buffer, snapping each edge independently the same
+    /// way the draw primitives do. Used by [`Self::physical`] to hand the
+    /// closure its region in device pixels; callers reach it through that.
+    fn rect_to_physical(&self, rect: Rect) -> Rect {
         let x0 = self.snap(rect.x);
         let y0 = self.snap(rect.y);
         let x1 = self.snap(rect.x + rect.w);
         let y1 = self.snap(rect.y + rect.h);
         Rect::new(x0, y0, x1 - x0, y1 - y0)
-    }
-
-    /// `true` if the painter's current scale lies in the range where
-    /// 1-logical-pixel chrome edges look cleaner drawn at exact physical
-    /// pixels (currently `[0.9, 1.5)`). At those scales, a 1-logical-pixel
-    /// line rounds to either 1 or 2 physical pixels depending on where
-    /// it falls, which makes adjacent bevel / outline edges look
-    /// inconsistent. Outside the range — at, say, 1.0x or 2.0x — the
-    /// regular scale-aware draw is exact, and at very small or very
-    /// large scales the "1 logical = 1 physical" trick would make the
-    /// chrome too thin (or too thick) relative to the rest of the
-    /// widget.
-    ///
-    /// Widgets that want to opt into the crisp behaviour pair this with
-    /// [`Self::rect_to_physical`] + [`Self::push_physical_pixels`] for
-    /// the chrome pass, then restore the scale before drawing labels.
-    pub fn wants_crisp_chrome(&self) -> bool {
-        (0.9..1.5).contains(&self.scale)
-    }
-
-    /// Switch the painter into physical-pixel mode: subsequent `fill_rect`
-    /// / `h_line` / `v_line` / `stroke_rect` / `raised_bevel` / `button` /
-    /// `pixel` calls treat their `i32` coordinates as physical pixels
-    /// (relative to the painter's logical origin) rather than logical
-    /// pixels — the internal snap pass becomes the identity. The logical
-    /// origin offset is preserved, so a widget that converts its bounds
-    /// via [`Self::rect_to_physical`] keeps drawing in the same place on
-    /// the buffer; the only thing that changes is that 1-unit chrome
-    /// lines become exactly 1 physical pixel thick rather than
-    /// `round(scale)` physical pixels.
-    ///
-    /// Restore the previous scale with [`Self::restore_scale`].
-    pub fn push_physical_pixels(&mut self) -> SavedScale {
-        let saved = SavedScale(self.scale);
-        self.scale = 1.0;
-        saved
-    }
-
-    /// Restore the scale that was active before
-    /// [`Self::push_physical_pixels`].
-    pub fn restore_scale(&mut self, saved: SavedScale) {
-        self.scale = saved.0.max(0.01);
     }
 
     /// Whether 1-logical-pixel chrome should be redrawn at exact device
@@ -239,7 +190,17 @@ impl<'a> Painter<'a> {
     /// `scale == 1.0`) there is nothing to fix — which is also what stops the
     /// self-managing chrome primitives ([`Self::button`], [`Self::raised_bevel`],
     /// [`Self::stroke_rect`], [`Self::focus_rect`]) from recursing.
-    fn wants_1x_crispness(&self) -> bool {
+    ///
+    /// Custom widgets that draw their own thin chrome with helpers the painter
+    /// doesn't provide gate the [`Self::physical`] pass on this:
+    /// ```ignore
+    /// if painter.wants_1x_crispness() {
+    ///     painter.physical(rect, |p, r| draw_my_glyph(p, r));
+    /// } else {
+    ///     draw_my_glyph(painter, rect);
+    /// }
+    /// ```
+    pub fn wants_1x_crispness(&self) -> bool {
         self.scale != 1.0 && (0.9..1.5).contains(&self.scale)
     }
 

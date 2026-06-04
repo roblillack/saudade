@@ -290,25 +290,14 @@ impl Widget for ScrollBar {
         if let Some(thumb) = thumb_opt {
             painter.button(thumb, theme, false, false);
         }
-        if painter.wants_crisp_chrome() {
-            let phys_up = painter.rect_to_physical(up);
-            let phys_down = painter.rect_to_physical(down);
-            let saved = painter.push_physical_pixels();
-            draw_arrow(
-                painter,
-                phys_up,
-                self.orientation,
-                ArrowDir::Negative,
-                theme.text,
-            );
-            draw_arrow(
-                painter,
-                phys_down,
-                self.orientation,
-                ArrowDir::Positive,
-                theme.text,
-            );
-            painter.restore_scale(saved);
+        if painter.wants_1x_crispness() {
+            let orientation = self.orientation;
+            painter.physical(up, |p, r| {
+                draw_arrow(p, r, orientation, ArrowDir::Negative, theme.text)
+            });
+            painter.physical(down, |p, r| {
+                draw_arrow(p, r, orientation, ArrowDir::Positive, theme.text)
+            });
         } else {
             draw_arrow(
                 painter,

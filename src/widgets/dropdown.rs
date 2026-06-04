@@ -324,11 +324,8 @@ impl Widget for Dropdown {
         painter.sunken_bevel(self.rect, theme.highlight, theme.shadow);
         painter.stroke_rect(self.rect, theme.border);
         painter.button(btn, theme, self.open, false);
-        if painter.wants_crisp_chrome() {
-            let phys_btn = painter.rect_to_physical(btn);
-            let saved = painter.push_physical_pixels();
-            draw_down_arrow(painter, phys_btn, arrow_color);
-            painter.restore_scale(saved);
+        if painter.wants_1x_crispness() {
+            painter.physical(btn, |p, r| draw_down_arrow(p, r, arrow_color));
         } else {
             draw_down_arrow(painter, btn, arrow_color);
         }
