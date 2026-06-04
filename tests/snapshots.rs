@@ -11,9 +11,9 @@ mod common;
 use common::snapshot_at_all_scales;
 
 use saudade::{
-    Bevel, Button, Color, Column, Container, Dialog, Dropdown, Event, Image, Key, Label, List,
-    ListIcon, ListItem, Menu, MenuBar, MenuItem, Modifiers, NamedKey, Orientation, ProgressBar,
-    Rect, Row, ScrollBar, Slider, TextEditor, Widget,
+    Bevel, Button, Checkbox, Color, Column, Container, Dialog, Dropdown, Event, Image, Key, Label,
+    List, ListIcon, ListItem, Menu, MenuBar, MenuItem, Modifiers, NamedKey, Orientation,
+    ProgressBar, Rect, Row, ScrollBar, Slider, TextEditor, TextInput, Widget,
 };
 
 // ---------------------------------------------------------------- Bevel
@@ -852,6 +852,139 @@ fn list_clips_long_labels() {
             Container::new(200, 100)
                 .with_background(Color::LIGHT_GRAY)
                 .add(list),
+        )
+    });
+}
+
+// ---------------------------------------------------------------- Checkbox
+
+#[test]
+fn checkbox_unchecked() {
+    snapshot_at_all_scales("checkbox_unchecked", 200, 28, || {
+        Box::new(
+            Container::new(200, 28)
+                .with_background(Color::LIGHT_GRAY)
+                .add(Checkbox::new(Rect::new(8, 6, 184, 16), "Add to favorites")),
+        )
+    });
+}
+
+#[test]
+fn checkbox_checked() {
+    snapshot_at_all_scales("checkbox_checked", 200, 28, || {
+        Box::new(
+            Container::new(200, 28)
+                .with_background(Color::LIGHT_GRAY)
+                .add(Checkbox::new(Rect::new(8, 6, 184, 16), "Add to favorites").checked(true)),
+        )
+    });
+}
+
+#[test]
+fn checkbox_focused() {
+    snapshot_at_all_scales("checkbox_focused", 200, 28, || {
+        let mut cb = Checkbox::new(Rect::new(8, 6, 184, 16), "Tab landed here").checked(true);
+        cb.set_focused(true);
+        Box::new(
+            Container::new(200, 28)
+                .with_background(Color::LIGHT_GRAY)
+                .add(cb),
+        )
+    });
+}
+
+#[test]
+fn checkbox_disabled() {
+    snapshot_at_all_scales("checkbox_disabled", 200, 28, || {
+        Box::new(
+            Container::new(200, 28)
+                .with_background(Color::LIGHT_GRAY)
+                .add(
+                    Checkbox::new(Rect::new(8, 6, 184, 16), "Can't toggle me").with_enabled(false),
+                ),
+        )
+    });
+}
+
+#[test]
+fn checkbox_disabled_checked() {
+    snapshot_at_all_scales("checkbox_disabled_checked", 200, 28, || {
+        Box::new(
+            Container::new(200, 28)
+                .with_background(Color::LIGHT_GRAY)
+                .add(
+                    Checkbox::new(Rect::new(8, 6, 184, 16), "Locked on")
+                        .checked(true)
+                        .with_enabled(false),
+                ),
+        )
+    });
+}
+
+// ---------------------------------------------------------------- TextInput
+
+#[test]
+fn text_input_empty() {
+    snapshot_at_all_scales("text_input_empty", 200, 32, || {
+        Box::new(
+            Container::new(200, 32)
+                .with_background(Color::LIGHT_GRAY)
+                .add(TextInput::new(Rect::new(8, 6, 184, 20))),
+        )
+    });
+}
+
+#[test]
+fn text_input_with_text() {
+    snapshot_at_all_scales("text_input_with_text", 200, 32, || {
+        Box::new(
+            Container::new(200, 32)
+                .with_background(Color::LIGHT_GRAY)
+                .add(TextInput::new(Rect::new(8, 6, 184, 20)).with_text("Anonymous")),
+        )
+    });
+}
+
+/// Focused, blinking caret in its "on" phase (the freshly-constructed state).
+#[test]
+fn text_input_focused() {
+    snapshot_at_all_scales("text_input_focused", 200, 32, || {
+        let mut input = TextInput::new(Rect::new(8, 6, 184, 20)).with_text("type here");
+        input.set_focused(true);
+        Box::new(
+            Container::new(200, 32)
+                .with_background(Color::LIGHT_GRAY)
+                .add(input),
+        )
+    });
+}
+
+#[test]
+fn text_input_disabled() {
+    snapshot_at_all_scales("text_input_disabled", 200, 32, || {
+        Box::new(
+            Container::new(200, 32)
+                .with_background(Color::LIGHT_GRAY)
+                .add(
+                    TextInput::new(Rect::new(8, 6, 184, 20))
+                        .with_text("greyed out")
+                        .with_enabled(false),
+                ),
+        )
+    });
+}
+
+/// All text selected while focused — exercises the active highlight band.
+#[test]
+fn text_input_selection() {
+    snapshot_at_all_scales("text_input_selection", 200, 32, || {
+        let mut input = TextInput::new(Rect::new(8, 6, 184, 20)).with_text("selected text");
+        input.set_focused(true);
+        input.select_all();
+        Box::new(
+            Container::new(200, 32)
+                .with_background(Color::LIGHT_GRAY)
+                .add(input),
         )
     });
 }
