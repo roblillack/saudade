@@ -26,6 +26,15 @@ pub struct Painter<'a> {
     /// Logical→physical scale. Equals winit's `scale_factor` for the current
     /// monitor (always ≥ 1 in practice).
     scale: f32,
+    /// The OS/display scale the window is *presented* at — e.g. 1.5 on a 150%
+    /// display. On the Wayland backend `scale` is the integer buffer scale the
+    /// content is rasterized at (2.0 for a 150% display) and the compositor
+    /// resamples 2.0→1.5; `system_scale` records the real 1.5 so UI can report
+    /// it. Equal to `scale` on every other backend and until a backend calls
+    /// [`Self::set_system_scale`]. Unlike `scale`, it is *not* swapped out by
+    /// [`Self::with_scale`] / [`Self::physical`] — it describes the window, not
+    /// the current draw transform.
+    system_scale: f32,
     /// Physical-pixel offset of the logical origin within the buffer. The
     /// runtime sets this to center the content when the window has been
     /// resized larger than the design — surroundings become clean letterbox.
@@ -94,6 +103,7 @@ impl<'a> Painter<'a> {
             width,
             height,
             scale: scale.max(0.01),
+            system_scale: scale.max(0.01),
             origin_x,
             origin_y,
             font,
@@ -168,6 +178,28 @@ impl<'a> Painter<'a> {
 
     pub fn scale(&self) -> f32 {
         self.scale
+    }
+
+    /// The OS/display scale the window is presented at (e.g. 1.5 on a 150%
+    /// display). On the Wayland backend this can differ from [`Self::scale`],
+    /// the integer buffer scale the content is actually rasterized at before
+    /// the compositor resamples it down to the fractional size; on every other
+    /// backend the two are equal. Defaults to [`Self::scale`] until a backend
+    /// calls [`Self::set_system_scale`].
+    pub fn system_scale(&self) -> f32 {
+        self.system_scale
+    }
+
+    /// Backend hook: record the true display scale when it differs from the
+    /// integer buffer [`Self::scale`] — the Wayland fractional-scaling case,
+    /// where the compositor resamples our oversampled buffer down to the
+    /// fractional size. Other backends leave it equal to `scale`.
+    ///
+    /// Crate-internal on purpose: like the scale factor itself, the system
+    /// scale is owned by the OS. Applications can *read* it via
+    /// [`Self::system_scale`] but must not be able to override it.
+    pub(crate) fn set_system_scale(&mut self, scale: f32) {
+        self.system_scale = scale.max(0.01);
     }
 
     /// Translate a logical-pixel `rect` to the physical-pixel rectangle it

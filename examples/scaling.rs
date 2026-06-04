@@ -28,6 +28,13 @@
 //! magnifies the *rendered result* 2× (a pure pixel copy — it does not re-run
 //! the scaling at a higher factor) so you can see the per-pixel snapping a scale
 //! produced.
+//!
+//! A status bar along the bottom reports the window's *actual* OS scale factor
+//! (`Painter::system_scale`) — independent of the preview slider above. On
+//! Wayland a fractional display (say 150%) makes that differ from the integer
+//! buffer scale we rasterize at, so the bar also notes that the compositor is
+//! resampling the oversampled buffer down. On every other backend the two match
+//! and the note is omitted.
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -47,6 +54,8 @@ const CANVAS_X: i32 = 24;
 const CANVAS_Y: i32 = 198;
 const MARGIN: i32 = 16;
 const PANEL_PAD: i32 = 24;
+/// Height of the bottom status bar that reports the real OS scale factor.
+const FOOTER_H: i32 = 24;
 /// Logical width of each preset button.
 const PRESET_W: i32 = 80;
 
@@ -85,7 +94,7 @@ fn footprint(factor: f32, zoom: bool, os_scale: f32) -> (i32, i32) {
 /// edges), and the width is floored at the controls' `MIN_W`.
 fn window_for_footprint(fw: i32, fh: i32) -> (i32, i32) {
     let w = (fw + 2 * (PANEL_PAD + CANVAS_X)).max(MIN_W);
-    let h = CANVAS_Y + fh + 2 * PANEL_PAD + MARGIN;
+    let h = CANVAS_Y + fh + 2 * PANEL_PAD + MARGIN + FOOTER_H;
     (w, h)
 }
 
@@ -215,6 +224,7 @@ fn main() {
         zoom.clone(),
         os_scale.clone(),
     ));
+    body.push(StatusBar);
 
     App::new(
         WindowConfig::new("Scale Factor", init_w, init_h),
@@ -382,7 +392,7 @@ impl Widget for ScalePreview {
             CANVAS_X,
             CANVAS_Y,
             w - 2 * CANVAS_X,
-            (h - CANVAS_Y - MARGIN).max(40),
+            (h - CANVAS_Y - MARGIN - FOOTER_H).max(40),
         )
     }
 
@@ -396,7 +406,7 @@ impl Widget for ScalePreview {
             CANVAS_X,
             CANVAS_Y,
             (logical_w - 2 * CANVAS_X).max(40),
-            (logical_h - CANVAS_Y - MARGIN).max(40),
+            (logical_h - CANVAS_Y - MARGIN - FOOTER_H).max(40),
         );
 
         // Canvas chrome: a white field with a sunken bevel, so the preview
@@ -478,6 +488,46 @@ impl Widget for FactorReadout {
             9.0,
             theme.disabled_text,
         );
+    }
+}
+
+/// Bottom status bar reporting the window's *real* OS scale factor — the value
+/// the display is actually set to — independent of the preview slider above. It
+/// reads both scales from the painter each frame: `system_scale()` is the true
+/// display scale (e.g. 1.50x) and `scale()` the integer buffer scale the window
+/// is rasterized at. On the Wayland backend a fractional display (say 150%)
+/// makes those differ — we render at 2.0x and the compositor resamples down to
+/// 1.5x — so the bar appends a note saying so. On every other backend they
+/// match and the note is omitted.
+struct StatusBar;
+
+impl Widget for StatusBar {
+    fn bounds(&self) -> Rect {
+        // Display-only and never hit-tested; the paint path derives its real
+        // position from the live window size. A nominal footer-row rect.
+        Rect::new(0, 0, MIN_W, FOOTER_H)
+    }
+
+    fn paint(&mut self, painter: &mut Painter, theme: &Theme) {
+        let win_scale = painter.scale().max(0.01);
+        let logical_w = (painter.size().w as f32 / win_scale).round() as i32;
+        let logical_h = (painter.size().h as f32 / win_scale).round() as i32;
+
+        // Sunken separator above the footer band, in the classic 3.1 style.
+        let top = logical_h - FOOTER_H;
+        painter.fill_rect(Rect::new(0, top, logical_w, 1), theme.shadow);
+        painter.fill_rect(Rect::new(0, top + 1, logical_w, 1), theme.highlight);
+
+        let system = painter.system_scale();
+        let mut line = format!("System scale factor: {system:.2}x");
+        // The buffer scale exceeds the display scale only when the compositor is
+        // resampling our oversampled buffer down — Wayland fractional scaling.
+        if (win_scale - system).abs() > 0.01 {
+            line.push_str(&format!(
+                "    ·    Resampling from {win_scale:.1}x done by compositor"
+            ));
+        }
+        painter.text(CANVAS_X, top + 7, &line, 10.0, theme.disabled_text);
     }
 }
 
