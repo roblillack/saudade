@@ -126,6 +126,13 @@ struct AppHandler {
     context: Option<softbuffer::Context<Rc<Window>>>,
     main_surface: Option<softbuffer::Surface<Rc<Window>, Rc<Window>>>,
     physical: PhysicalSize<u32>,
+    /// Logical→physical scale factor, owned by the OS: adopted from
+    /// [`Window::scale_factor`] at startup and refreshed only when the
+    /// compositor reports a
+    /// [`ScaleFactorChanged`](winit::event::WindowEvent::ScaleFactorChanged)
+    /// event. Widget code cannot override it — a widget that wants to render
+    /// at a different scale paints into a sub-region with
+    /// [`Painter::with_scale`](crate::Painter::with_scale) instead.
     scale: f32,
 
     // Per-frame state:
@@ -446,6 +453,28 @@ impl AppHandler {
         }
         if ctx.close_requested {
             event_loop.exit();
+        }
+        if let Some(size) = ctx.resize_request {
+            self.apply_resize(size);
+        }
+    }
+
+    /// Resize the window to `size` logical pixels, at the widget's request.
+    /// winit applies the new inner size either synchronously (returning the new
+    /// physical size, which we adopt right away) or by emitting a later
+    /// `Resized` event — which runs the same surface-resize + relayout path.
+    fn apply_resize(&mut self, size: Size) {
+        let Some(win) = self.main_win.clone() else {
+            return;
+        };
+        let requested = LogicalSize::new(size.w as f64, size.h as f64);
+        if let Some(new_phys) = win.request_inner_size(requested) {
+            self.physical = new_phys;
+            if let Some(s) = self.main_surface.as_mut() {
+                resize_surface(s, new_phys);
+            }
+            relayout(&mut self.root, self.physical, self.scale, self.design_size);
+            self.needs_redraw = true;
         }
     }
 

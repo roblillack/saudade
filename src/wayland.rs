@@ -53,7 +53,7 @@ use crate::event::{
     WHEEL_LINES_PER_DETENT,
 };
 use crate::font::Font;
-use crate::geometry::{Point, Rect};
+use crate::geometry::{Point, Rect, Size};
 use crate::painter::Painter;
 use crate::theme::Theme;
 use crate::widget::{PopupKind, PopupRequest, Widget};
@@ -127,6 +127,7 @@ pub(crate) fn run(app: App) {
         surface_w: initial_w,
         surface_h: initial_h,
         scale: 1,
+        resizable: window_cfg.resizable,
         configured: false,
         needs_redraw: true,
         exit: false,
@@ -177,6 +178,10 @@ struct State {
     surface_w: u32,
     surface_h: u32,
     scale: i32,
+    /// Whether the window was configured resizable. A fixed window pins
+    /// min == max size, so a programmatic resize ([`Self::apply_resize`])
+    /// must move both hints to the new size; a resizable one leaves them be.
+    resizable: bool,
     configured: bool,
     /// Set whenever something happened that needs a fresh frame on the
     /// main window. Drawing clears it; the next state change re-sets it.
@@ -331,6 +336,32 @@ impl State {
         if ctx.close_requested {
             self.exit = true;
         }
+        if let Some(size) = ctx.resize_request {
+            self.apply_resize(size);
+        }
+    }
+
+    /// Resize the window to `size` logical (surface) pixels, at the widget's
+    /// request. For a fixed window we move the min == max hints to the new size
+    /// so the compositor lets it change; then we adopt the size, relayout, and
+    /// repaint. The compositor echoes a configure with the same size, which the
+    /// configure handler treats as a no-op transition.
+    fn apply_resize(&mut self, size: Size) {
+        let w = size.w.max(1) as u32;
+        let h = size.h.max(1) as u32;
+        if w == self.surface_w && h == self.surface_h {
+            return;
+        }
+        if !self.resizable {
+            self.window.set_min_size(Some((w, h)));
+            self.window.set_max_size(Some((w, h)));
+        }
+        self.surface_w = w;
+        self.surface_h = h;
+        self.window.commit();
+        self.relayout();
+        self.needs_redraw = true;
+        self.mark_popups_dirty();
     }
 
     fn draw_main(&mut self) {

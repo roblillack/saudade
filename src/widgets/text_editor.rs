@@ -555,6 +555,9 @@ impl Widget for TextEditor {
             theme.face
         };
         painter.fill_rect(text, field_bg);
+        // The bevel + border self-manage the crisp physical-pixel pass at
+        // fractional scales, so the field border doesn't alias against the
+        // embedded scrollbar's gutter.
         painter.sunken_bevel(text, theme.highlight, theme.shadow);
         painter.stroke_rect(text, theme.border);
 

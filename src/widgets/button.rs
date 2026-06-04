@@ -113,6 +113,8 @@ impl Widget for Button {
 
     fn paint(&mut self, painter: &mut Painter, theme: &Theme) {
         let pressed_visual = self.press != Press::None && self.armed;
+        // The painter decides per-scale whether the frame needs a crisp
+        // physical-pixel pass — this widget just hands it logical bounds.
         painter.button(self.rect, theme, pressed_visual, self.default);
 
         // When pressed, push the label one pixel down/right for tactile feel.
@@ -140,11 +142,11 @@ impl Widget for Button {
 
         // Dotted focus rectangle inside the bevel — the same chrome Win 3.1
         // drew on its focused buttons. Keep it inset enough that it doesn't
-        // collide with the raised bevel highlights.
+        // collide with the raised bevel highlights. `focus_rect` applies the
+        // same per-scale crisp treatment as the frame.
         if self.focused && self.enabled {
             let inset = if self.default { 4 } else { 3 };
-            let r = self.rect.inset(inset);
-            draw_focus_rect(painter, r, theme.text);
+            painter.focus_rect(self.rect.inset(inset), theme.text);
         }
     }
 
@@ -266,25 +268,5 @@ impl Widget for Button {
     /// button gives up the accelerator so Enter falls through.
     fn accepts_accelerators(&self) -> bool {
         self.default && self.enabled
-    }
-}
-
-fn draw_focus_rect(painter: &mut Painter, rect: Rect, color: crate::geometry::Color) {
-    if rect.w <= 0 || rect.h <= 0 {
-        return;
-    }
-    let right = rect.right() - 1;
-    let bottom = rect.bottom() - 1;
-    let mut x = rect.x;
-    while x <= right {
-        painter.pixel(x, rect.y, color);
-        painter.pixel(x, bottom, color);
-        x += 2;
-    }
-    let mut y = rect.y;
-    while y <= bottom {
-        painter.pixel(rect.x, y, color);
-        painter.pixel(right, y, color);
-        y += 2;
     }
 }

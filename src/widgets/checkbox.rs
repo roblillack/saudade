@@ -102,25 +102,37 @@ impl Widget for Checkbox {
         let box_rect = self.box_rect();
         let pressed_visual = self.pressed && self.armed;
 
-        // 1px black outline around a flat field — enough to stay visible on a
-        // white window background without leaning on a sunken bevel.
-        painter.fill_rect(
-            box_rect.inset(1),
-            if pressed_visual {
-                theme.face
-            } else {
-                theme.background
-            },
-        );
-        painter.stroke_rect(box_rect, theme.border);
-
         let fg = if self.enabled {
             theme.text
         } else {
             theme.disabled_text
         };
-        if self.checked {
-            draw_check(painter, box_rect, fg);
+        let box_fill = if pressed_visual {
+            theme.face
+        } else {
+            theme.background
+        };
+
+        // 1px black outline around a flat field — enough to stay visible on a
+        // white window background without leaning on a sunken bevel. The
+        // outline + check glyph are kept together in one physical-pixel pass
+        // in the crisp range: the inset face fill must snap against the *same*
+        // physical box as the outline, so it can't be pulled out to a plain
+        // logical call without shifting an edge pixel.
+        if painter.wants_1x_crispness() {
+            painter.physical(box_rect, |p, r| {
+                p.fill_rect(r.inset(1), box_fill);
+                p.stroke_rect(r, theme.border);
+                if self.checked {
+                    draw_check(p, r, fg);
+                }
+            });
+        } else {
+            painter.fill_rect(box_rect.inset(1), box_fill);
+            painter.stroke_rect(box_rect, theme.border);
+            if self.checked {
+                draw_check(painter, box_rect, fg);
+            }
         }
 
         // Label sits to the right of the box, vertically centered with the
@@ -138,7 +150,7 @@ impl Widget for Checkbox {
                 measured.w + 2 * FOCUS_PAD_X,
                 measured.h + 2 * FOCUS_PAD_Y,
             );
-            draw_focus_rect(painter, focus_rect, theme.text);
+            painter.focus_rect(focus_rect, theme.text);
         }
     }
 
@@ -209,8 +221,11 @@ impl Widget for Checkbox {
 }
 
 /// Draw the classic Win 3.1 check glyph — two strokes that form a "✓" inside
-/// the 13×13 box. The pattern is hand-tuned for the box size so it never
-/// touches the bevel.
+/// the box. The pattern was hand-tuned for a 13×13 cell so it never touches
+/// the bevel; the pattern is centered within `box_rect` so it stays roughly
+/// in place when the box happens to be larger (e.g. when the chrome was
+/// drawn in physical-pixel mode at a fractional scale, leaving the box a
+/// couple of pixels wider than the design size).
 fn draw_check(painter: &mut Painter, box_rect: Rect, color: Color) {
     const PATTERN: &[&[u8]] = &[
         b"          X  ",
@@ -222,36 +237,18 @@ fn draw_check(painter: &mut Painter, box_rect: Rect, color: Color) {
         b"    XXX      ",
         b"     X       ",
     ];
-    let offset_y = 3;
+    const CELL: i32 = 13;
+    // Center the 13-wide pattern in the box horizontally; vertically, the
+    // pattern hugs the bottom of its 13-row cell (rows 3..11), so we
+    // center the *cell* rather than the pattern itself to keep the check
+    // floating in roughly the same spot.
+    let dx = box_rect.x + (box_rect.w - CELL) / 2;
+    let dy = box_rect.y + (box_rect.h - CELL) / 2 + 3;
     for (row, line) in PATTERN.iter().enumerate() {
         for (col, byte) in line.iter().enumerate() {
             if *byte == b'X' {
-                painter.pixel(
-                    box_rect.x + col as i32,
-                    box_rect.y + offset_y + row as i32,
-                    color,
-                );
+                painter.pixel(dx + col as i32, dy + row as i32, color);
             }
         }
-    }
-}
-
-fn draw_focus_rect(painter: &mut Painter, rect: Rect, color: Color) {
-    if rect.w <= 0 || rect.h <= 0 {
-        return;
-    }
-    let right = rect.right() - 1;
-    let bottom = rect.bottom() - 1;
-    let mut x = rect.x;
-    while x <= right {
-        painter.pixel(x, rect.y, color);
-        painter.pixel(x, bottom, color);
-        x += 2;
-    }
-    let mut y = rect.y;
-    while y <= bottom {
-        painter.pixel(rect.x, y, color);
-        painter.pixel(right, y, color);
-        y += 2;
     }
 }

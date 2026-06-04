@@ -279,26 +279,40 @@ impl Widget for ScrollBar {
 
         let up = self.neg_arrow_rect();
         let down = self.pos_arrow_rect();
+        let thumb_opt = (self.max > 0).then(|| self.thumb_rect());
+
+        // The arrow buttons and thumb self-manage the crisp physical-pixel
+        // pass. The small triangle glyphs still alias at fractional scales,
+        // so they keep a manual crisp pass until `draw_arrow` is hoisted onto
+        // the painter the way the bevels were.
         painter.button(up, theme, false, false);
         painter.button(down, theme, false, false);
-        draw_arrow(
-            painter,
-            up,
-            self.orientation,
-            ArrowDir::Negative,
-            theme.text,
-        );
-        draw_arrow(
-            painter,
-            down,
-            self.orientation,
-            ArrowDir::Positive,
-            theme.text,
-        );
-
-        if self.max > 0 {
-            let thumb = self.thumb_rect();
+        if let Some(thumb) = thumb_opt {
             painter.button(thumb, theme, false, false);
+        }
+        if painter.wants_1x_crispness() {
+            let orientation = self.orientation;
+            painter.physical(up, |p, r| {
+                draw_arrow(p, r, orientation, ArrowDir::Negative, theme.text)
+            });
+            painter.physical(down, |p, r| {
+                draw_arrow(p, r, orientation, ArrowDir::Positive, theme.text)
+            });
+        } else {
+            draw_arrow(
+                painter,
+                up,
+                self.orientation,
+                ArrowDir::Negative,
+                theme.text,
+            );
+            draw_arrow(
+                painter,
+                down,
+                self.orientation,
+                ArrowDir::Positive,
+                theme.text,
+            );
         }
     }
 

@@ -1,5 +1,5 @@
 use crate::event::{Event, EventCtx, Key, MouseButton, NamedKey};
-use crate::geometry::{Color, Rect};
+use crate::geometry::Rect;
 use crate::painter::Painter;
 use crate::theme::Theme;
 use crate::widget::Widget;
@@ -187,14 +187,18 @@ impl Widget for Slider {
         let gx = self.rect.x + THUMB_W / 2;
         let gw = (self.rect.w - THUMB_W).max(0);
         let groove = Rect::new(gx, gy, gw, GROOVE_H);
+        let thumb = self.thumb_rect();
+        let focus = thumb.inset(3);
+
+        // Every chrome edge (groove bevel, thumb bevel, focus dots) self-
+        // manages the crisp physical-pixel pass at fractional scales —
+        // otherwise 1-logical-pixel chrome rounds to either 1 or 2 physical
+        // pixels and the thumb's bevel looks lopsided.
         painter.fill_rect(groove, theme.face);
         painter.sunken_bevel(groove, theme.highlight, theme.shadow);
-
-        // Raised thumb, same chrome as a (small) button.
-        let thumb = self.thumb_rect();
         painter.button(thumb, theme, false, false);
         if self.focused && self.enabled {
-            draw_focus_rect(painter, thumb.inset(3), theme.text);
+            painter.focus_rect(focus, theme.text);
         }
     }
 
@@ -261,25 +265,5 @@ impl Widget for Slider {
 
     fn layout(&mut self, bounds: Rect) {
         self.rect = bounds;
-    }
-}
-
-fn draw_focus_rect(painter: &mut Painter, rect: Rect, color: Color) {
-    if rect.w <= 0 || rect.h <= 0 {
-        return;
-    }
-    let right = rect.right() - 1;
-    let bottom = rect.bottom() - 1;
-    let mut x = rect.x;
-    while x <= right {
-        painter.pixel(x, rect.y, color);
-        painter.pixel(x, bottom, color);
-        x += 2;
-    }
-    let mut y = rect.y;
-    while y <= bottom {
-        painter.pixel(rect.x, y, color);
-        painter.pixel(right, y, color);
-        y += 2;
     }
 }

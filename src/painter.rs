@@ -170,6 +170,202 @@ impl<'a> Painter<'a> {
         self.scale
     }
 
+    /// Translate a logical-pixel `rect` to the physical-pixel rectangle it
+    /// would occupy on the buffer, snapping each edge independently the same
+    /// way the draw primitives do. Used by [`Self::physical`] to hand the
+    /// closure its region in device pixels; callers reach it through that.
+    fn rect_to_physical(&self, rect: Rect) -> Rect {
+        let x0 = self.snap(rect.x);
+        let y0 = self.snap(rect.y);
+        let x1 = self.snap(rect.x + rect.w);
+        let y1 = self.snap(rect.y + rect.h);
+        Rect::new(x0, y0, x1 - x0, y1 - y0)
+    }
+
+    /// Whether 1-logical-pixel chrome should be redrawn at exact device
+    /// pixels at the current scale. True only in `[0.9, 1.5)` and not at
+    /// exactly 1.0×: there a 1-logical line rounds to 1 *or* 2 device pixels
+    /// depending on where it falls, so adjacent bevel / outline edges look
+    /// uneven. At 1.0× (or inside a [`Self::physical`] block, where
+    /// `scale == 1.0`) there is nothing to fix — which is also what stops the
+    /// self-managing chrome primitives ([`Self::button`], [`Self::raised_bevel`],
+    /// [`Self::stroke_rect`], [`Self::focus_rect`]) from recursing.
+    ///
+    /// Custom widgets that draw their own thin chrome with helpers the painter
+    /// doesn't provide gate the [`Self::physical`] pass on this:
+    /// ```ignore
+    /// if painter.wants_1x_crispness() {
+    ///     painter.physical(rect, |p, r| draw_my_glyph(p, r));
+    /// } else {
+    ///     draw_my_glyph(painter, rect);
+    /// }
+    /// ```
+    pub fn wants_1x_crispness(&self) -> bool {
+        self.scale != 1.0 && (0.9..1.5).contains(&self.scale)
+    }
+
+    /// Run `f` with the painter dropped to physical pixels — one unit maps to
+    /// one device pixel — and with `rect` snapped to its physical bounds. The
+    /// snap uses the real scale, so the region lands exactly where the scaled
+    /// draw would have put it; inside `f`, a 1-unit line is exactly one device
+    /// pixel and `inset(1)` trims one device pixel.
+    ///
+    /// Drawing helpers use this to implement a crisp special-case at awkward
+    /// fractional scales and then re-invoke themselves, so the recipe lives in
+    /// a single place (see [`Self::button`]). Calling it when the painter is
+    /// already at physical resolution (`scale == 1.0`) is a transparent
+    /// pass-through — which both serves a real 1.0× display and breaks the
+    /// helper's self-recursion.
+    pub fn physical(&mut self, rect: Rect, f: impl FnOnce(&mut Painter, Rect)) {
+        if self.scale == 1.0 {
+            return f(self, rect);
+        }
+        let phys = self.rect_to_physical(rect);
+        let saved = self.scale;
+        self.scale = 1.0;
+        f(self, phys);
+        self.scale = saved.max(0.01);
+    }
+
+    /// Render `f` into the logical-pixel region `area` as though the painter
+    /// were running at the scale factor `scale` instead of the window's real
+    /// one. Inside `f`, coordinates are local to `area`'s top-left corner and
+    /// one logical unit maps to `scale` physical pixels, so widgets paint
+    /// exactly as they would in a window the OS reported at that DPI — snapped
+    /// chrome and re-rasterized text included. Drawing is clipped to `area`
+    /// (intersected with any clip already in effect), so content that would
+    /// overflow at large scales is trimmed rather than spilling past it.
+    ///
+    /// This is the in-place building block behind [`Self::draw_scaled`], which
+    /// is the public entry point for rendering content at a chosen scale (and
+    /// the path apps reach for to *preview* a scale without touching the
+    /// window's actual scale factor, which only the OS controls). It allocates
+    /// no nested buffer or font cache — it just relocates the logical origin
+    /// and swaps the scale for the duration of the call — so it is cheap enough
+    /// to run every frame.
+    pub(crate) fn with_scale(&mut self, area: Rect, scale: f32, f: impl FnOnce(&mut Painter)) {
+        if area.w <= 0 || area.h <= 0 {
+            return;
+        }
+        // `area` is in the *current* logical coords, so snap it (and clip to
+        // it) before swapping the scale out from under `snap`. `push_clip`
+        // intersects with whatever clip is already installed, so a caller can
+        // confine the preview to a smaller pane first and still center an
+        // oversized `area` within it.
+        let saved_clip = self.push_clip(area);
+        let origin_x = self.origin_x + self.snap(area.x);
+        let origin_y = self.origin_y + self.snap(area.y);
+        let saved_scale = self.scale;
+        let saved_origin = (self.origin_x, self.origin_y);
+        self.scale = scale.max(0.01);
+        self.origin_x = origin_x;
+        self.origin_y = origin_y;
+        f(self);
+        self.scale = saved_scale;
+        (self.origin_x, self.origin_y) = saved_origin;
+        self.restore_clip(saved_clip);
+    }
+
+    /// Render `f` at logical→physical scale `scale` into the on-screen region
+    /// `area`, over a `bg` backdrop, then magnify the rendered pixels by the
+    /// integer factor `zoom` using nearest-neighbor replication. `zoom == 1`
+    /// draws straight into `area` (no allocation, via [`Self::with_scale`]);
+    /// `zoom > 1` renders once into an offscreen buffer at `scale` and blits it
+    /// `zoom`× larger, so each device pixel becomes a `zoom × zoom` block.
+    ///
+    /// The magnification is a pure pixel copy applied *after* drawing — it
+    /// never feeds back into `scale`, so chrome stays snapped and glyphs stay
+    /// rasterized exactly as `scale` alone would produce them, just enlarged.
+    /// That's the point of it: on a HiDPI display, where device pixels are
+    /// tiny, a `zoom` of 2 lets the eye actually see the per-pixel snapping and
+    /// rasterization a given scale yields. `bg` is the backdrop the content is
+    /// composited onto; it matters for the anti-aliased edges of text and
+    /// glyphs, which blend toward it.
+    ///
+    /// `area` is the *final* on-screen footprint (already accounting for
+    /// `zoom`). Drawing is clipped to it, intersected with any active clip.
+    pub fn draw_scaled(
+        &mut self,
+        area: Rect,
+        scale: f32,
+        zoom: i32,
+        bg: Color,
+        f: impl FnOnce(&mut Painter),
+    ) {
+        if area.w <= 0 || area.h <= 0 {
+            return;
+        }
+        let zoom = zoom.max(1);
+        // Fill the footprint first: the in-place path draws over it, and the
+        // zoomed path uses it to back any sub-pixel gap the integer
+        // magnification can leave at the right / bottom edge.
+        self.fill_rect(area, bg);
+        if zoom == 1 {
+            self.with_scale(area, scale, f);
+            return;
+        }
+        // Render once at `scale` into an offscreen buffer 1/zoom the footprint,
+        // then magnify. The buffer starts as `bg` so anti-aliased edges blend
+        // against the same backdrop the in-place path draws over.
+        let phys_w = self.snap(area.x + area.w) - self.snap(area.x);
+        let phys_h = self.snap(area.y + area.h) - self.snap(area.y);
+        let off_w = (phys_w / zoom).max(1);
+        let off_h = (phys_h / zoom).max(1);
+        let mut buf = vec![bg.0; (off_w * off_h) as usize];
+        {
+            let mut p = Painter::new(
+                &mut buf,
+                off_w,
+                off_h,
+                scale,
+                0,
+                0,
+                self.font,
+                self.mono_font,
+            );
+            f(&mut p);
+        }
+        let dst_x = self.origin_x + self.snap(area.x);
+        let dst_y = self.origin_y + self.snap(area.y);
+        self.blit_zoomed(&buf, off_w, off_h, dst_x, dst_y, zoom);
+    }
+
+    /// Opaque-copy a `src_w × src_h` ARGB buffer onto the surface with its
+    /// top-left at physical pixel `(dst_x, dst_y)`, expanding every source
+    /// pixel to a `zoom × zoom` block. Honors the active clip. The magnifying
+    /// half of [`Self::draw_scaled`].
+    fn blit_zoomed(
+        &mut self,
+        src: &[u32],
+        src_w: i32,
+        src_h: i32,
+        dst_x: i32,
+        dst_y: i32,
+        zoom: i32,
+    ) {
+        let (cx0, cy0, cx1, cy1) = self.clip_bounds();
+        for sy in 0..src_h {
+            let src_row = (sy * src_w) as usize;
+            for ry in 0..zoom {
+                let dy = dst_y + sy * zoom + ry;
+                if dy < cy0 || dy >= cy1 {
+                    continue;
+                }
+                let dst_row = (dy * self.width) as usize;
+                for sx in 0..src_w {
+                    let px = src[src_row + sx as usize];
+                    let bx = dst_x + sx * zoom;
+                    for rx in 0..zoom {
+                        let dx = bx + rx;
+                        if dx >= cx0 && dx < cx1 {
+                            self.pixels[dst_row + dx as usize] = px;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     pub fn font(&self) -> Option<&Font> {
         self.font
     }
@@ -343,6 +539,12 @@ impl<'a> Painter<'a> {
         if rect.w <= 0 || rect.h <= 0 {
             return;
         }
+        // Self-manage the crisp pass like `button` does: at awkward fractional
+        // scales the four 1-logical-pixel edges round unevenly, so redraw this
+        // recipe at exact device pixels (the re-entry runs at `scale == 1.0`).
+        if self.wants_1x_crispness() {
+            return self.physical(rect, |p, r| p.stroke_rect(r, color));
+        }
         self.h_line(rect.x, rect.y, rect.w, color);
         self.h_line(rect.x, rect.bottom() - 1, rect.w, color);
         self.v_line(rect.x, rect.y, rect.h, color);
@@ -353,6 +555,11 @@ impl<'a> Painter<'a> {
     pub fn raised_bevel(&mut self, rect: Rect, highlight: Color, shadow: Color) {
         if rect.w <= 0 || rect.h <= 0 {
             return;
+        }
+        // Same crisp self-management as `stroke_rect` / `button`. `sunken_bevel`
+        // delegates here, so it inherits this without its own guard.
+        if self.wants_1x_crispness() {
+            return self.physical(rect, |p, r| p.raised_bevel(r, highlight, shadow));
         }
         self.h_line(rect.x, rect.y, rect.w, highlight);
         self.v_line(rect.x, rect.y, rect.h, highlight);
@@ -378,6 +585,15 @@ impl<'a> Painter<'a> {
     pub fn button(&mut self, rect: Rect, theme: &Theme, pressed: bool, default: bool) {
         if rect.w <= 0 || rect.h <= 0 {
             return;
+        }
+        // At awkward fractional scales the 1-logical-pixel chrome edges round
+        // inconsistently — neighbouring lines land on 1 or 2 device pixels
+        // depending on where they fall. Redraw the whole frame at exact device
+        // pixels there, reusing *this* recipe against the button's physical
+        // bounds. Inside the block `scale == 1.0`, so the body below runs 1:1 —
+        // and the same condition breaks the recursion.
+        if self.wants_1x_crispness() {
+            return self.physical(rect, |p, r| p.button(r, theme, pressed, default));
         }
         // Rounded black outline: skip the four corner pixels.
         if rect.w > 2 {
@@ -406,6 +622,35 @@ impl<'a> Painter<'a> {
             self.v_line(inner2.x, inner2.y, inner2.h, theme.highlight);
             self.h_line(inner2.x, inner2.bottom() - 1, inner2.w, theme.shadow);
             self.v_line(inner2.right() - 1, inner2.y, inner2.h, theme.shadow);
+        }
+    }
+
+    /// Dotted Win 3.1 focus rectangle: a 1px dashed outline (every other
+    /// pixel) tracing the edges of `rect`. Like [`Self::button`], at the
+    /// fractional scales in `[0.9, 1.5)` the dash aliases — a 1-logical-pixel
+    /// dot rounds to 1 or 2 device pixels — so the ring is redrawn at exact
+    /// device pixels there, reusing this recipe (the re-entry runs at
+    /// `scale == 1.0`).
+    pub fn focus_rect(&mut self, rect: Rect, color: Color) {
+        if rect.w <= 0 || rect.h <= 0 {
+            return;
+        }
+        if self.wants_1x_crispness() {
+            return self.physical(rect, |p, r| p.focus_rect(r, color));
+        }
+        let right = rect.right() - 1;
+        let bottom = rect.bottom() - 1;
+        let mut x = rect.x;
+        while x <= right {
+            self.pixel(x, rect.y, color);
+            self.pixel(x, bottom, color);
+            x += 2;
+        }
+        let mut y = rect.y;
+        while y <= bottom {
+            self.pixel(rect.x, y, color);
+            self.pixel(right, y, color);
+            y += 2;
         }
     }
 
@@ -549,6 +794,71 @@ mod tests {
         // diagonals (still on the 4px grid) would have drawn here.
         assert_eq!(at(4, 0), Color::WHITE.0);
         assert_eq!(at(2, 0), Color::WHITE.0);
+    }
+
+    #[test]
+    fn with_scale_places_drawing_at_the_nested_scale() {
+        let (w, h) = (20, 20);
+        let mut pixels = vec![0u32; (w * h) as usize];
+        {
+            let mut p = Painter::new(&mut pixels, w, h, 1.0, 0, 0, None, None);
+            p.with_scale(Rect::new(2, 2, 8, 8), 2.0, |p| {
+                assert_eq!(p.scale(), 2.0, "the closure sees the nested scale");
+                // A 1×1 logical pixel at local (1,1) maps to a 2×2 device block
+                // anchored at the region's top-left + 1 unit: (2 + 1·2, …).
+                p.fill_rect(Rect::new(1, 1, 1, 1), Color::BLACK);
+            });
+            assert_eq!(p.scale(), 1.0, "the outer scale is restored afterwards");
+        }
+        let at = |x: i32, y: i32| pixels[(y * w + x) as usize];
+        assert_eq!(at(4, 4), Color::BLACK.0);
+        assert_eq!(at(5, 5), Color::BLACK.0);
+        assert_eq!(at(3, 3), 0, "nothing leaks above-left of the block");
+        assert_eq!(at(6, 6), 0, "nothing leaks below-right of the block");
+    }
+
+    #[test]
+    fn with_scale_clips_overflow_to_the_region() {
+        let (w, h) = (20, 20);
+        let mut pixels = vec![0u32; (w * h) as usize];
+        {
+            let mut p = Painter::new(&mut pixels, w, h, 1.0, 0, 0, None, None);
+            // A fill far larger than the 8×8 region is trimmed to it.
+            p.with_scale(Rect::new(2, 2, 8, 8), 2.0, |p| {
+                p.fill_rect(Rect::new(0, 0, 100, 100), Color::WHITE);
+            });
+        }
+        let at = |x: i32, y: i32| pixels[(y * w + x) as usize];
+        assert_eq!(at(2, 2), Color::WHITE.0, "region top-left is painted");
+        assert_eq!(at(9, 9), Color::WHITE.0, "region bottom-right is painted");
+        assert_eq!(at(1, 1), 0, "just outside the region stays untouched");
+        assert_eq!(at(10, 10), 0, "past the region stays untouched");
+    }
+
+    #[test]
+    fn draw_scaled_magnifies_the_result_with_nearest_neighbor() {
+        let (w, h) = (20, 20);
+        let mut pixels = vec![0u32; (w * h) as usize];
+        {
+            let mut p = Painter::new(&mut pixels, w, h, 1.0, 0, 0, None, None);
+            // Footprint (2,2)+8×8 at scale 1.0, zoomed 2×: the offscreen is
+            // rendered at 4×4 then each pixel becomes a 2×2 block.
+            p.draw_scaled(Rect::new(2, 2, 8, 8), 1.0, 2, Color::WHITE, |p| {
+                assert_eq!(p.size().w, 4, "offscreen is 1/zoom the footprint");
+                p.fill_rect(Rect::new(0, 0, 1, 1), Color::BLACK);
+            });
+        }
+        let at = |x: i32, y: i32| pixels[(y * w + x) as usize];
+        // One black source pixel → a 2×2 black block at the footprint origin.
+        assert_eq!(at(2, 2), Color::BLACK.0);
+        assert_eq!(at(3, 3), Color::BLACK.0);
+        // The pixel next to it came from a white source pixel.
+        assert_eq!(at(4, 2), Color::WHITE.0);
+        assert_eq!(at(2, 4), Color::WHITE.0);
+        // The backdrop fills the rest of the footprint, nothing outside it.
+        assert_eq!(at(9, 9), Color::WHITE.0);
+        assert_eq!(at(1, 1), 0);
+        assert_eq!(at(10, 10), 0);
     }
 
     #[test]

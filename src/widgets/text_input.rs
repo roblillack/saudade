@@ -468,6 +468,9 @@ impl Widget for TextInput {
             theme.face
         };
         painter.fill_rect(self.rect, field_bg);
+        // The bevel + border self-manage the crisp physical-pixel pass at
+        // fractional scales, so the field doesn't alias against the selection
+        // band or neighbouring widgets at fractional DPI.
         painter.sunken_bevel(self.rect, theme.highlight, theme.shadow);
         painter.stroke_rect(self.rect, theme.border);
 
