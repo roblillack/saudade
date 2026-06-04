@@ -227,6 +227,145 @@ impl<'a> Painter<'a> {
         self.scale = saved.max(0.01);
     }
 
+    /// Render `f` into the logical-pixel region `area` as though the painter
+    /// were running at the scale factor `scale` instead of the window's real
+    /// one. Inside `f`, coordinates are local to `area`'s top-left corner and
+    /// one logical unit maps to `scale` physical pixels, so widgets paint
+    /// exactly as they would in a window the OS reported at that DPI — snapped
+    /// chrome and re-rasterized text included. Drawing is clipped to `area`
+    /// (intersected with any clip already in effect), so content that would
+    /// overflow at large scales is trimmed rather than spilling past it.
+    ///
+    /// This is the in-place building block behind [`Self::draw_scaled`], which
+    /// is the public entry point for rendering content at a chosen scale (and
+    /// the path apps reach for to *preview* a scale without touching the
+    /// window's actual scale factor, which only the OS controls). It allocates
+    /// no nested buffer or font cache — it just relocates the logical origin
+    /// and swaps the scale for the duration of the call — so it is cheap enough
+    /// to run every frame.
+    pub(crate) fn with_scale(&mut self, area: Rect, scale: f32, f: impl FnOnce(&mut Painter)) {
+        if area.w <= 0 || area.h <= 0 {
+            return;
+        }
+        // `area` is in the *current* logical coords, so snap it (and clip to
+        // it) before swapping the scale out from under `snap`. `push_clip`
+        // intersects with whatever clip is already installed, so a caller can
+        // confine the preview to a smaller pane first and still center an
+        // oversized `area` within it.
+        let saved_clip = self.push_clip(area);
+        let origin_x = self.origin_x + self.snap(area.x);
+        let origin_y = self.origin_y + self.snap(area.y);
+        let saved_scale = self.scale;
+        let saved_origin = (self.origin_x, self.origin_y);
+        self.scale = scale.max(0.01);
+        self.origin_x = origin_x;
+        self.origin_y = origin_y;
+        f(self);
+        self.scale = saved_scale;
+        (self.origin_x, self.origin_y) = saved_origin;
+        self.restore_clip(saved_clip);
+    }
+
+    /// Render `f` at logical→physical scale `scale` into the on-screen region
+    /// `area`, over a `bg` backdrop, then magnify the rendered pixels by the
+    /// integer factor `zoom` using nearest-neighbor replication. `zoom == 1`
+    /// draws straight into `area` (no allocation, via [`Self::with_scale`]);
+    /// `zoom > 1` renders once into an offscreen buffer at `scale` and blits it
+    /// `zoom`× larger, so each device pixel becomes a `zoom × zoom` block.
+    ///
+    /// The magnification is a pure pixel copy applied *after* drawing — it
+    /// never feeds back into `scale`, so chrome stays snapped and glyphs stay
+    /// rasterized exactly as `scale` alone would produce them, just enlarged.
+    /// That's the point of it: on a HiDPI display, where device pixels are
+    /// tiny, a `zoom` of 2 lets the eye actually see the per-pixel snapping and
+    /// rasterization a given scale yields. `bg` is the backdrop the content is
+    /// composited onto; it matters for the anti-aliased edges of text and
+    /// glyphs, which blend toward it.
+    ///
+    /// `area` is the *final* on-screen footprint (already accounting for
+    /// `zoom`). Drawing is clipped to it, intersected with any active clip.
+    pub fn draw_scaled(
+        &mut self,
+        area: Rect,
+        scale: f32,
+        zoom: i32,
+        bg: Color,
+        f: impl FnOnce(&mut Painter),
+    ) {
+        if area.w <= 0 || area.h <= 0 {
+            return;
+        }
+        let zoom = zoom.max(1);
+        // Fill the footprint first: the in-place path draws over it, and the
+        // zoomed path uses it to back any sub-pixel gap the integer
+        // magnification can leave at the right / bottom edge.
+        self.fill_rect(area, bg);
+        if zoom == 1 {
+            self.with_scale(area, scale, f);
+            return;
+        }
+        // Render once at `scale` into an offscreen buffer 1/zoom the footprint,
+        // then magnify. The buffer starts as `bg` so anti-aliased edges blend
+        // against the same backdrop the in-place path draws over.
+        let phys_w = self.snap(area.x + area.w) - self.snap(area.x);
+        let phys_h = self.snap(area.y + area.h) - self.snap(area.y);
+        let off_w = (phys_w / zoom).max(1);
+        let off_h = (phys_h / zoom).max(1);
+        let mut buf = vec![bg.0; (off_w * off_h) as usize];
+        {
+            let mut p = Painter::new(
+                &mut buf,
+                off_w,
+                off_h,
+                scale,
+                0,
+                0,
+                self.font,
+                self.mono_font,
+            );
+            f(&mut p);
+        }
+        let dst_x = self.origin_x + self.snap(area.x);
+        let dst_y = self.origin_y + self.snap(area.y);
+        self.blit_zoomed(&buf, off_w, off_h, dst_x, dst_y, zoom);
+    }
+
+    /// Opaque-copy a `src_w × src_h` ARGB buffer onto the surface with its
+    /// top-left at physical pixel `(dst_x, dst_y)`, expanding every source
+    /// pixel to a `zoom × zoom` block. Honors the active clip. The magnifying
+    /// half of [`Self::draw_scaled`].
+    fn blit_zoomed(
+        &mut self,
+        src: &[u32],
+        src_w: i32,
+        src_h: i32,
+        dst_x: i32,
+        dst_y: i32,
+        zoom: i32,
+    ) {
+        let (cx0, cy0, cx1, cy1) = self.clip_bounds();
+        for sy in 0..src_h {
+            let src_row = (sy * src_w) as usize;
+            for ry in 0..zoom {
+                let dy = dst_y + sy * zoom + ry;
+                if dy < cy0 || dy >= cy1 {
+                    continue;
+                }
+                let dst_row = (dy * self.width) as usize;
+                for sx in 0..src_w {
+                    let px = src[src_row + sx as usize];
+                    let bx = dst_x + sx * zoom;
+                    for rx in 0..zoom {
+                        let dx = bx + rx;
+                        if dx >= cx0 && dx < cx1 {
+                            self.pixels[dst_row + dx as usize] = px;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     pub fn font(&self) -> Option<&Font> {
         self.font
     }
@@ -655,6 +794,71 @@ mod tests {
         // diagonals (still on the 4px grid) would have drawn here.
         assert_eq!(at(4, 0), Color::WHITE.0);
         assert_eq!(at(2, 0), Color::WHITE.0);
+    }
+
+    #[test]
+    fn with_scale_places_drawing_at_the_nested_scale() {
+        let (w, h) = (20, 20);
+        let mut pixels = vec![0u32; (w * h) as usize];
+        {
+            let mut p = Painter::new(&mut pixels, w, h, 1.0, 0, 0, None, None);
+            p.with_scale(Rect::new(2, 2, 8, 8), 2.0, |p| {
+                assert_eq!(p.scale(), 2.0, "the closure sees the nested scale");
+                // A 1×1 logical pixel at local (1,1) maps to a 2×2 device block
+                // anchored at the region's top-left + 1 unit: (2 + 1·2, …).
+                p.fill_rect(Rect::new(1, 1, 1, 1), Color::BLACK);
+            });
+            assert_eq!(p.scale(), 1.0, "the outer scale is restored afterwards");
+        }
+        let at = |x: i32, y: i32| pixels[(y * w + x) as usize];
+        assert_eq!(at(4, 4), Color::BLACK.0);
+        assert_eq!(at(5, 5), Color::BLACK.0);
+        assert_eq!(at(3, 3), 0, "nothing leaks above-left of the block");
+        assert_eq!(at(6, 6), 0, "nothing leaks below-right of the block");
+    }
+
+    #[test]
+    fn with_scale_clips_overflow_to_the_region() {
+        let (w, h) = (20, 20);
+        let mut pixels = vec![0u32; (w * h) as usize];
+        {
+            let mut p = Painter::new(&mut pixels, w, h, 1.0, 0, 0, None, None);
+            // A fill far larger than the 8×8 region is trimmed to it.
+            p.with_scale(Rect::new(2, 2, 8, 8), 2.0, |p| {
+                p.fill_rect(Rect::new(0, 0, 100, 100), Color::WHITE);
+            });
+        }
+        let at = |x: i32, y: i32| pixels[(y * w + x) as usize];
+        assert_eq!(at(2, 2), Color::WHITE.0, "region top-left is painted");
+        assert_eq!(at(9, 9), Color::WHITE.0, "region bottom-right is painted");
+        assert_eq!(at(1, 1), 0, "just outside the region stays untouched");
+        assert_eq!(at(10, 10), 0, "past the region stays untouched");
+    }
+
+    #[test]
+    fn draw_scaled_magnifies_the_result_with_nearest_neighbor() {
+        let (w, h) = (20, 20);
+        let mut pixels = vec![0u32; (w * h) as usize];
+        {
+            let mut p = Painter::new(&mut pixels, w, h, 1.0, 0, 0, None, None);
+            // Footprint (2,2)+8×8 at scale 1.0, zoomed 2×: the offscreen is
+            // rendered at 4×4 then each pixel becomes a 2×2 block.
+            p.draw_scaled(Rect::new(2, 2, 8, 8), 1.0, 2, Color::WHITE, |p| {
+                assert_eq!(p.size().w, 4, "offscreen is 1/zoom the footprint");
+                p.fill_rect(Rect::new(0, 0, 1, 1), Color::BLACK);
+            });
+        }
+        let at = |x: i32, y: i32| pixels[(y * w + x) as usize];
+        // One black source pixel → a 2×2 black block at the footprint origin.
+        assert_eq!(at(2, 2), Color::BLACK.0);
+        assert_eq!(at(3, 3), Color::BLACK.0);
+        // The pixel next to it came from a white source pixel.
+        assert_eq!(at(4, 2), Color::WHITE.0);
+        assert_eq!(at(2, 4), Color::WHITE.0);
+        // The backdrop fills the rest of the footprint, nothing outside it.
+        assert_eq!(at(9, 9), Color::WHITE.0);
+        assert_eq!(at(1, 1), 0);
+        assert_eq!(at(10, 10), 0);
     }
 
     #[test]

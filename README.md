@@ -38,7 +38,7 @@ Reference apps live under `examples/`. Run any of them with
 | `circle_drawer` | 7GUIs task 6 — a custom canvas (no circle primitive: midpoint outlines, span-filled disks) with hover selection, a right-click menu, a real modal dialog (`Modal`) hosting the diameter `Slider`, and snapshot undo/redo.                                                                                                                                                                        |
 | `cells`         | 7GUIs task 7 — a scrollable A–Z / 0–99 spreadsheet `Grid` (built on `ScrollBar` + `TextInput`) with a formula engine: cell refs, `+ - * /`, ranges, `SUM`/`AVG`/…, reactive recompute and cycle detection.                                                                                                                                                                                       |
 | `patterns`      | Previews the window background patterns (`none`, `solid`, `dots`, `lines`, `diagonal`, `cross-stitch`): press `p` to cycle the pattern and `c` to cycle the color. Every app draws one behind its widgets — default `superlight` `diagonal`, overridable with `SAUDADE_WINDOW_PATTERN` / `SAUDADE_WINDOW_PATTERN_COLOR` (e.g. `SAUDADE_WINDOW_PATTERN=dots SAUDADE_WINDOW_PATTERN_COLOR=light`). |
-| `scaling`       | Reads `Painter::scale()` to display the runtime's current logical→physical scale factor and overrides it via `EventCtx::set_scale_factor`, with a `Slider`, preset `Button`s (0.5x / 1.0x / … / 3.0x), and a "Reset to OS" button.                                                                                                                                                                |
+| `scaling`       | Previews widgets at an arbitrary logical→physical scale via `Painter::draw_scaled`: a `Slider` and preset `Button`s (1.0x / 1.25x / … / 3.0x) drive a "preview scale" — starting at the display's OS scale — that a small panel of real widgets (`TextInput`, `Dropdown`, `Checkbox`, `Button`s, `ProgressBar`) redraws at, plus a "zoom in 2x" `Checkbox` that magnifies the result. The window resizes itself (via `EventCtx::request_window_size`) to fit the preview at the chosen scale. The window's own (OS-owned) scale is never touched.                                  |
 
 ```console
 $ cargo run --example notepad        # or: filer, picker, counter, temperature,
@@ -218,8 +218,7 @@ impl EventCtx {
     pub fn close(&mut self);                     // close the window after dispatch
     pub fn request_focus(&mut self);             // become the keyboard target
     pub fn release_focus(&mut self);             // drop keyboard focus
-    pub fn set_scale_factor(&mut self, f: f32);  // override the runtime's
-                                                 // logical→physical scale
+    pub fn request_window_size(&mut self, w: i32, h: i32); // resize the window
 }
 ```
 
@@ -955,16 +954,23 @@ practice on the dialogs we've built; if you hit a case where it
 matters, draw chrome at a fixed `round(scale)` thickness using
 `Painter::scale()`.
 
-The scale factor is also writable: a widget can call
-`EventCtx::set_scale_factor(f)` to override what the OS reported,
-which is handy for system-info utilities that want a "zoom" control or
-for testing layouts at scales the local display doesn't actually
-report. The runtime applies the new value after the current event
-finishes dispatching, relays out the root, and dismisses any open
-popups so they're rebuilt at the new scale. The Wayland backend
-rounds the request to the nearest integer scale, since compositors
-only advertise integer buffer scales. See `examples/scaling.rs` for a
-live read-out + slider.
+The window's scale factor is owned by the OS — adopted at startup and
+refreshed only when the compositor reports a change. There is no API
+to override it: density independence comes from designing in logical
+pixels, not from forcing a particular scale.
+
+What a widget *can* do is render content at a scale of its own
+choosing. `Painter::draw_scaled(area, scale, zoom, bg, |p| …)` draws
+the closure as a real window at `scale` DPI would — snapped chrome,
+re-rasterized text, no resampling — into `area`, then magnifies the
+*result* by the integer `zoom` (a nearest-neighbor pixel copy that
+never feeds back into `scale`). `zoom == 1` draws in place; `zoom > 1`
+renders once offscreen and blits it enlarged, which on a HiDPI display
+lets you actually see the per-pixel snapping a scale produced. It's
+how you'd build a "preview at 1.5x" pane, a zoomable canvas, or a
+thumbnail. See `examples/scaling.rs`, which drives such a preview —
+a small panel of real widgets — from a slider, presets, and a 2×
+zoom toggle.
 
 ## End-to-end example: a Notepad-style editor
 

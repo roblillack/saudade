@@ -1,138 +1,530 @@
-//! scaling — read and override the runtime's logical→physical scale factor.
+//! scaling — preview saudade widgets at an arbitrary logical→physical scale.
 //!
-//! The runtime adopts the OS-reported scale factor at startup (and refreshes it
-//! whenever the compositor sends a `ScaleFactorChanged`), but widgets can also
-//! ask the runtime to use a different value via [`EventCtx::set_scale_factor`].
-//! The current value is always reflected by [`Painter::scale`] inside `paint`,
-//! so a widget can both *read* and *write* the active scale.
+//! The window's own scale factor belongs to the OS: saudade adopts whatever
+//! the compositor reports at startup and refreshes it on a `ScaleFactorChanged`
+//! event, and there is deliberately no API for a widget to override it. What a
+//! widget *can* do is render content at a scale of its choosing through
+//! [`Painter::draw_scaled`] — it paints the content as a real window opened at
+//! that DPI would (chrome snapped to device pixels, text re-rasterized at its
+//! physical size, nothing resampled), into a region of the surface.
 //!
-//! This demo pairs a small read-out widget (rendering `Painter::scale()` as
-//! text) with a `Slider` and a `Reset` button that call `set_scale_factor`.
-//! Drag the slider, click a preset, or hit the arrow keys with the slider
-//! focused — the chrome resizes live.
+//! This demo wires a [`Slider`] and a row of preset [`Button`]s to a shared
+//! "preview scale" factor, then hands it to a `ScalePreview` widget that draws
+//! a small panel of real widgets — a text input, a dropdown, a checkbox,
+//! buttons, a progress bar — at that scale, in a canvas below the controls. The
+//! slider starts at this display's actual OS scale, so the panel opens looking
+//! exactly like the rest of the window.
 //!
-//! The window starts wide enough that the demo content still fits at the
-//! biggest preset (3.0x). Smaller scales letterbox; on backends where popups
-//! were open, the runtime tears them down so they're rebuilt at the new
-//! scale on the next paint.
+//! The window resizes to the *space the preview needs*: whenever the scale
+//! factor (or the 2× zoom) changes, the example recomputes how big the panel
+//! will render and asks the runtime to resize the window — via
+//! [`EventCtx::request_window_size`] — so the panel always fits, with the
+//! controls and canvas reflowing to the new width. Drag the slider up and the
+//! window grows; drag it down and the window shrinks.
+//!
+//! The factor is the *absolute* logical→physical scale, the same number the OS
+//! reports. Try the fractional steps (1.25x, 1.5x): that's where saudade's
+//! crisp physical-pixel chrome pass earns its keep. The "Zoom in 2x" checkbox
+//! magnifies the *rendered result* 2× (a pure pixel copy — it does not re-run
+//! the scaling at a higher factor) so you can see the per-pixel snapping a scale
+//! produced.
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use saudade::{
-    App, Button, Color, Container, Label, Painter, Rect, Slider, Theme, Widget, WindowConfig,
+    App, Button, Checkbox, Color, Container, Dropdown, Event, EventCtx, Label, Painter,
+    PopupRequest, ProgressBar, Rect, Slider, TextInput, Theme, Widget, WindowConfig,
 };
 
-const W: i32 = 480;
-const H: i32 = 260;
+/// Layout metrics. The controls occupy a fixed-height band at the top (down to
+/// `CANVAS_Y`) and need at least `MIN_W` to lay out; below them the preview
+/// canvas is grown to fit the sample panel at the current scale, with
+/// `PANEL_PAD` of breathing room, and the window is sized to match. So changing
+/// the scale factor (or the 2× zoom) resizes the window to the needed space.
+const MIN_W: i32 = 480;
+const CANVAS_X: i32 = 24;
+const CANVAS_Y: i32 = 198;
+const MARGIN: i32 = 16;
+const PANEL_PAD: i32 = 24;
+/// Logical width of each preset button.
+const PRESET_W: i32 = 80;
+
+/// Slider range, in percent (100% = 1.0x … 300% = 3.0x).
+const MIN_PCT: i32 = 100;
+const MAX_PCT: i32 = 300;
+const PRESETS: [(&str, i32); 5] = [
+    ("1.0x", 100),
+    ("1.25x", 125),
+    ("1.5x", 150),
+    ("2.0x", 200),
+    ("3.0x", 300),
+];
+
+/// The sample panel's natural footprint, in *preview-logical* pixels. The
+/// widgets sit a few pixels inside it (see [`build_sample`]), so the slack
+/// absorbs any rounding when the panel is clipped to the canvas.
+const SAMPLE_W: i32 = 150;
+const SAMPLE_H: i32 = 146;
+
+/// The sample panel's on-screen footprint (after the optional 2× zoom) in the
+/// window's logical pixels, given the OS scale `os_scale`. This is the literal
+/// space `draw_scaled` will fill: the panel is rendered at `factor` and then
+/// magnified by `zoom`, so its physical size is `SAMPLE × factor × zoom`, which
+/// divided by `os_scale` gives logical pixels.
+fn footprint(factor: f32, zoom: bool, os_scale: f32) -> (i32, i32) {
+    let z = if zoom { 2.0 } else { 1.0 };
+    let s = os_scale.max(0.01);
+    let w = (SAMPLE_W as f32 * factor * z / s).round().max(1.0) as i32;
+    let h = (SAMPLE_H as f32 * factor * z / s).round().max(1.0) as i32;
+    (w, h)
+}
+
+/// Window size that fits a panel of footprint `fw × fh`: the canvas pads the
+/// panel by `PANEL_PAD` on each side (and is inset `CANVAS_X` from the window
+/// edges), and the width is floored at the controls' `MIN_W`.
+fn window_for_footprint(fw: i32, fh: i32) -> (i32, i32) {
+    let w = (fw + 2 * (PANEL_PAD + CANVAS_X)).max(MIN_W);
+    let h = CANVAS_Y + fh + 2 * PANEL_PAD + MARGIN;
+    (w, h)
+}
+
+/// Window size for the given scale + zoom at OS scale `os_scale`.
+fn desired_window(factor: f32, zoom: bool, os_scale: f32) -> (i32, i32) {
+    let (fw, fh) = footprint(factor, zoom, os_scale);
+    window_for_footprint(fw, fh)
+}
+
+/// The slider spans from a fixed left edge out to the right margin of a window
+/// `w` wide.
+fn slider_rect(w: i32) -> Rect {
+    Rect::new(140, 92, w - 164, 22)
+}
+/// The five preset buttons spread evenly across a window `w` wide, keeping a
+/// fixed button width and growing the gaps.
+fn preset_rect(i: i32, w: i32) -> Rect {
+    let gap = ((w - 48 - 5 * PRESET_W) / 4).max(0);
+    Rect::new(24 + i * (PRESET_W + gap), 138, PRESET_W, 24)
+}
+/// The right-hand ("3.0x") slider tick, pinned under the slider's right end.
+fn max_tick_rect(w: i32) -> Rect {
+    Rect::new(w - 64, 118, 40, 14)
+}
 
 fn main() {
-    // Captured on the first paint, so the "Reset" button knows what scale to
-    // restore. Stays at 0.0 until the first frame; the button no-ops in that
-    // window, which is fine — the very first paint always lands before any
-    // user input.
-    let initial_scale = Rc::new(Cell::new(0.0_f32));
+    // Shared state. `factor` is the scale the preview renders at — 0.0 until the
+    // first paint adopts the OS scale (see `Root::paint`). `zoom` is the 2×
+    // magnify toggle. `os_scale` caches the OS scale, refreshed every paint, so
+    // the event handlers can size the window without a painter in hand.
+    let factor = Rc::new(Cell::new(0.0_f32));
+    let zoom = Rc::new(Cell::new(false));
+    let os_scale = Rc::new(Cell::new(1.0_f32));
 
-    let slider = Slider::new(Rect::new(100, 92, 280, 24), 50, 300)
-        .with_value(100)
-        .with_step(25)
-        .on_change(|cx, percent| {
-            cx.set_scale_factor(percent as f32 / 100.0);
-        });
+    // The window opens at the default scale (factor == OS scale), where the
+    // panel renders at its natural `SAMPLE` size regardless of the display.
+    let (init_w, init_h) = window_for_footprint(SAMPLE_W, SAMPLE_H);
 
-    let reset = Button::new(Rect::new(190, 196, 100, 24), "Reset to OS").on_click({
-        let initial = initial_scale.clone();
-        move |cx| {
-            let s = initial.get();
-            if s > 0.0 {
-                cx.set_scale_factor(s);
-            }
+    // Resize the window to fit the panel at the new scale + zoom.
+    let resize = {
+        let zoom = zoom.clone();
+        let os_scale = os_scale.clone();
+        move |cx: &mut EventCtx, factor: f32| {
+            let (w, h) = desired_window(factor, zoom.get(), os_scale.get());
+            cx.request_window_size(w, h);
+        }
+    };
+
+    // The width-spanning controls are shared so the root can reposition them in
+    // `layout` when a resize changes the width — the same instances the
+    // container routes events and paints through.
+    let slider = Rc::new(RefCell::new(
+        Slider::new(slider_rect(init_w), MIN_PCT, MAX_PCT)
+            .with_step(5)
+            .on_change({
+                let factor = factor.clone();
+                let resize = resize.clone();
+                move |cx, pct| {
+                    let f = pct as f32 / 100.0;
+                    factor.set(f);
+                    resize(cx, f);
+                }
+            }),
+    ));
+    let max_tick = Rc::new(RefCell::new(
+        Label::new(max_tick_rect(init_w), "3.0x")
+            .with_size(9.0)
+            .with_color(Color::DARK_GRAY),
+    ));
+    let presets: Vec<Rc<RefCell<Button>>> = PRESETS
+        .iter()
+        .enumerate()
+        .map(|(i, &(label, pct))| {
+            let button = Button::new(preset_rect(i as i32, init_w), label).on_click({
+                let slider = slider.clone();
+                let factor = factor.clone();
+                let resize = resize.clone();
+                move |cx| {
+                    let f = pct as f32 / 100.0;
+                    slider.borrow_mut().set_value(pct);
+                    factor.set(f);
+                    resize(cx, f);
+                }
+            });
+            Rc::new(RefCell::new(button))
+        })
+        .collect();
+
+    // Toggling zoom also resizes the window — the panel doubles, so the space it
+    // needs doubles too.
+    let zoom_toggle = Checkbox::new(Rect::new(24, 172, init_w - 48, 16), "Zoom in 2x").on_toggle({
+        let zoom = zoom.clone();
+        let factor = factor.clone();
+        let os_scale = os_scale.clone();
+        move |cx, on| {
+            zoom.set(on);
+            let (w, h) = desired_window(factor.get().max(0.1), on, os_scale.get());
+            cx.request_window_size(w, h);
         }
     });
 
-    let root = Container::new(W, H)
-        .with_background(Color::WHITE)
-        .add(Label::new(Rect::new(20, 16, W - 40, 18), "Scale factor").with_size(13.0))
+    let mut body = Container::new(init_w, init_h)
+        .add(Label::new(Rect::new(24, 16, init_w - 48, 18), "Scale factor preview").with_size(13.0))
         .add(
             Label::new(
-                Rect::new(20, 40, W - 40, 32),
-                "Drag the slider to ask the runtime to redraw at a different\n\
-                 logical-to-physical scale.",
+                Rect::new(24, 38, init_w - 48, 42),
+                "Render a panel of widgets at any logical-to-physical scale — the\n\
+                 window's own scale never changes, but it resizes to fit the\n\
+                 preview. Zoom magnifies the rendered result 2x to reveal pixels.",
             )
             .with_size(10.0),
         )
-        .add(ScaleDisplay::new(
-            Rect::new(20, 84, 80, 36),
-            initial_scale.clone(),
+        .add(FactorReadout::new(
+            Rect::new(24, 88, 110, 34),
+            factor.clone(),
+            zoom.clone(),
         ))
-        .add(slider)
-        .add(Label::new(Rect::new(100, 120, 40, 14), "0.5x").with_size(9.0))
-        .add(
-            Label::new(Rect::new(W - 60, 120, 40, 14), "3.0x")
-                .with_size(9.0)
-                .with_color(Color::DARK_GRAY),
-        )
-        .add(preset(70, 152, "0.5x", 0.5))
-        .add(preset(140, 152, "1.0x", 1.0))
-        .add(preset(210, 152, "1.5x", 1.5))
-        .add(preset(280, 152, "2.0x", 2.0))
-        .add(preset(350, 152, "3.0x", 3.0))
-        .add(reset);
+        .add(Label::new(Rect::new(140, 118, 40, 14), "1.0x").with_size(9.0))
+        .add(Shared(max_tick.clone()))
+        .add(Shared(slider.clone()));
+    for preset in &presets {
+        body.push(Shared(preset.clone()));
+    }
+    body.push(zoom_toggle);
+    body.push(ScalePreview::new(
+        factor.clone(),
+        zoom.clone(),
+        os_scale.clone(),
+    ));
 
     App::new(
-        WindowConfig::new("Scale Factor", W, H).resizable(true),
-        root,
+        WindowConfig::new("Scale Factor", init_w, init_h),
+        Root::new(body, factor.clone(), os_scale, slider, max_tick, presets),
     )
     .with_theme(Theme::windows_31())
     .run();
 }
 
-fn preset(x: i32, y: i32, label: &str, factor: f32) -> Button {
-    Button::new(Rect::new(x, y, 60, 22), label).on_click(move |cx| cx.set_scale_factor(factor))
+/// Root wrapper. It lets the content fill the window instead of being centered
+/// at a fixed design size (it reports its allocated bounds, so the runtime never
+/// letterboxes, and floods them white), reflows the width-spanning controls
+/// when the window resizes, refreshes the cached OS scale, and owns the
+/// first-paint bootstrap — then defers everything else to the inner
+/// [`Container`].
+struct Root {
+    inner: Container,
+    bounds: Rect,
+    factor: Rc<Cell<f32>>,
+    os_scale: Rc<Cell<f32>>,
+    // The width-spanning controls, repositioned on every `layout`.
+    slider: Rc<RefCell<Slider>>,
+    max_tick: Rc<RefCell<Label>>,
+    presets: Vec<Rc<RefCell<Button>>>,
 }
 
-/// Live read-out of the runtime's current scale factor. There is no
-/// dedicated "scale changed" event in saudade — the canonical source is
-/// [`Painter::scale`] during `paint`, which is exactly what this widget
-/// reads. The first paint also stashes the OS-reported scale into a
-/// shared cell so the "Reset" button can later restore it.
-struct ScaleDisplay {
-    rect: Rect,
-    initial: Rc<Cell<f32>>,
-}
-
-impl ScaleDisplay {
-    fn new(rect: Rect, initial: Rc<Cell<f32>>) -> Self {
-        Self { rect, initial }
+impl Root {
+    fn new(
+        inner: Container,
+        factor: Rc<Cell<f32>>,
+        os_scale: Rc<Cell<f32>>,
+        slider: Rc<RefCell<Slider>>,
+        max_tick: Rc<RefCell<Label>>,
+        presets: Vec<Rc<RefCell<Button>>>,
+    ) -> Self {
+        let (w, h) = window_for_footprint(SAMPLE_W, SAMPLE_H);
+        Self {
+            inner,
+            bounds: Rect::new(0, 0, w, h),
+            factor,
+            os_scale,
+            slider,
+            max_tick,
+            presets,
+        }
     }
 }
 
-impl Widget for ScaleDisplay {
+impl Widget for Root {
+    fn bounds(&self) -> Rect {
+        self.bounds
+    }
+    fn paint(&mut self, painter: &mut Painter, theme: &Theme) {
+        // Keep the cached OS scale fresh for the resize math in the handlers.
+        let os = painter.scale();
+        self.os_scale.set(os);
+        // First paint: adopt the OS scale as the starting preview scale and move
+        // the slider thumb to match, before any child reads either.
+        if self.factor.get() <= 0.0 {
+            self.factor.set(os);
+            self.slider
+                .borrow_mut()
+                .set_value((os * 100.0).round() as i32);
+        }
+        painter.fill_rect(self.bounds, Color::WHITE);
+        self.inner.paint(painter, theme);
+    }
+    fn paint_overlay(&mut self, painter: &mut Painter, theme: &Theme) {
+        self.inner.paint_overlay(painter, theme);
+    }
+    fn event(&mut self, event: &Event, ctx: &mut EventCtx) {
+        self.inner.event(event, ctx);
+    }
+    fn captures_pointer(&self) -> bool {
+        self.inner.captures_pointer()
+    }
+    fn focusable(&self) -> bool {
+        self.inner.focusable()
+    }
+    fn focus_first(&mut self) -> bool {
+        self.inner.focus_first()
+    }
+    fn set_focused(&mut self, focused: bool) {
+        self.inner.set_focused(focused);
+    }
+    fn accepts_accelerators(&self) -> bool {
+        self.inner.accepts_accelerators()
+    }
+    fn layout(&mut self, bounds: Rect) {
+        self.bounds = bounds;
+        // Reflow the width-spanning controls to the window's current width.
+        let w = bounds.w;
+        self.slider.borrow_mut().set_rect(slider_rect(w));
+        self.max_tick.borrow_mut().rect = max_tick_rect(w);
+        for (i, preset) in self.presets.iter().enumerate() {
+            preset.borrow_mut().rect = preset_rect(i as i32, w);
+        }
+        self.inner.layout(bounds);
+    }
+    fn popup_request(&self) -> Option<PopupRequest> {
+        self.inner.popup_request()
+    }
+    fn collect_popups(&self, out: &mut Vec<PopupRequest>) {
+        self.inner.collect_popups(out);
+    }
+    fn wants_ticks(&self) -> bool {
+        self.inner.wants_ticks()
+    }
+}
+
+/// The preview pane. Fills the window below the controls with a sunken canvas
+/// and renders a small panel of real widgets inside it at the configured scale
+/// via [`Painter::draw_scaled`], so the chrome you see is drawn by the very same
+/// code paths the runtime uses for the whole window — only the scale (and the
+/// optional 2× zoom) differ.
+struct ScalePreview {
+    factor: Rc<Cell<f32>>,
+    zoom: Rc<Cell<bool>>,
+    os_scale: Rc<Cell<f32>>,
+    /// The sample widgets, positioned in preview-logical coordinates relative
+    /// to the panel's top-left. They are painted, never sent events — this is a
+    /// display, not an interactive surface.
+    sample: Vec<Box<dyn Widget>>,
+}
+
+impl ScalePreview {
+    fn new(factor: Rc<Cell<f32>>, zoom: Rc<Cell<bool>>, os_scale: Rc<Cell<f32>>) -> Self {
+        Self {
+            factor,
+            zoom,
+            os_scale,
+            sample: build_sample(),
+        }
+    }
+}
+
+/// The widgets shown inside the preview panel, laid out in preview-logical
+/// coordinates within the [`SAMPLE_W`]×[`SAMPLE_H`] footprint.
+fn build_sample() -> Vec<Box<dyn Widget>> {
+    vec![
+        Box::new(Label::new(Rect::new(10, 6, 130, 14), "Preview").with_size(11.0)),
+        Box::new(TextInput::new(Rect::new(10, 24, 130, 18)).with_text("Type here")),
+        Box::new(
+            Dropdown::new(Rect::new(10, 48, 130, 20))
+                .with_items(["Apple", "Banana", "Cherry"])
+                .with_selected(0),
+        ),
+        Box::new(Checkbox::new(Rect::new(10, 76, 120, 14), "Crisp").checked(true)),
+        Box::new(Button::new(Rect::new(10, 98, 50, 22), "OK").default(true)),
+        Box::new(Button::new(Rect::new(66, 98, 56, 22), "Cancel")),
+        Box::new(ProgressBar::new(Rect::new(10, 128, 130, 10)).with_fraction(0.66)),
+    ]
+}
+
+impl Widget for ScalePreview {
+    fn bounds(&self) -> Rect {
+        // Mirror what `window_for_footprint` reserves for the canvas — not
+        // hit-test-critical (the preview is inert), just honest.
+        let (w, h) = desired_window(
+            self.factor.get().max(0.1),
+            self.zoom.get(),
+            self.os_scale.get(),
+        );
+        Rect::new(
+            CANVAS_X,
+            CANVAS_Y,
+            w - 2 * CANVAS_X,
+            (h - CANVAS_Y - MARGIN).max(40),
+        )
+    }
+
+    fn paint(&mut self, painter: &mut Painter, theme: &Theme) {
+        let win_scale = painter.scale().max(0.01);
+        // Fill the canvas to the edges of the *actual* window, so it tracks the
+        // live size while a resize settles rather than the target.
+        let logical_w = (painter.size().w as f32 / win_scale).round() as i32;
+        let logical_h = (painter.size().h as f32 / win_scale).round() as i32;
+        let rect = Rect::new(
+            CANVAS_X,
+            CANVAS_Y,
+            (logical_w - 2 * CANVAS_X).max(40),
+            (logical_h - CANVAS_Y - MARGIN).max(40),
+        );
+
+        // Canvas chrome: a white field with a sunken bevel, so the preview
+        // reads as an inset pane rather than free-floating widgets.
+        painter.fill_rect(rect, Color::WHITE);
+        painter.sunken_bevel(rect, theme.highlight, theme.shadow);
+
+        let factor = self.factor.get().max(0.1);
+        let zoom = if self.zoom.get() { 2 } else { 1 };
+
+        // The panel's on-screen footprint (after zoom) in this window's logical
+        // pixels, centered in the canvas. The window is sized to fit it, so it
+        // sits with `PANEL_PAD` of breathing room; if a resize is still settling
+        // and the canvas is briefly too small, the clip below trims the overflow.
+        let content = rect.inset(2);
+        let fw = (SAMPLE_W as f32 * factor * zoom as f32 / win_scale)
+            .round()
+            .max(1.0) as i32;
+        let fh = (SAMPLE_H as f32 * factor * zoom as f32 / win_scale)
+            .round()
+            .max(1.0) as i32;
+        let area = Rect::new(
+            content.x + (content.w - fw) / 2,
+            content.y + (content.h - fh) / 2,
+            fw,
+            fh,
+        );
+
+        let saved = painter.push_clip(content);
+        painter.draw_scaled(area, factor, zoom, Color::WHITE, |p| {
+            for widget in &mut self.sample {
+                widget.paint(p, theme);
+            }
+        });
+        painter.restore_clip(saved);
+    }
+}
+
+/// Live read-out of the configured preview scale, drawn large with a caption
+/// that notes when the 2× zoom is on.
+struct FactorReadout {
+    rect: Rect,
+    factor: Rc<Cell<f32>>,
+    zoom: Rc<Cell<bool>>,
+}
+
+impl FactorReadout {
+    fn new(rect: Rect, factor: Rc<Cell<f32>>, zoom: Rc<Cell<bool>>) -> Self {
+        Self { rect, factor, zoom }
+    }
+}
+
+impl Widget for FactorReadout {
     fn bounds(&self) -> Rect {
         self.rect
     }
 
     fn paint(&mut self, painter: &mut Painter, theme: &Theme) {
-        let scale = painter.scale();
-        if self.initial.get() == 0.0 {
-            self.initial.set(scale);
+        let factor = self.factor.get();
+        if factor <= 0.0 {
+            return; // OS scale not adopted yet (pre-first-paint).
         }
         painter.text(
             self.rect.x,
             self.rect.y,
-            &format!("{scale:.2}x"),
+            &format!("{factor:.2}x"),
             22.0,
             theme.text,
         );
-        let initial = self.initial.get();
-        if initial > 0.0 {
-            painter.text(
-                self.rect.x,
-                self.rect.y + 22,
-                &format!("OS: {initial:.2}x"),
-                10.0,
-                theme.disabled_text,
-            );
-        }
+        let caption = if self.zoom.get() {
+            "preview scale, 2x zoom"
+        } else {
+            "preview scale"
+        };
+        painter.text(
+            self.rect.x,
+            self.rect.y + 24,
+            caption,
+            9.0,
+            theme.disabled_text,
+        );
+    }
+}
+
+/// Shares a widget between the tree and the code that mutates it (the presets,
+/// the OS-scale bootstrap, the resize reflow). Same adapter idea as the `timer`
+/// example, generalized so one wrapper serves the slider, the buttons, and the
+/// tick label.
+struct Shared<T>(Rc<RefCell<T>>);
+
+impl<T: Widget> Widget for Shared<T> {
+    fn bounds(&self) -> Rect {
+        self.0.borrow().bounds()
+    }
+    fn paint(&mut self, painter: &mut Painter, theme: &Theme) {
+        self.0.borrow_mut().paint(painter, theme);
+    }
+    fn paint_overlay(&mut self, painter: &mut Painter, theme: &Theme) {
+        self.0.borrow_mut().paint_overlay(painter, theme);
+    }
+    fn event(&mut self, event: &Event, ctx: &mut EventCtx) {
+        self.0.borrow_mut().event(event, ctx);
+    }
+    fn captures_pointer(&self) -> bool {
+        self.0.borrow().captures_pointer()
+    }
+    fn focusable(&self) -> bool {
+        self.0.borrow().focusable()
+    }
+    fn focus_first(&mut self) -> bool {
+        self.0.borrow_mut().focus_first()
+    }
+    fn set_focused(&mut self, focused: bool) {
+        self.0.borrow_mut().set_focused(focused);
+    }
+    fn accepts_accelerators(&self) -> bool {
+        self.0.borrow().accepts_accelerators()
+    }
+    fn layout(&mut self, bounds: Rect) {
+        self.0.borrow_mut().layout(bounds);
+    }
+    fn popup_request(&self) -> Option<PopupRequest> {
+        self.0.borrow().popup_request()
+    }
+    fn collect_popups(&self, out: &mut Vec<PopupRequest>) {
+        self.0.borrow().collect_popups(out);
+    }
+    fn wants_ticks(&self) -> bool {
+        self.0.borrow().wants_ticks()
     }
 }

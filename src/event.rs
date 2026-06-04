@@ -1,4 +1,4 @@
-use crate::geometry::Point;
+use crate::geometry::{Point, Size};
 
 /// How many document lines one mouse-wheel detent (notch) scrolls. Matches the
 /// modern desktop default of three lines per notch. The platform backends
@@ -169,10 +169,11 @@ pub struct EventCtx {
     /// an event to its content, runs its `on_dismiss` handler, and tears the
     /// dialog down — the same protocol a message box's OK button uses.
     pub(crate) dismiss_requested: bool,
-    /// Set when a widget calls [`Self::set_scale_factor`] to override the
-    /// runtime's logical→physical scale factor. Applied by the runtime
-    /// after dispatch, alongside [`Self::request_paint`] and [`Self::close`].
-    pub(crate) scale_request: Option<f32>,
+    /// Set when a widget calls [`Self::request_window_size`] to ask the runtime
+    /// to resize the window. Applied after dispatch, alongside the other
+    /// requests. The window's size is the app's to choose (unlike the scale
+    /// factor, which only the OS sets).
+    pub(crate) resize_request: Option<Size>,
 }
 
 impl EventCtx {
@@ -184,7 +185,7 @@ impl EventCtx {
             focus_released: false,
             consumed: false,
             dismiss_requested: false,
-            scale_request: None,
+            resize_request: None,
         }
     }
 
@@ -264,18 +265,14 @@ impl EventCtx {
         self.dismiss_requested
     }
 
-    /// Override the runtime's logical→physical scale factor. The new value
-    /// replaces what the OS reported (and what subsequent `paint` /
-    /// `layout` passes see) until the OS itself reports a different scale.
-    /// To *read* the current scale, use [`Painter::scale`](crate::Painter::scale)
-    /// inside [`Widget::paint`](crate::Widget::paint) — that's the canonical
-    /// source and works equally well in both event and paint paths.
-    ///
-    /// Values are clamped to a small positive minimum to keep buffers
-    /// non-degenerate. The change is applied after the current event
-    /// finishes dispatching and the runtime triggers a repaint, so
-    /// callers do not need to call [`Self::request_paint`] separately.
-    pub fn set_scale_factor(&mut self, factor: f32) {
-        self.scale_request = Some(factor.max(0.1));
+    /// Ask the runtime to resize the window to `width × height` *logical*
+    /// pixels, applied after the current event finishes dispatching (and
+    /// followed by a repaint, so callers needn't also call
+    /// [`Self::request_paint`]). Handy for a window that should grow or shrink
+    /// to fit a mode the user just toggled. The window's size is the app's to
+    /// set — unlike the logical→physical scale factor, which only the OS
+    /// controls.
+    pub fn request_window_size(&mut self, width: i32, height: i32) {
+        self.resize_request = Some(Size::new(width.max(1), height.max(1)));
     }
 }
