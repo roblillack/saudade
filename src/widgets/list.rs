@@ -373,15 +373,7 @@ impl Widget for List {
             && idx < scroll_top + visible
         {
             let y = text_y0 + (idx - scroll_top) as i32 * ROW_HEIGHT;
-            let focus = Rect::new(text_x, y, row_w.max(0), ROW_HEIGHT);
-            if crisp {
-                let phys = painter.rect_to_physical(focus);
-                let saved = painter.push_physical_pixels();
-                draw_focus_rect(painter, phys, theme.text);
-                painter.restore_scale(saved);
-            } else {
-                draw_focus_rect(painter, focus, theme.text);
-            }
+            painter.focus_rect(Rect::new(text_x, y, row_w.max(0), ROW_HEIGHT), theme.text);
         }
 
         painter.restore_clip(saved_clip);
@@ -505,27 +497,5 @@ fn draw_icon(painter: &mut Painter, icon: &ListIcon, x: i32, y: i32) {
             }
             painter.pixel(x + px, y + py, color);
         }
-    }
-}
-
-/// 1-px dotted rectangle around the focused row — the same chrome the Win 3.1
-/// list-box used to mark its caret separately from the navy selection band.
-fn draw_focus_rect(painter: &mut Painter, rect: Rect, color: Color) {
-    if rect.w <= 0 || rect.h <= 0 {
-        return;
-    }
-    let right = rect.right() - 1;
-    let bottom = rect.bottom() - 1;
-    let mut x = rect.x;
-    while x <= right {
-        painter.pixel(x, rect.y, color);
-        painter.pixel(x, bottom, color);
-        x += 2;
-    }
-    let mut y = rect.y;
-    while y <= bottom {
-        painter.pixel(rect.x, y, color);
-        painter.pixel(right, y, color);
-        y += 2;
     }
 }

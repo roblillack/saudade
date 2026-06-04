@@ -231,6 +231,41 @@ impl<'a> Painter<'a> {
         self.scale = saved.0.max(0.01);
     }
 
+    /// Whether 1-logical-pixel chrome should be redrawn at exact device
+    /// pixels at the current scale. True only in `[0.9, 1.5)` and not at
+    /// exactly 1.0×: there a 1-logical line rounds to 1 *or* 2 device pixels
+    /// depending on where it falls, so adjacent bevel / outline edges look
+    /// uneven. At 1.0× (or inside a [`Self::physical`] block, where
+    /// `scale == 1.0`) there is nothing to fix — which is also what stops the
+    /// self-managing chrome primitives ([`Self::button`], [`Self::raised_bevel`],
+    /// [`Self::stroke_rect`], [`Self::focus_rect`]) from recursing.
+    fn wants_1x_crispness(&self) -> bool {
+        self.scale != 1.0 && (0.9..1.5).contains(&self.scale)
+    }
+
+    /// Run `f` with the painter dropped to physical pixels — one unit maps to
+    /// one device pixel — and with `rect` snapped to its physical bounds. The
+    /// snap uses the real scale, so the region lands exactly where the scaled
+    /// draw would have put it; inside `f`, a 1-unit line is exactly one device
+    /// pixel and `inset(1)` trims one device pixel.
+    ///
+    /// Drawing helpers use this to implement a crisp special-case at awkward
+    /// fractional scales and then re-invoke themselves, so the recipe lives in
+    /// a single place (see [`Self::button`]). Calling it when the painter is
+    /// already at physical resolution (`scale == 1.0`) is a transparent
+    /// pass-through — which both serves a real 1.0× display and breaks the
+    /// helper's self-recursion.
+    pub fn physical(&mut self, rect: Rect, f: impl FnOnce(&mut Painter, Rect)) {
+        if self.scale == 1.0 {
+            return f(self, rect);
+        }
+        let phys = self.rect_to_physical(rect);
+        let saved = self.scale;
+        self.scale = 1.0;
+        f(self, phys);
+        self.scale = saved.max(0.01);
+    }
+
     pub fn font(&self) -> Option<&Font> {
         self.font
     }
@@ -404,6 +439,12 @@ impl<'a> Painter<'a> {
         if rect.w <= 0 || rect.h <= 0 {
             return;
         }
+        // Self-manage the crisp pass like `button` does: at awkward fractional
+        // scales the four 1-logical-pixel edges round unevenly, so redraw this
+        // recipe at exact device pixels (the re-entry runs at `scale == 1.0`).
+        if self.wants_1x_crispness() {
+            return self.physical(rect, |p, r| p.stroke_rect(r, color));
+        }
         self.h_line(rect.x, rect.y, rect.w, color);
         self.h_line(rect.x, rect.bottom() - 1, rect.w, color);
         self.v_line(rect.x, rect.y, rect.h, color);
@@ -414,6 +455,11 @@ impl<'a> Painter<'a> {
     pub fn raised_bevel(&mut self, rect: Rect, highlight: Color, shadow: Color) {
         if rect.w <= 0 || rect.h <= 0 {
             return;
+        }
+        // Same crisp self-management as `stroke_rect` / `button`. `sunken_bevel`
+        // delegates here, so it inherits this without its own guard.
+        if self.wants_1x_crispness() {
+            return self.physical(rect, |p, r| p.raised_bevel(r, highlight, shadow));
         }
         self.h_line(rect.x, rect.y, rect.w, highlight);
         self.v_line(rect.x, rect.y, rect.h, highlight);
@@ -439,6 +485,15 @@ impl<'a> Painter<'a> {
     pub fn button(&mut self, rect: Rect, theme: &Theme, pressed: bool, default: bool) {
         if rect.w <= 0 || rect.h <= 0 {
             return;
+        }
+        // At awkward fractional scales the 1-logical-pixel chrome edges round
+        // inconsistently — neighbouring lines land on 1 or 2 device pixels
+        // depending on where they fall. Redraw the whole frame at exact device
+        // pixels there, reusing *this* recipe against the button's physical
+        // bounds. Inside the block `scale == 1.0`, so the body below runs 1:1 —
+        // and the same condition breaks the recursion.
+        if self.wants_1x_crispness() {
+            return self.physical(rect, |p, r| p.button(r, theme, pressed, default));
         }
         // Rounded black outline: skip the four corner pixels.
         if rect.w > 2 {
@@ -467,6 +522,35 @@ impl<'a> Painter<'a> {
             self.v_line(inner2.x, inner2.y, inner2.h, theme.highlight);
             self.h_line(inner2.x, inner2.bottom() - 1, inner2.w, theme.shadow);
             self.v_line(inner2.right() - 1, inner2.y, inner2.h, theme.shadow);
+        }
+    }
+
+    /// Dotted Win 3.1 focus rectangle: a 1px dashed outline (every other
+    /// pixel) tracing the edges of `rect`. Like [`Self::button`], at the
+    /// fractional scales in `[0.9, 1.5)` the dash aliases — a 1-logical-pixel
+    /// dot rounds to 1 or 2 device pixels — so the ring is redrawn at exact
+    /// device pixels there, reusing this recipe (the re-entry runs at
+    /// `scale == 1.0`).
+    pub fn focus_rect(&mut self, rect: Rect, color: Color) {
+        if rect.w <= 0 || rect.h <= 0 {
+            return;
+        }
+        if self.wants_1x_crispness() {
+            return self.physical(rect, |p, r| p.focus_rect(r, color));
+        }
+        let right = rect.right() - 1;
+        let bottom = rect.bottom() - 1;
+        let mut x = rect.x;
+        while x <= right {
+            self.pixel(x, rect.y, color);
+            self.pixel(x, bottom, color);
+            x += 2;
+        }
+        let mut y = rect.y;
+        while y <= bottom {
+            self.pixel(rect.x, y, color);
+            self.pixel(right, y, color);
+            y += 2;
         }
     }
 

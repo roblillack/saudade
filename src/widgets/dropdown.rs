@@ -316,27 +316,20 @@ impl Widget for Dropdown {
         } else {
             theme.disabled_text
         };
-        let crisp = painter.wants_crisp_chrome();
-
-        // Chrome pass — sunken field + outer border + raised arrow button
-        // + arrow glyph. At scales in `[0.9, 1.5)` everything chrome-thin
-        // is drawn at exact physical pixels so adjacent edges share a
-        // consistent thickness.
-        if crisp {
-            let phys_field = painter.rect_to_physical(self.rect);
+        // Field chrome — sunken field + outer border + raised arrow button —
+        // self-manages the crisp physical-pixel pass at fractional scales. The
+        // arrow glyph still needs a manual pass until `draw_down_arrow` is
+        // hoisted onto the painter the way the bevels were.
+        painter.fill_rect(self.rect, bg);
+        painter.sunken_bevel(self.rect, theme.highlight, theme.shadow);
+        painter.stroke_rect(self.rect, theme.border);
+        painter.button(btn, theme, self.open, false);
+        if painter.wants_crisp_chrome() {
             let phys_btn = painter.rect_to_physical(btn);
             let saved = painter.push_physical_pixels();
-            painter.fill_rect(phys_field, bg);
-            painter.sunken_bevel(phys_field, theme.highlight, theme.shadow);
-            painter.stroke_rect(phys_field, theme.border);
-            painter.button(phys_btn, theme, self.open, false);
             draw_down_arrow(painter, phys_btn, arrow_color);
             painter.restore_scale(saved);
         } else {
-            painter.fill_rect(self.rect, bg);
-            painter.sunken_bevel(self.rect, theme.highlight, theme.shadow);
-            painter.stroke_rect(self.rect, theme.border);
-            painter.button(btn, theme, self.open, false);
             draw_down_arrow(painter, btn, arrow_color);
         }
 
@@ -358,15 +351,7 @@ impl Widget for Dropdown {
 
         // Dotted focus rectangle inside the text area, Win 3.1-style.
         if self.focused && self.enabled {
-            let focus = self.text_area().inset(1);
-            if crisp {
-                let phys = painter.rect_to_physical(focus);
-                let saved = painter.push_physical_pixels();
-                draw_focus_rect(painter, phys, theme.text);
-                painter.restore_scale(saved);
-            } else {
-                draw_focus_rect(painter, focus, theme.text);
-            }
+            painter.focus_rect(self.text_area().inset(1), theme.text);
         }
     }
 
@@ -509,26 +494,5 @@ fn draw_down_arrow(painter: &mut Painter, btn: Rect, color: Color) {
     for row in 0..4 {
         let half = 3 - row;
         painter.fill_rect(Rect::new(cx - half, top + row, half * 2 + 1, 1), color);
-    }
-}
-
-/// 1-px dotted rectangle — the same focus chrome the other widgets draw.
-fn draw_focus_rect(painter: &mut Painter, rect: Rect, color: Color) {
-    if rect.w <= 0 || rect.h <= 0 {
-        return;
-    }
-    let right = rect.right() - 1;
-    let bottom = rect.bottom() - 1;
-    let mut x = rect.x;
-    while x <= right {
-        painter.pixel(x, rect.y, color);
-        painter.pixel(x, bottom, color);
-        x += 2;
-    }
-    let mut y = rect.y;
-    while y <= bottom {
-        painter.pixel(rect.x, y, color);
-        painter.pixel(right, y, color);
-        y += 2;
     }
 }

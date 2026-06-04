@@ -1,5 +1,5 @@
 use crate::event::{Event, EventCtx, Key, MouseButton, NamedKey};
-use crate::geometry::{Color, Rect};
+use crate::geometry::Rect;
 use crate::painter::Painter;
 use crate::theme::Theme;
 use crate::widget::Widget;
@@ -190,29 +190,15 @@ impl Widget for Slider {
         let thumb = self.thumb_rect();
         let focus = thumb.inset(3);
 
-        // In the `[0.9, 1.5)` crisp range, every chrome edge (groove
-        // bevel, thumb bevel, focus dots) is drawn at exact physical
-        // pixels — otherwise 1-logical-pixel chrome rounds to either 1
-        // or 2 physical pixels and the thumb's bevel looks lopsided.
-        if painter.wants_crisp_chrome() {
-            let phys_groove = painter.rect_to_physical(groove);
-            let phys_thumb = painter.rect_to_physical(thumb);
-            let phys_focus = painter.rect_to_physical(focus);
-            let saved = painter.push_physical_pixels();
-            painter.fill_rect(phys_groove, theme.face);
-            painter.sunken_bevel(phys_groove, theme.highlight, theme.shadow);
-            painter.button(phys_thumb, theme, false, false);
-            if self.focused && self.enabled {
-                draw_focus_rect(painter, phys_focus, theme.text);
-            }
-            painter.restore_scale(saved);
-        } else {
-            painter.fill_rect(groove, theme.face);
-            painter.sunken_bevel(groove, theme.highlight, theme.shadow);
-            painter.button(thumb, theme, false, false);
-            if self.focused && self.enabled {
-                draw_focus_rect(painter, focus, theme.text);
-            }
+        // Every chrome edge (groove bevel, thumb bevel, focus dots) self-
+        // manages the crisp physical-pixel pass at fractional scales —
+        // otherwise 1-logical-pixel chrome rounds to either 1 or 2 physical
+        // pixels and the thumb's bevel looks lopsided.
+        painter.fill_rect(groove, theme.face);
+        painter.sunken_bevel(groove, theme.highlight, theme.shadow);
+        painter.button(thumb, theme, false, false);
+        if self.focused && self.enabled {
+            painter.focus_rect(focus, theme.text);
         }
     }
 
@@ -279,25 +265,5 @@ impl Widget for Slider {
 
     fn layout(&mut self, bounds: Rect) {
         self.rect = bounds;
-    }
-}
-
-fn draw_focus_rect(painter: &mut Painter, rect: Rect, color: Color) {
-    if rect.w <= 0 || rect.h <= 0 {
-        return;
-    }
-    let right = rect.right() - 1;
-    let bottom = rect.bottom() - 1;
-    let mut x = rect.x;
-    while x <= right {
-        painter.pixel(x, rect.y, color);
-        painter.pixel(x, bottom, color);
-        x += 2;
-    }
-    let mut y = rect.y;
-    while y <= bottom {
-        painter.pixel(rect.x, y, color);
-        painter.pixel(right, y, color);
-        y += 2;
     }
 }

@@ -281,17 +281,19 @@ impl Widget for ScrollBar {
         let down = self.pos_arrow_rect();
         let thumb_opt = (self.max > 0).then(|| self.thumb_rect());
 
-        // Arrow buttons, thumb chrome, and the small triangle glyphs are
-        // all 1-logical-pixel chrome that aliases at fractional scales.
-        // Draw the whole chrome pass at exact physical pixels in the
-        // `[0.9, 1.5)` crisp range so the bevels and arrows stay sharp.
+        // The arrow buttons and thumb self-manage the crisp physical-pixel
+        // pass. The small triangle glyphs still alias at fractional scales,
+        // so they keep a manual crisp pass until `draw_arrow` is hoisted onto
+        // the painter the way the bevels were.
+        painter.button(up, theme, false, false);
+        painter.button(down, theme, false, false);
+        if let Some(thumb) = thumb_opt {
+            painter.button(thumb, theme, false, false);
+        }
         if painter.wants_crisp_chrome() {
             let phys_up = painter.rect_to_physical(up);
             let phys_down = painter.rect_to_physical(down);
-            let phys_thumb = thumb_opt.map(|t| painter.rect_to_physical(t));
             let saved = painter.push_physical_pixels();
-            painter.button(phys_up, theme, false, false);
-            painter.button(phys_down, theme, false, false);
             draw_arrow(
                 painter,
                 phys_up,
@@ -306,13 +308,8 @@ impl Widget for ScrollBar {
                 ArrowDir::Positive,
                 theme.text,
             );
-            if let Some(phys_thumb) = phys_thumb {
-                painter.button(phys_thumb, theme, false, false);
-            }
             painter.restore_scale(saved);
         } else {
-            painter.button(up, theme, false, false);
-            painter.button(down, theme, false, false);
             draw_arrow(
                 painter,
                 up,
@@ -327,9 +324,6 @@ impl Widget for ScrollBar {
                 ArrowDir::Positive,
                 theme.text,
             );
-            if let Some(thumb) = thumb_opt {
-                painter.button(thumb, theme, false, false);
-            }
         }
     }
 

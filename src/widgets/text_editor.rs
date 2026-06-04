@@ -555,19 +555,11 @@ impl Widget for TextEditor {
             theme.face
         };
         painter.fill_rect(text, field_bg);
-        // Chrome at exact physical pixels in the `[0.9, 1.5)` crisp range
-        // so the field border doesn't alias against the embedded
-        // scrollbar's gutter.
-        if painter.wants_crisp_chrome() {
-            let phys = painter.rect_to_physical(text);
-            let saved = painter.push_physical_pixels();
-            painter.sunken_bevel(phys, theme.highlight, theme.shadow);
-            painter.stroke_rect(phys, theme.border);
-            painter.restore_scale(saved);
-        } else {
-            painter.sunken_bevel(text, theme.highlight, theme.shadow);
-            painter.stroke_rect(text, theme.border);
-        }
+        // The bevel + border self-manage the crisp physical-pixel pass at
+        // fractional scales, so the field border doesn't alias against the
+        // embedded scrollbar's gutter.
+        painter.sunken_bevel(text, theme.highlight, theme.shadow);
+        painter.stroke_rect(text, theme.border);
 
         let text_x = text.x + PADDING_X;
         let text_y0 = text.y + PADDING_Y;

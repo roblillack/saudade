@@ -150,14 +150,7 @@ impl Widget for Checkbox {
                 measured.w + 2 * FOCUS_PAD_X,
                 measured.h + 2 * FOCUS_PAD_Y,
             );
-            if crisp {
-                let phys = painter.rect_to_physical(focus_rect);
-                let saved = painter.push_physical_pixels();
-                draw_focus_rect(painter, phys, theme.text);
-                painter.restore_scale(saved);
-            } else {
-                draw_focus_rect(painter, focus_rect, theme.text);
-            }
+            painter.focus_rect(focus_rect, theme.text);
         }
     }
 
@@ -257,25 +250,5 @@ fn draw_check(painter: &mut Painter, box_rect: Rect, color: Color) {
                 painter.pixel(dx + col as i32, dy + row as i32, color);
             }
         }
-    }
-}
-
-fn draw_focus_rect(painter: &mut Painter, rect: Rect, color: Color) {
-    if rect.w <= 0 || rect.h <= 0 {
-        return;
-    }
-    let right = rect.right() - 1;
-    let bottom = rect.bottom() - 1;
-    let mut x = rect.x;
-    while x <= right {
-        painter.pixel(x, rect.y, color);
-        painter.pixel(x, bottom, color);
-        x += 2;
-    }
-    let mut y = rect.y;
-    while y <= bottom {
-        painter.pixel(rect.x, y, color);
-        painter.pixel(right, y, color);
-        y += 2;
     }
 }
