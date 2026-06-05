@@ -8,8 +8,6 @@ use crate::widget::{PopupKind, PopupRequest, Widget};
 
 type ChangeHandler = Box<dyn FnMut(&mut EventCtx, usize)>;
 
-/// Width of the drop-arrow button on the right edge of the closed field.
-const ARROW_BTN_W: i32 = 17;
 /// Height of one row inside the open popup list.
 const ITEM_HEIGHT: i32 = 18;
 /// Vertical breathing room above the first and below the last popup row.
@@ -178,21 +176,20 @@ impl Dropdown {
     }
 
     /// The raised drop-arrow button on the right edge, inside the field border.
+    /// Kept square — its side tracks the field's inner height — so the button
+    /// reads as a proper combobox button and the baked arrow glyph is never
+    /// stretched, whatever height the field is laid out at.
     fn arrow_rect(&self) -> Rect {
         let inner = self.rect.inset(1);
-        Rect::new(
-            inner.right() - ARROW_BTN_W,
-            inner.y,
-            ARROW_BTN_W,
-            inner.h.max(0),
-        )
+        let size = inner.h.max(0);
+        Rect::new(inner.right() - size, inner.y, size, size)
     }
 
     /// The area the selected label is drawn in — everything left of the arrow
     /// button, inset by the sunken border.
     fn text_area(&self) -> Rect {
         let inner = self.rect.inset(2);
-        let w = (inner.w - ARROW_BTN_W).max(0);
+        let w = (inner.w - self.arrow_rect().w).max(0);
         Rect::new(inner.x, inner.y, w, inner.h)
     }
 
