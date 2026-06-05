@@ -41,6 +41,10 @@ use smithay_client_toolkit::{
 use wayland_client::globals::registry_queue_init;
 use wayland_client::protocol::{wl_keyboard, wl_output, wl_pointer, wl_seat, wl_shm, wl_surface};
 use wayland_client::{Connection, Dispatch, Proxy, QueueHandle};
+use wayland_protocols::wp::fractional_scale::v1::client::wp_fractional_scale_manager_v1::WpFractionalScaleManagerV1;
+use wayland_protocols::wp::fractional_scale::v1::client::wp_fractional_scale_v1::{
+    self, WpFractionalScaleV1,
+};
 use wayland_protocols::xdg::dialog::v1::client::xdg_dialog_v1::XdgDialogV1;
 use wayland_protocols::xdg::dialog::v1::client::xdg_wm_dialog_v1::XdgWmDialogV1;
 use wayland_protocols::xdg::shell::client::xdg_positioner::{Anchor, Gravity, XdgPositioner};
@@ -83,11 +87,26 @@ pub(crate) fn run(app: App) {
     // "this is a dialog, hide min/max" hint.
     let xdg_dialog_mgr: Option<XdgWmDialogV1> =
         globals.bind::<XdgWmDialogV1, _, _>(&qh, 1..=1, ()).ok();
+    // Optional: wp_fractional_scale_manager_v1 (a staging extension) lets the
+    // compositor tell us the surface's *true* fractional scale (e.g. 1.5),
+    // distinct from the integer buffer scale we render at. Purely
+    // informational here — we keep rendering at the integer scale and let the
+    // compositor resample. Compositors that don't advertise it leave us with
+    // only the integer scale, which is the right fallback.
+    let fractional_mgr: Option<WpFractionalScaleManagerV1> = globals
+        .bind::<WpFractionalScaleManagerV1, _, _>(&qh, 1..=1, ())
+        .ok();
 
     let surface = compositor.create_surface(&qh);
     let window = xdg_shell.create_window(surface, WindowDecorations::RequestServer, &qh);
     window.set_title(&window_cfg.title);
     window.set_app_id(format!("saudade.{}", sanitize(&window_cfg.title)));
+    // Subscribe the main surface to fractional-scale notifications, if the
+    // compositor supports them. The returned object is kept alive in `State`
+    // so the `preferred_scale` events keep arriving.
+    let fractional_scale_obj = fractional_mgr
+        .as_ref()
+        .map(|mgr| mgr.get_fractional_scale(window.wl_surface(), &qh, ()));
 
     let initial_w = window_cfg.size.w.max(1) as u32;
     let initial_h = window_cfg.size.h.max(1) as u32;
@@ -127,6 +146,8 @@ pub(crate) fn run(app: App) {
         surface_w: initial_w,
         surface_h: initial_h,
         scale: 1,
+        fractional_scale_obj,
+        fractional_scale: None,
         resizable: window_cfg.resizable,
         configured: false,
         needs_redraw: true,
@@ -178,6 +199,16 @@ struct State {
     surface_w: u32,
     surface_h: u32,
     scale: i32,
+    /// `wp_fractional_scale_v1` for the main surface, held only to keep the
+    /// `preferred_scale` events flowing. `None` when the compositor doesn't
+    /// advertise the protocol.
+    #[allow(dead_code)]
+    fractional_scale_obj: Option<WpFractionalScaleV1>,
+    /// True fractional display scale (e.g. 1.5) reported by the fractional-scale
+    /// protocol, as opposed to `scale` — the integer buffer scale we actually
+    /// rasterize at. `None` until reported / when unsupported, in which case
+    /// callers fall back to the integer `scale`.
+    fractional_scale: Option<f32>,
     /// Whether the window was configured resizable. A fixed window pins
     /// min == max size, so a programmatic resize ([`Self::apply_resize`])
     /// must move both hints to the new size; a resizable one leaves them be.
@@ -395,6 +426,10 @@ impl State {
             self.mono_font.as_ref(),
             None,
         );
+        // Report the true display scale (e.g. 1.5) when the compositor gives it
+        // to us; the buffer itself is still the integer `scale` and gets
+        // resampled down. Falls back to the integer scale when unsupported.
+        painter.set_system_scale(self.fractional_scale.unwrap_or(scale as f32));
         painter.fill_pattern(self.theme.background, self.bg.pattern, self.bg.color);
         self.root.paint(&mut painter, &self.theme);
 
@@ -449,6 +484,7 @@ impl State {
             self.mono_font.as_ref(),
             Some(anchor),
         );
+        painter.set_system_scale(self.fractional_scale.unwrap_or(scale_f));
         painter.fill(self.theme.background);
         painter.set_clip_phys(0, 0, clip_w, clip_h);
         self.root.paint(&mut painter, &self.theme);
@@ -1157,6 +1193,43 @@ impl Dispatch<XdgDialogV1, ()> for State {
         _conn: &Connection,
         _qhandle: &QueueHandle<Self>,
     ) {
+    }
+}
+
+// wp_fractional_scale_manager_v1 is sender-only (we only call
+// get_fractional_scale on it). An empty Dispatch satisfies the queue handle.
+impl Dispatch<WpFractionalScaleManagerV1, ()> for State {
+    fn event(
+        _state: &mut Self,
+        _proxy: &WpFractionalScaleManagerV1,
+        _event: <WpFractionalScaleManagerV1 as Proxy>::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qhandle: &QueueHandle<Self>,
+    ) {
+    }
+}
+
+// The compositor reports the surface's preferred fractional scale here, as a
+// value in 120ths (1.5 → 180). We record the real scale so the UI can show it;
+// rendering still uses the integer buffer scale and the compositor resamples.
+impl Dispatch<WpFractionalScaleV1, ()> for State {
+    fn event(
+        state: &mut Self,
+        _proxy: &WpFractionalScaleV1,
+        event: wp_fractional_scale_v1::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qhandle: &QueueHandle<Self>,
+    ) {
+        if let wp_fractional_scale_v1::Event::PreferredScale { scale } = event {
+            let f = scale as f32 / 120.0;
+            if state.fractional_scale != Some(f) {
+                state.fractional_scale = Some(f);
+                state.needs_redraw = true;
+                state.mark_popups_dirty();
+            }
+        }
     }
 }
 
