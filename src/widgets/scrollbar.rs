@@ -1,6 +1,8 @@
 use crate::event::{Event, EventCtx, MouseButton};
 use crate::geometry::{Color, Point, Rect};
+use crate::include_svg;
 use crate::painter::Painter;
+use crate::svg::SvgImage;
 use crate::theme::Theme;
 use crate::widget::Widget;
 
@@ -281,39 +283,31 @@ impl Widget for ScrollBar {
         let down = self.pos_arrow_rect();
         let thumb_opt = (self.max > 0).then(|| self.thumb_rect());
 
-        // The arrow buttons and thumb self-manage the crisp physical-pixel
-        // pass. The small triangle glyphs still alias at fractional scales,
-        // so they keep a manual crisp pass until `draw_arrow` is hoisted onto
-        // the painter the way the bevels were.
         painter.button(up, theme, false, false);
         painter.button(down, theme, false, false);
         if let Some(thumb) = thumb_opt {
             painter.button(thumb, theme, false, false);
         }
-        if painter.wants_1x_crispness() {
-            let orientation = self.orientation;
-            painter.physical(up, |p, r| {
-                draw_arrow(p, r, orientation, ArrowDir::Negative, theme.text)
-            });
-            painter.physical(down, |p, r| {
-                draw_arrow(p, r, orientation, ArrowDir::Positive, theme.text)
-            });
-        } else {
-            draw_arrow(
-                painter,
-                up,
-                self.orientation,
-                ArrowDir::Negative,
-                theme.text,
-            );
-            draw_arrow(
-                painter,
-                down,
-                self.orientation,
-                ArrowDir::Positive,
-                theme.text,
-            );
-        }
+        // The arrow glyphs are baked SVGs; `SvgImage::draw_tinted` already drops
+        // to a crisp physical-pixel pass at every scale, so no manual `physical`
+        // branch is needed. Tinted with `theme.text` so they track the theme
+        // (the SVGs' own black is just a placeholder). Sized to the classic
+        // footprint, they are pixel-clean at 1.0x and anti-aliased (rather than
+        // blocky) at fractional / HiDPI scales.
+        draw_arrow(
+            painter,
+            up,
+            self.orientation,
+            ArrowDir::Negative,
+            theme.text,
+        );
+        draw_arrow(
+            painter,
+            down,
+            self.orientation,
+            ArrowDir::Positive,
+            theme.text,
+        );
     }
 
     fn event(&mut self, event: &Event, ctx: &mut EventCtx) {
@@ -366,34 +360,24 @@ enum ArrowDir {
     Positive,
 }
 
-/// Solid-triangle arrow centered in `btn`, pointing in the requested
-/// direction for the bar's orientation. The triangle is built from three or
-/// five short horizontal/vertical lines — small enough that scanline-fill
-/// would be overkill.
+// The four arrow glyphs, baked from SVG at compile time. Each viewBox is 16
+// units — the arrow-button size — so at 1.0x the triangle lands on exactly the
+// device pixels the hand-drawn glyph used to, and `SvgImage::draw_tinted`
+// re-snaps it crisply at other scales. Their baked black is only a placeholder:
+// they are drawn tinted with `theme.text` so they follow the theme.
+const ARROW_UP: SvgImage = include_svg!("assets/scrollbar/up.svg");
+const ARROW_DOWN: SvgImage = include_svg!("assets/scrollbar/down.svg");
+const ARROW_LEFT: SvgImage = include_svg!("assets/scrollbar/left.svg");
+const ARROW_RIGHT: SvgImage = include_svg!("assets/scrollbar/right.svg");
+
+/// Fill the arrow glyph into `btn` in `color`, pointing in the requested
+/// direction for the bar's orientation.
 fn draw_arrow(painter: &mut Painter, btn: Rect, orient: Orientation, dir: ArrowDir, color: Color) {
-    let cx = btn.x + btn.w / 2;
-    let cy = btn.y + btn.h / 2;
-    match (orient, dir) {
-        (Orientation::Vertical, ArrowDir::Negative) => {
-            // Up: tip on top, base on bottom.
-            painter.h_line(cx, cy - 1, 1, color);
-            painter.h_line(cx - 1, cy, 3, color);
-            painter.h_line(cx - 2, cy + 1, 5, color);
-        }
-        (Orientation::Vertical, ArrowDir::Positive) => {
-            painter.h_line(cx - 2, cy - 1, 5, color);
-            painter.h_line(cx - 1, cy, 3, color);
-            painter.h_line(cx, cy + 1, 1, color);
-        }
-        (Orientation::Horizontal, ArrowDir::Negative) => {
-            painter.v_line(cx - 1, cy, 1, color);
-            painter.v_line(cx, cy - 1, 3, color);
-            painter.v_line(cx + 1, cy - 2, 5, color);
-        }
-        (Orientation::Horizontal, ArrowDir::Positive) => {
-            painter.v_line(cx - 1, cy - 2, 5, color);
-            painter.v_line(cx, cy - 1, 3, color);
-            painter.v_line(cx + 1, cy, 1, color);
-        }
-    }
+    let arrow = match (orient, dir) {
+        (Orientation::Vertical, ArrowDir::Negative) => &ARROW_UP,
+        (Orientation::Vertical, ArrowDir::Positive) => &ARROW_DOWN,
+        (Orientation::Horizontal, ArrowDir::Negative) => &ARROW_LEFT,
+        (Orientation::Horizontal, ArrowDir::Positive) => &ARROW_RIGHT,
+    };
+    arrow.draw_tinted(painter, btn, color);
 }

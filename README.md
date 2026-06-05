@@ -39,11 +39,12 @@ Reference apps live under `examples/`. Run any of them with
 | `cells`         | 7GUIs task 7 — a scrollable A–Z / 0–99 spreadsheet `Grid` (built on `ScrollBar` + `TextInput`) with a formula engine: cell refs, `+ - * /`, ranges, `SUM`/`AVG`/…, reactive recompute and cycle detection.                                                                                                                                                                                       |
 | `patterns`      | Previews the window background patterns (`none`, `solid`, `dots`, `lines`, `diagonal`, `cross-stitch`): press `p` to cycle the pattern and `c` to cycle the color. Every app draws one behind its widgets — default `superlight` `diagonal`, overridable with `SAUDADE_WINDOW_PATTERN` / `SAUDADE_WINDOW_PATTERN_COLOR` (e.g. `SAUDADE_WINDOW_PATTERN=dots SAUDADE_WINDOW_PATTERN_COLOR=light`). |
 | `scaling`       | Previews widgets at an arbitrary logical→physical scale via `Painter::draw_scaled`: a `Slider` and preset `Button`s (1.0x / 1.25x / … / 3.0x) drive a "preview scale" — starting at the display's OS scale — that a small panel of real widgets (`TextInput`, `Dropdown`, `Checkbox`, `Button`s, `ProgressBar`) redraws at, plus a "zoom in 2x" `Checkbox` that magnifies the result. The window resizes itself (via `EventCtx::request_window_size`) to fit the preview at the chosen scale. The window's own (OS-owned) scale is never touched.                                  |
+| `svg`           | Compares `include_svg!` (SVG baked to polygons at compile time, filled at runtime — no SVG crate in the binary) against `include_str!` + `resvg` (parse + rasterize at runtime). Draws six icons both ways for a side-by-side fidelity check and prints a micro-benchmark to the console (run with `--release`). Needs `resvg` only as a dev-dependency, for the comparison.                                                                                                                                                |
 
 ```console
 $ cargo run --example notepad        # or: filer, picker, counter, temperature,
                                      #     flight_booker, timer, crud, circle_drawer,
-                                     #     cells, patterns, scaling
+                                     #     cells, patterns, scaling, svg
 ```
 
 Saudade was extracted from
@@ -113,6 +114,7 @@ to an object-oriented UI framework.
 | event    | `Event`, `MouseButton`, `Key`, `NamedKey`, `Modifiers`, `EventCtx`                                                                                                                                       |
 | theme    | `Theme`, default `Theme::windows_31()` palette                                                                                                                                                           |
 | painter  | `Painter` — drawing primitives + Win 3.1 chrome helpers                                                                                                                                                  |
+| svg      | `SvgImage`, `SvgPolygon`, `FillRule` + the `include_svg!` macro — compile-time vector icons                                                                                                              |
 | font     | `Font` — system font lookup + glyph rasterization                                                                                                                                                        |
 | widget   | `Widget` trait (paint / event / focus / overlay hooks)                                                                                                                                                   |
 | widgets  | `Container`, `Column`, `Row`, `Label`, `Button`, `Checkbox`, `Bevel`, `Image`, `MenuBar`, `Menu`, `MenuItem`, `ScrollBar`, `Slider`, `ProgressBar`, `List`, `Modal`, `Dialog`, `TextInput`, `TextEditor` |
@@ -844,6 +846,46 @@ text measurement should be defensive.
 let s = p.size();    // physical buffer size in pixels
 let z = p.scale();   // f32 logical-to-physical scale (e.g. 1.0, 1.25, 2.0)
 ```
+
+## Vector icons — `include_svg!`
+
+For scalable marks (toolbar / list / dialog icons), saudade reads an SVG
+**at compile time** and bakes it into a set of flattened, filled polygons.
+The macro does all the SVG work — XML parsing, attribute inheritance,
+curve flattening, stroke-to-outline expansion — using `usvg` + `kurbo`,
+and emits a `const SvgImage` of `'static` polygon data. At run time saudade
+only fills those polygons, so **no SVG parser, `usvg`, `resvg`, or `tiny-skia`
+is linked into your binary** — that whole tree lives only in the
+`saudade-macros` build-time crate.
+
+```rust
+use saudade::{include_svg, SvgImage};
+
+// Path is resolved relative to the *invoking crate's* CARGO_MANIFEST_DIR
+// (a stable-Rust proc macro can't see the call site's source file), so name
+// it from the crate root — not, like `include_str!`, relative to the file.
+const POWER: SvgImage = include_svg!("assets/icons/power.svg");
+
+// In a Widget::paint, fill it into a rect (aspect-fit, centered, anti-aliased,
+// re-snapped crisply at the live DPI — no per-size raster cache needed):
+power.draw(painter, Rect::new(8, 8, 32, 32));
+// or, equivalently:  painter.draw_svg(&POWER, Rect::new(8, 8, 32, 32));
+```
+
+The geometry is resolution-independent, so the same constant fills crisply
+at any size or scale factor. The supported SVG subset is the practical one —
+`path` / `rect` / `circle` / `ellipse` / `line`, groups with inherited
+fills/strokes, solid colors, the usual path commands, and `transform`s (usvg
+folds these into the baked coordinates). What it *can't* bake — gradients and
+pattern fills, `clipPath`/`mask`/`filter`, group opacity, embedded raster
+`<image>`s, and `<text>` — is **dropped with a compile-time warning** at the
+`include_svg!` call site naming exactly what was skipped, so a surprising SVG
+fails loudly rather than rendering blank. (Under `#![deny(warnings)]` that
+warning is an error — by design.)
+
+The `svg` example renders icons both this way and via runtime `resvg`, and
+benchmarks the two (the baked path is several times faster at icon sizes and
+matches `resvg`'s rasterization to within ~0.5% per channel).
 
 ## Font handling
 

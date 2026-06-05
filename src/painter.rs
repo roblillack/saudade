@@ -403,6 +403,20 @@ impl<'a> Painter<'a> {
         }
     }
 
+    /// Fill a compile-time-baked [`SvgImage`](crate::SvgImage) into the logical
+    /// rectangle `rect`, aspect-fit and centered. Convenience wrapper for
+    /// [`SvgImage::draw`](crate::SvgImage::draw).
+    pub fn draw_svg(&mut self, image: &crate::svg::SvgImage, rect: Rect) {
+        image.draw(self, rect);
+    }
+
+    /// Like [`draw_svg`](Self::draw_svg) but recolor the image with `tint` —
+    /// the wrapper for [`SvgImage::draw_tinted`](crate::SvgImage::draw_tinted),
+    /// meant for single-color glyphs that should follow a theme color.
+    pub fn draw_svg_tinted(&mut self, image: &crate::svg::SvgImage, rect: Rect, tint: Color) {
+        image.draw_tinted(self, rect, tint);
+    }
+
     pub fn font(&self) -> Option<&Font> {
         self.font
     }

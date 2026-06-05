@@ -14,6 +14,14 @@ categories = ["gui"]
 # published crate.
 exclude = ["tests/snapshots", "tests/fonts"]
 
+# saudade is also the root of a tiny workspace. The only other member is
+# `saudade-macros`, the proc-macro crate that backs `include_svg!`. It lives in
+# its own crate because a `proc-macro = true` library can't share a crate with
+# regular code. Its heavy build-time deps (usvg + kurbo) are confined there and
+# never reach saudade's own runtime dependency tree.
+[workspace]
+members = ["macros"]
+
 # The reference apps in `examples/` are plain Cargo examples — run any of them
 # with `cargo run --example <name>` (filer, notepad, picker). They build as
 # part of this package, so they're covered by `cargo build --all-targets`.
@@ -30,6 +38,13 @@ softbuffer = "0.4"
 fontdue = "0.8"
 fontdb = "0.16"
 png = "0.17"
+
+# The `include_svg!` proc macro. All of the SVG-parsing weight (usvg, kurbo)
+# lives inside this crate and runs only at *compile* time — the macro emits
+# plain flattened-polygon data, so nothing from that tree is linked into a
+# saudade binary. Path dep for local builds; the version pin lets the crate
+# still be published to crates.io.
+saudade-macros = { path = "macros", version = "0.1.0" }
 
 # Linux/BSD only: the SCTK Wayland backend (see src/wayland.rs) plus arboard's
 # wl-data-control clipboard backend. These crates don't build on macOS/Windows,
@@ -51,3 +66,9 @@ arboard = { version = "3", default-features = false }
 # (see tests/common/mod.rs). `png` is also a normal dependency above, but
 # integration tests only see dev-dependencies, so it's listed again here.
 png = "0.17"
+
+# Only the `svg` example uses resvg — it's the *runtime* rasterizer the example
+# benchmarks `include_svg!` against (the `include_str!` + parse-at-runtime
+# approach control-panel currently uses). It is a dev-dependency, so it never
+# ships in the library or in any app that depends on saudade.
+resvg = "0.42"
