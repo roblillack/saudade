@@ -175,14 +175,18 @@ impl Dropdown {
         self.rect = rect;
     }
 
-    /// The raised drop-arrow button on the right edge, inside the field border.
-    /// Kept square — its side tracks the field's inner height — so the button
-    /// reads as a proper combobox button and the baked arrow glyph is never
+    /// The raised drop-arrow button on the right edge. Drawn flush with the
+    /// field's outer frame: its top, right and bottom edges land *on* the 1px
+    /// black border, so the button's own outline becomes those three sides of
+    /// the overall dropdown frame (only its left edge is an interior divider).
+    /// The frame's sharp corners show through the button's rounded ones.
+    ///
+    /// Kept square — its side tracks the field's full height — so the button
+    /// reads as a proper combobox button and the baked glyph is never
     /// stretched, whatever height the field is laid out at.
     fn arrow_rect(&self) -> Rect {
-        let inner = self.rect.inset(1);
-        let size = inner.h.max(0);
-        Rect::new(inner.right() - size, inner.y, size, size)
+        let size = self.rect.h.max(0);
+        Rect::new(self.rect.right() - size, self.rect.y, size, size)
     }
 
     /// The area the selected label is drawn in — everything left of the arrow
