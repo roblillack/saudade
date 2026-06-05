@@ -198,6 +198,11 @@ impl<'a> Painter<'a> {
     /// Crate-internal on purpose: like the scale factor itself, the system
     /// scale is owned by the OS. Applications can *read* it via
     /// [`Self::system_scale`] but must not be able to override it.
+    ///
+    /// Only the Wayland backend ever calls this, so it is compiled in solely
+    /// on the platforms that host that backend — otherwise it would be dead
+    /// code and trip the `-D warnings` clippy build on Windows/macOS.
+    #[cfg(all(unix, not(target_os = "macos")))]
     pub(crate) fn set_system_scale(&mut self, scale: f32) {
         self.system_scale = scale.max(0.01);
     }
