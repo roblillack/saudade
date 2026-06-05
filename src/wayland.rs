@@ -729,6 +729,13 @@ impl OutputHandler for State {
 impl WindowHandler for State {
     fn request_close(&mut self, _: &Connection, _: &QueueHandle<Self>, window: &XdgWindow) {
         if window.xdg_toplevel() == self.window.xdg_toplevel() {
+            // Give the root a chance to react before we quit: a widget used
+            // directly as the window root (rather than hosted in a `Modal`)
+            // gets its `on_cancel` here, so a dialog-as-window can revert
+            // pending edits on close, matching Escape and the dialog-popup
+            // close path below. Most roots leave this a no-op.
+            let mut ctx = EventCtx::new();
+            self.root.on_cancel(&mut ctx);
             self.exit = true;
             return;
         }
