@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <!-- Classic Win 3.1 "warning" mark: a yellow triangle, black outline + bang. -->
+  <path d="M16 3 L30 28 L2 28 Z"
+        fill="#ffcc00" stroke="#000000" stroke-width="2" stroke-linejoin="round"/>
+  <rect x="14.5" y="11" width="3" height="10" rx="1.4" fill="#000000"/>
+  <rect x="14.5" y="23.5" width="3" height="3" rx="1.4" fill="#000000"/>
+</svg>

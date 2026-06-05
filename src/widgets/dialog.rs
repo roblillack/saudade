@@ -1,6 +1,8 @@
 use crate::event::{Event, EventCtx, Key, MouseButton, NamedKey};
-use crate::geometry::{Color, Rect, Size};
+use crate::geometry::{Rect, Size};
+use crate::include_svg;
 use crate::painter::Painter;
+use crate::svg::SvgImage;
 use crate::theme::Theme;
 use crate::widget::{PopupRequest, Widget};
 use crate::widgets::modal::Modal;
@@ -613,62 +615,21 @@ impl Widget for ConfirmBody {
     }
 }
 
-/// Draw a Win 3.1-style icon at `(x, y)` with the given pixel size.
+// The three message-box marks, baked from SVG at compile time. They render the
+// same Win 3.1 alert glyphs the dialog used to draw by hand, but as crisp,
+// DPI-independent vector art (and with no SVG machinery in the binary). The
+// paths resolve relative to the crate root — see `include_svg!`.
+const INFO_ICON: SvgImage = include_svg!("assets/dialog/info.svg");
+const WARNING_ICON: SvgImage = include_svg!("assets/dialog/warning.svg");
+const ERROR_ICON: SvgImage = include_svg!("assets/dialog/error.svg");
+
+/// Draw a Win 3.1-style alert icon into the `size × size` box at `(x, y)`.
 fn draw_icon(painter: &mut Painter, x: i32, y: i32, size: i32, icon: DialogIcon) {
-    match icon {
-        DialogIcon::None => {}
-        DialogIcon::Warning => {
-            // Yellow filled triangle with a black "!".
-            let yellow = Color::rgb(0xFF, 0xCC, 0x00);
-            let black = Color::BLACK;
-            let apex_x = x + size / 2;
-            let bottom_y = y + size - 1;
-            // Fill the triangle row by row, widening linearly from the apex.
-            for row in 0..size {
-                let half = (row as f32 * (size as f32 / 2.0) / size as f32).round() as i32;
-                let line_x = apex_x - half;
-                let line_w = (half * 2 + 1).max(1);
-                painter.h_line(line_x, y + row, line_w, yellow);
-            }
-            // Black border along the two slopes + bottom edge.
-            for row in 0..size {
-                let half = (row as f32 * (size as f32 / 2.0) / size as f32).round() as i32;
-                painter.pixel(apex_x - half, y + row, black);
-                painter.pixel(apex_x + half, y + row, black);
-            }
-            painter.h_line(x, bottom_y, size, black);
-            // Exclamation mark — vertical bar + dot.
-            let bar_x = apex_x - 1;
-            painter.fill_rect(Rect::new(bar_x, y + 10, 2, 12), black);
-            painter.fill_rect(Rect::new(bar_x, y + 24, 2, 2), black);
-        }
-        DialogIcon::Info => {
-            // Blue circle with a white "i". Approximated as a filled
-            // rectangle with rounded-feeling corners.
-            let blue = Color::NAVY;
-            let white = Color::WHITE;
-            painter.fill_rect(Rect::new(x + 2, y, size - 4, size), blue);
-            painter.fill_rect(Rect::new(x, y + 2, size, size - 4), blue);
-            painter.fill_rect(Rect::new(x + 1, y + 1, size - 2, size - 2), blue);
-            // Dot above + bar below for the "i".
-            let mid = x + size / 2 - 1;
-            painter.fill_rect(Rect::new(mid, y + 6, 2, 2), white);
-            painter.fill_rect(Rect::new(mid, y + 11, 2, 14), white);
-        }
-        DialogIcon::Error => {
-            // Red square with white "X".
-            let red = Color::RED;
-            let white = Color::WHITE;
-            painter.fill_rect(Rect::new(x + 2, y, size - 4, size), red);
-            painter.fill_rect(Rect::new(x, y + 2, size, size - 4), red);
-            painter.fill_rect(Rect::new(x + 1, y + 1, size - 2, size - 2), red);
-            // Diagonal lines for the X.
-            for i in 0..size - 12 {
-                painter.pixel(x + 6 + i, y + 6 + i, white);
-                painter.pixel(x + 6 + i + 1, y + 6 + i, white);
-                painter.pixel(x + size - 7 - i, y + 6 + i, white);
-                painter.pixel(x + size - 7 - i - 1, y + 6 + i, white);
-            }
-        }
-    }
+    let svg = match icon {
+        DialogIcon::None => return,
+        DialogIcon::Info => &INFO_ICON,
+        DialogIcon::Warning => &WARNING_ICON,
+        DialogIcon::Error => &ERROR_ICON,
+    };
+    svg.draw(painter, Rect::new(x, y, size, size));
 }

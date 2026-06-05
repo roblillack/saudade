@@ -27,6 +27,11 @@
 //! App::new(WindowConfig::new("Hello", 200, 80), root).run();
 //! ```
 
+// Let the crate refer to itself as `saudade`, so the `include_svg!` macro —
+// which expands to absolute `::saudade::…` paths for use by *downstream* crates
+// — also works when saudade uses it internally (e.g. the dialog icons).
+extern crate self as saudade;
+
 mod app;
 mod background;
 mod event;
