@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16">
+  <!-- Scrollbar "up" arrow. The 16-unit viewBox maps 1:1 onto the 16px arrow
+       button at 1.0x, so the triangle covers the same footprint the classic
+       hand-drawn glyph did (apex y=7, 5px base at y=10) — just anti-aliased. -->
+  <path d="M8.5 7 L11 10 L6 10 Z" fill="#000000"/>
+</svg>

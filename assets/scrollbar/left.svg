@@ -1,0 +1,4 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16">
+  <!-- Scrollbar "left" arrow: apex at x=7, 5px-tall base at x=10. -->
+  <path d="M7 8.5 L10 6 L10 11 Z" fill="#000000"/>
+</svg>

@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16">
+  <!-- Scrollbar "down" arrow — the up triangle mirrored: 5px base at y=7,
+       apex at y=10, matching the classic glyph's footprint. -->
+  <path d="M8.5 10 L6 7 L11 7 Z" fill="#000000"/>
+</svg>
