@@ -1,5 +1,5 @@
 use crate::event::{Event, EventCtx, MouseButton};
-use crate::geometry::{Point, Rect};
+use crate::geometry::{Color, Point, Rect};
 use crate::include_svg;
 use crate::painter::Painter;
 use crate::svg::SvgImage;
@@ -288,13 +288,26 @@ impl Widget for ScrollBar {
         if let Some(thumb) = thumb_opt {
             painter.button(thumb, theme, false, false);
         }
-        // The arrow glyphs are baked SVGs; `SvgImage::draw` already drops to a
-        // crisp physical-pixel pass at every scale, so no manual `physical`
-        // branch is needed. Sized to the classic footprint, they are pixel-clean
-        // at 1.0x and anti-aliased (rather than blocky) at fractional / HiDPI
-        // scales.
-        draw_arrow(painter, up, self.orientation, ArrowDir::Negative);
-        draw_arrow(painter, down, self.orientation, ArrowDir::Positive);
+        // The arrow glyphs are baked SVGs; `SvgImage::draw_tinted` already drops
+        // to a crisp physical-pixel pass at every scale, so no manual `physical`
+        // branch is needed. Tinted with `theme.text` so they track the theme
+        // (the SVGs' own black is just a placeholder). Sized to the classic
+        // footprint, they are pixel-clean at 1.0x and anti-aliased (rather than
+        // blocky) at fractional / HiDPI scales.
+        draw_arrow(
+            painter,
+            up,
+            self.orientation,
+            ArrowDir::Negative,
+            theme.text,
+        );
+        draw_arrow(
+            painter,
+            down,
+            self.orientation,
+            ArrowDir::Positive,
+            theme.text,
+        );
     }
 
     fn event(&mut self, event: &Event, ctx: &mut EventCtx) {
@@ -349,22 +362,22 @@ enum ArrowDir {
 
 // The four arrow glyphs, baked from SVG at compile time. Each viewBox is 16
 // units — the arrow-button size — so at 1.0x the triangle lands on exactly the
-// device pixels the hand-drawn glyph used to, and `SvgImage::draw` re-snaps it
-// crisply at other scales. The marks are solid black, matching the only theme's
-// `text` color.
+// device pixels the hand-drawn glyph used to, and `SvgImage::draw_tinted`
+// re-snaps it crisply at other scales. Their baked black is only a placeholder:
+// they are drawn tinted with `theme.text` so they follow the theme.
 const ARROW_UP: SvgImage = include_svg!("assets/scrollbar/up.svg");
 const ARROW_DOWN: SvgImage = include_svg!("assets/scrollbar/down.svg");
 const ARROW_LEFT: SvgImage = include_svg!("assets/scrollbar/left.svg");
 const ARROW_RIGHT: SvgImage = include_svg!("assets/scrollbar/right.svg");
 
-/// Fill the arrow glyph into `btn`, pointing in the requested direction for the
-/// bar's orientation.
-fn draw_arrow(painter: &mut Painter, btn: Rect, orient: Orientation, dir: ArrowDir) {
+/// Fill the arrow glyph into `btn` in `color`, pointing in the requested
+/// direction for the bar's orientation.
+fn draw_arrow(painter: &mut Painter, btn: Rect, orient: Orientation, dir: ArrowDir, color: Color) {
     let arrow = match (orient, dir) {
         (Orientation::Vertical, ArrowDir::Negative) => &ARROW_UP,
         (Orientation::Vertical, ArrowDir::Positive) => &ARROW_DOWN,
         (Orientation::Horizontal, ArrowDir::Negative) => &ARROW_LEFT,
         (Orientation::Horizontal, ArrowDir::Positive) => &ARROW_RIGHT,
     };
-    arrow.draw(painter, btn);
+    arrow.draw_tinted(painter, btn, color);
 }

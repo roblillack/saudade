@@ -75,15 +75,30 @@ impl SvgImage {
     /// footprint the live scale factor implies — not a logical raster stretched
     /// up.
     pub fn draw(&self, painter: &mut Painter, rect: Rect) {
+        self.render(painter, rect, None);
+    }
+
+    /// Like [`draw`](Self::draw), but paint every polygon in `tint` instead of
+    /// its baked color (anti-aliased coverage is preserved). Intended for
+    /// single-color glyphs whose SVG color is just a placeholder — e.g. a
+    /// scrollbar arrow that should follow the theme's text color. A multi-color
+    /// image would be flattened to `tint`, which is rarely what you want.
+    pub fn draw_tinted(&self, painter: &mut Painter, rect: Rect, tint: Color) {
+        self.render(painter, rect, Some(tint));
+    }
+
+    /// Shared body of [`draw`](Self::draw) / [`draw_tinted`](Self::draw_tinted):
+    /// `tint` overrides every polygon's color when `Some`.
+    fn render(&self, painter: &mut Painter, rect: Rect, tint: Option<Color>) {
         if self.width <= 0.0 || self.height <= 0.0 || self.polygons.is_empty() {
             return;
         }
-        painter.physical(rect, |p, phys| self.fill_phys(p, phys));
+        painter.physical(rect, |p, phys| self.fill_phys(p, phys, tint));
     }
 
     /// Fill into the physical-pixel rectangle `phys` (origin-relative device
     /// coordinates, as handed in by [`Painter::physical`]).
-    fn fill_phys(&self, painter: &mut Painter, phys: Rect) {
+    fn fill_phys(&self, painter: &mut Painter, phys: Rect, tint: Option<Color>) {
         if phys.w <= 0 || phys.h <= 0 {
             return;
         }
@@ -97,7 +112,7 @@ impl SvgImage {
 
         let mut raster = Rasterizer::new(phys);
         for poly in self.polygons {
-            raster.fill(painter, poly, scale, tx, ty);
+            raster.fill(painter, poly, scale, tx, ty, tint);
         }
     }
 }
@@ -145,8 +160,17 @@ impl Rasterizer {
     }
 
     /// Fill one polygon, transforming its rings by `p * scale + (tx, ty)` and
-    /// blending the result onto `painter`.
-    fn fill(&mut self, painter: &mut Painter, poly: &SvgPolygon, scale: f32, tx: f32, ty: f32) {
+    /// blending the result onto `painter`. `tint`, when `Some`, replaces the
+    /// polygon's own color (its alpha still scales the anti-aliased coverage).
+    fn fill(
+        &mut self,
+        painter: &mut Painter,
+        poly: &SvgPolygon,
+        scale: f32,
+        tx: f32,
+        ty: f32,
+        tint: Option<Color>,
+    ) {
         self.edges.clear();
         let map = |&(x, y): &(f32, f32)| (tx + x * scale, ty + y * scale);
 
@@ -205,7 +229,8 @@ impl Rasterizer {
         }
         let cov = &mut self.coverage[..width];
 
-        let max_alpha = poly.color.alpha() as f32;
+        let color = tint.unwrap_or(poly.color);
+        let max_alpha = color.alpha() as f32;
         let weight = 1.0 / SAMPLES as f32;
         for iy in row_lo..row_hi {
             for c in cov.iter_mut() {
@@ -250,7 +275,7 @@ impl Rasterizer {
                 if alpha <= 0 {
                     continue;
                 }
-                painter.blend_pixel_phys(col_lo + k as i32, iy, poly.color, alpha.min(255) as u8);
+                painter.blend_pixel_phys(col_lo + k as i32, iy, color, alpha.min(255) as u8);
             }
         }
     }
@@ -313,6 +338,22 @@ mod tests {
         // Interior is solid black; the box fills the entire footprint.
         for (x, y) in [(0, 0), (15, 0), (0, 15), (15, 15), (8, 8)] {
             assert_eq!(at(x, y), Color::BLACK, "({x},{y}) should be filled");
+        }
+    }
+
+    #[test]
+    fn draw_tinted_recolors_every_polygon() {
+        // The black SQUARE drawn tinted RED fills the footprint with RED instead
+        // of its baked black — coverage is unchanged, only the color.
+        let size = 8;
+        let mut px = vec![Color::WHITE.0; (size * size) as usize];
+        {
+            let mut p = Painter::new(&mut px, size, size, 1.0, 0, 0, None, None);
+            SQUARE.draw_tinted(&mut p, Rect::new(0, 0, size, size), Color::RED);
+        }
+        let at = |x: i32, y: i32| Color(px[(y * size + x) as usize]);
+        for (x, y) in [(0, 0), (7, 7), (4, 4)] {
+            assert_eq!(at(x, y), Color::RED, "({x},{y}) should be tinted red");
         }
     }
 
