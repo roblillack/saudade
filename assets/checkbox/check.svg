@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 13 13">
+  <!-- Classic Win 3.1 checkbox tick: a short stroke down to the vertex, then a
+       long stroke up to the top-right, sized for the 13-unit box (matching the
+       hand-tuned glyph it replaces). Baked black is only a placeholder — it is
+       drawn tinted with the theme's (possibly disabled) text color via
+       SvgImage::draw_tinted. -->
+  <path d="M 2.5,6.5 L 5,9.5 L 10.5,3"
+        fill="none" stroke="#000000"
+        stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>
