@@ -1,6 +1,8 @@
 use crate::event::{Event, EventCtx, Key, MouseButton, NamedKey};
 use crate::geometry::{Color, Point, Rect};
+use crate::include_svg;
 use crate::painter::Painter;
+use crate::svg::SvgImage;
 use crate::theme::Theme;
 use crate::widget::{PopupKind, PopupRequest, Widget};
 
@@ -19,6 +21,13 @@ const SHADOW_SIZE: i32 = 2;
 /// L-shape drop shadow color: a dark gray that renders crisply on every
 /// backend (same value the menu popups use).
 const SHADOW_COLOR: Color = Color::DARK_GRAY;
+
+/// The drop-arrow glyph, baked from SVG at compile time: the classic combobox
+/// down-triangle sitting above a short horizontal bar. Its 16-unit viewBox maps
+/// onto the arrow button so it lands centered, and `SvgImage::draw_tinted`
+/// re-snaps it crisply at every scale. The baked black is only a placeholder —
+/// it is drawn tinted with the theme's text (or disabled-text) color.
+const ARROW: SvgImage = include_svg!("assets/dropdown/down.svg");
 
 /// A classic Win 3.1 drop-down list box (combobox).
 ///
@@ -317,18 +326,13 @@ impl Widget for Dropdown {
             theme.disabled_text
         };
         // Field chrome — sunken field + outer border + raised arrow button —
-        // self-manages the crisp physical-pixel pass at fractional scales. The
-        // arrow glyph still needs a manual pass until `draw_down_arrow` is
-        // hoisted onto the painter the way the bevels were.
+        // self-manages the crisp physical-pixel pass at fractional scales, and
+        // `draw_tinted` does the same for the baked-SVG glyph on top.
         painter.fill_rect(self.rect, bg);
         painter.sunken_bevel(self.rect, theme.highlight, theme.shadow);
         painter.stroke_rect(self.rect, theme.border);
         painter.button(btn, theme, self.open, false);
-        if painter.wants_1x_crispness() {
-            painter.physical(btn, |p, r| draw_down_arrow(p, r, arrow_color));
-        } else {
-            draw_down_arrow(painter, btn, arrow_color);
-        }
+        ARROW.draw_tinted(painter, btn, arrow_color);
 
         // Selected label, clipped to the area left of the button. Text
         // always renders at the actual scale so glyphs stay legible.
@@ -480,16 +484,5 @@ impl Widget for Dropdown {
             kind: PopupKind::Popup,
             title: None,
         })
-    }
-}
-
-/// A small downward-pointing triangle (7 px base) centered in `btn`.
-fn draw_down_arrow(painter: &mut Painter, btn: Rect, color: Color) {
-    let cx = btn.x + btn.w / 2;
-    let top = btn.y + (btn.h - 4) / 2;
-    // Rows shrink 7 → 5 → 3 → 1, forming the arrowhead.
-    for row in 0..4 {
-        let half = 3 - row;
-        painter.fill_rect(Rect::new(cx - half, top + row, half * 2 + 1, 1), color);
     }
 }
