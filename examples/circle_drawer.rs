@@ -33,8 +33,8 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use saudade::{
-    App, Button, Color, Column, Container, Event, EventCtx, Key, Modal, MouseButton, NamedKey,
-    Painter, Point, PopupRequest, Rect, Size, Slider, Theme, Widget, WindowConfig,
+    App, Button, Color, Column, Container, Event, EventCtx, Label, Modal, MouseButton, Painter,
+    Point, PopupRequest, Rect, Size, Slider, Theme, Widget, WindowConfig,
 };
 
 const W: i32 = 480;
@@ -312,7 +312,12 @@ impl Canvas {
     }
 
     /// Open the diameter dialog for `target`, seeding the working diameter from
-    /// the circle's current size and handing a slider-bearing body to the modal.
+    /// the circle's current size. The dialog body is just a `Container` of
+    /// standard widgets — a label, the diameter slider (which writes the working
+    /// diameter live), and a default OK button that dismisses (closing commits
+    /// the edit). The Container drives focus / Tab / press routing and is valid
+    /// modal content because its `layout` shifts the widgets to the centered
+    /// dialog origin; no bespoke dialog-body widget is needed.
     fn open_dialog(&mut self, target: usize) {
         let current = self
             .doc
@@ -325,7 +330,35 @@ impl Canvas {
             target,
             diameter: current,
         });
-        let body = DiameterBody::new(self.adjust.clone(), current);
+
+        // Controls are authored relative to the dialog's own top-left.
+        let adjust = self.adjust.clone();
+        let slider = Slider::new(
+            Rect::new(16, 44, DIALOG_W - 32, 20),
+            MIN_DIAMETER,
+            MAX_DIAMETER,
+        )
+        .with_value(current)
+        .on_change(move |cx, value| {
+            if let Some(a) = adjust.borrow_mut().as_mut() {
+                a.diameter = value;
+            }
+            cx.request_paint();
+        });
+        let ok = Button::new(
+            Rect::new((DIALOG_W - 64) / 2, DIALOG_H - 12 - 26, 64, 26),
+            "OK",
+        )
+        .default(true)
+        .on_click(|cx| cx.request_dismiss());
+        let body = Container::new(DIALOG_W, DIALOG_H)
+            .add(Label::new(
+                Rect::new(16, 14, DIALOG_W - 32, 20),
+                "Adjust diameter:",
+            ))
+            .add(slider)
+            .add(ok);
+
         self.modal.borrow_mut().show(
             "Adjust diameter",
             Size::new(DIALOG_W, DIALOG_H),
@@ -475,106 +508,6 @@ impl Widget for Canvas {
     }
 }
 
-// ============================================================================
-// DiameterBody — the modal dialog's content: a label, a diameter slider, and an
-// OK button. Laid out into the dialog's client rect, so everything is placed
-// relative to that rect.
-// ============================================================================
-
-struct DiameterBody {
-    slider: Slider,
-    rect: Rect,
-}
-
-impl DiameterBody {
-    fn new(adjust: SharedAdjust, initial: i32) -> Self {
-        let slider = Slider::new(Rect::new(0, 0, 10, 10), MIN_DIAMETER, MAX_DIAMETER)
-            .with_value(initial)
-            .on_change(move |cx, value| {
-                if let Some(a) = adjust.borrow_mut().as_mut() {
-                    a.diameter = value;
-                }
-                cx.request_paint();
-            });
-        Self {
-            slider,
-            rect: Rect::new(0, 0, 0, 0),
-        }
-    }
-
-    fn slider_area(&self) -> Rect {
-        Rect::new(self.rect.x + 16, self.rect.y + 44, self.rect.w - 32, 20)
-    }
-
-    fn ok_rect(&self) -> Rect {
-        Rect::new(
-            self.rect.x + (self.rect.w - 64) / 2,
-            self.rect.bottom() - 12 - 26,
-            64,
-            26,
-        )
-    }
-}
-
-impl Widget for DiameterBody {
-    fn bounds(&self) -> Rect {
-        self.rect
-    }
-
-    fn layout(&mut self, bounds: Rect) {
-        self.rect = bounds;
-        let area = self.slider_area();
-        self.slider.set_rect(area);
-    }
-
-    fn paint(&mut self, painter: &mut Painter, theme: &Theme) {
-        painter.text(
-            self.rect.x + 16,
-            self.rect.y + 14,
-            "Adjust diameter:",
-            theme.font_size,
-            theme.text,
-        );
-        self.slider.paint(painter, theme);
-        let ok = self.ok_rect();
-        painter.button(ok, theme, false, true);
-        painter.text_centered(ok, "OK", theme.font_size, theme.text);
-    }
-
-    fn event(&mut self, event: &Event, ctx: &mut EventCtx) {
-        match *event {
-            Event::PointerDown {
-                pos,
-                button: MouseButton::Left,
-            } if self.ok_rect().contains(pos) => {
-                ctx.request_dismiss();
-            }
-            // Enter confirms; Escape is handled by the hosting `Modal`.
-            Event::KeyDown {
-                key: Key::Named(NamedKey::Enter),
-                ..
-            } => {
-                ctx.request_dismiss();
-            }
-            // Everything else drives the slider (drag, and arrow keys when it
-            // holds focus).
-            _ => self.slider.event(event, ctx),
-        }
-    }
-
-    fn focusable(&self) -> bool {
-        true
-    }
-
-    fn set_focused(&mut self, focused: bool) {
-        self.slider.set_focused(focused);
-    }
-
-    fn captures_pointer(&self) -> bool {
-        self.slider.captures_pointer()
-    }
-}
-
 /// Midpoint-circle outline at logical center `(cx, cy)`, radius `r`.
 fn draw_circle_outline(painter: &mut Painter, cx: i32, cy: i32, r: i32, color: Color) {
     if r <= 0 {
@@ -717,6 +650,7 @@ impl Widget for SharedModal {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use saudade::{Key, NamedKey};
 
     fn circle(x: i32, y: i32, d: i32) -> Circle {
         Circle { x, y, d }
