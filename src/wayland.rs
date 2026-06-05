@@ -10,12 +10,19 @@
 //! real popups with a positioner anchored to the parent — the same behavior
 //! Chrome/Firefox have on Wayland.
 
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
 use smithay_client_toolkit::compositor::{CompositorHandler, CompositorState};
+use smithay_client_toolkit::data_device_manager::data_device::{DataDevice, DataDeviceHandler};
+use smithay_client_toolkit::data_device_manager::data_offer::{DataOfferHandler, DragOffer};
+use smithay_client_toolkit::data_device_manager::data_source::DataSourceHandler;
+use smithay_client_toolkit::data_device_manager::{DataDeviceManagerState, WritePipe};
 use smithay_client_toolkit::output::{OutputHandler, OutputState};
-use smithay_client_toolkit::reexports::calloop::{EventLoop as CalloopLoop, LoopHandle};
+use smithay_client_toolkit::reexports::calloop::{
+    EventLoop as CalloopLoop, LoopHandle, PostAction,
+};
 use smithay_client_toolkit::reexports::calloop_wayland_source::WaylandSource;
 use smithay_client_toolkit::registry::{ProvidesRegistryState, RegistryState};
 use smithay_client_toolkit::seat::keyboard::{
@@ -34,11 +41,14 @@ use smithay_client_toolkit::shell::xdg::{XdgShell, XdgSurface};
 use smithay_client_toolkit::shm::slot::{Buffer, SlotPool};
 use smithay_client_toolkit::shm::{Shm, ShmHandler};
 use smithay_client_toolkit::{
-    delegate_compositor, delegate_keyboard, delegate_output, delegate_pointer, delegate_registry,
-    delegate_seat, delegate_shm, delegate_xdg_popup, delegate_xdg_shell, delegate_xdg_window,
-    registry_handlers,
+    delegate_compositor, delegate_data_device, delegate_keyboard, delegate_output,
+    delegate_pointer, delegate_registry, delegate_seat, delegate_shm, delegate_xdg_popup,
+    delegate_xdg_shell, delegate_xdg_window, registry_handlers,
 };
 use wayland_client::globals::registry_queue_init;
+use wayland_client::protocol::wl_data_device::WlDataDevice;
+use wayland_client::protocol::wl_data_device_manager::DndAction;
+use wayland_client::protocol::wl_data_source::WlDataSource;
 use wayland_client::protocol::{wl_keyboard, wl_output, wl_pointer, wl_seat, wl_shm, wl_surface};
 use wayland_client::{Connection, Dispatch, Proxy, QueueHandle};
 use wayland_protocols::wp::fractional_scale::v1::client::wp_fractional_scale_manager_v1::WpFractionalScaleManagerV1;
@@ -53,7 +63,7 @@ use wayland_protocols::xdg::shell::client::xdg_surface::XdgSurface as XdgSurface
 use crate::app::App;
 use crate::background::BackgroundState;
 use crate::event::{
-    Event, EventCtx, Key, Modifiers, MouseButton, NamedKey, SCROLL_PIXELS_PER_LINE,
+    DragData, Event, EventCtx, Key, Modifiers, MouseButton, NamedKey, SCROLL_PIXELS_PER_LINE,
     WHEEL_LINES_PER_DETENT,
 };
 use crate::font::Font;
@@ -96,6 +106,10 @@ pub(crate) fn run(app: App) {
     let fractional_mgr: Option<WpFractionalScaleManagerV1> = globals
         .bind::<WpFractionalScaleManagerV1, _, _>(&qh, 1..=1, ())
         .ok();
+    // The data-device manager is what carries drag-and-drop (we get file drops
+    // through its drag offers). Compositors universally advertise it; if one
+    // doesn't, we simply never receive drops and everything else still works.
+    let data_device_manager = DataDeviceManagerState::bind(&globals, &qh).ok();
 
     let surface = compositor.create_surface(&qh);
     let window = xdg_shell.create_window(surface, WindowDecorations::RequestServer, &qh);
@@ -155,6 +169,9 @@ pub(crate) fn run(app: App) {
 
         keyboard: None,
         pointer: None,
+        data_device_manager,
+        data_device: None,
+        drag: None,
         modifiers: Modifiers::default(),
         bg: BackgroundState::from_env(),
         cursor: None,
@@ -223,6 +240,13 @@ struct State {
 
     keyboard: Option<wl_keyboard::WlKeyboard>,
     pointer: Option<wl_pointer::WlPointer>,
+    /// Drag-and-drop plumbing. `data_device_manager` is the bound global;
+    /// `data_device` is the per-seat device we read drag offers from, created
+    /// once the first seat appears. `drag` tracks an in-flight drag so motion
+    /// events know where they are and a drop knows which point to report.
+    data_device_manager: Option<DataDeviceManagerState>,
+    data_device: Option<DataDevice>,
+    drag: Option<DragSession>,
     modifiers: Modifiers,
     /// Background pattern + color for the main window, toggled with the
     /// `p` / `c` debug keys. Popups/dialogs ignore it and stay white.
@@ -306,6 +330,19 @@ struct PopupState {
     needs_redraw: bool,
     /// Cursor inside the popup, in widget-tree logical coords.
     cursor: Option<Point>,
+}
+
+/// State for a drag currently hovering over one of our surfaces. Wayland's data
+/// device reports drag motion in surface-local coordinates without re-stating
+/// which surface, so we remember the anchor offset of the surface the drag
+/// entered (zero for the main window, the popup's anchor for a popup) and the
+/// last reported position so a drop knows where to land.
+struct DragSession {
+    /// Offset added to surface-local drag coordinates to reach widget-tree
+    /// logical coordinates — the same translation pointer events use.
+    anchor: Point,
+    /// Last reported position in widget-tree logical coordinates.
+    pos: Point,
 }
 
 impl State {
@@ -651,6 +688,18 @@ impl State {
         let _ = s;
         Point::new(surface_x.floor() as i32, surface_y.floor() as i32)
     }
+
+    /// Offset to add to surface-local coordinates on `surface` to reach the
+    /// widget tree's logical space: zero for the main window, the popup's
+    /// anchor for one of the stacked popup surfaces. Mirrors the translation
+    /// `pointer_frame` applies, so a drag and the pointer agree on coordinates.
+    fn surface_anchor(&self, surface: &wl_surface::WlSurface) -> Point {
+        self.popups
+            .iter()
+            .find(|p| p.surface.wl_surface().id() == surface.id())
+            .map(|p| Point::new(p.anchor.x, p.anchor.y))
+            .unwrap_or(Point::new(0, 0))
+    }
 }
 
 // ---------------------------------------------------------------- Handlers
@@ -834,7 +883,17 @@ impl SeatHandler for State {
     fn seat_state(&mut self) -> &mut SeatState {
         &mut self.seat_state
     }
-    fn new_seat(&mut self, _: &Connection, _: &QueueHandle<Self>, _: wl_seat::WlSeat) {}
+    fn new_seat(&mut self, _conn: &Connection, qh: &QueueHandle<Self>, seat: wl_seat::WlSeat) {
+        // Create this seat's data device so drag offers start arriving. A drag
+        // is delivered through the seat that owns the pointer; binding the
+        // first seat is enough for the single-seat setups saudade targets.
+        if self.data_device.is_none()
+            && let Some(mgr) = self.data_device_manager.as_ref()
+        {
+            let device = mgr.get_data_device(qh, &seat);
+            self.data_device = Some(device);
+        }
+    }
     fn new_capability(
         &mut self,
         _conn: &Connection,
@@ -1068,6 +1127,227 @@ impl PointerHandler for State {
     }
 }
 
+impl DataDeviceHandler for State {
+    fn enter(
+        &mut self,
+        conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _data_device: &WlDataDevice,
+        x: f64,
+        y: f64,
+        surface: &wl_surface::WlSurface,
+    ) {
+        // Pull the offer the device just received. Cloning it out ends the
+        // borrow of `self.data_device` so we can dispatch below.
+        let offer = match self.data_device.as_ref() {
+            Some(dd) => dd.data().drag_offer(),
+            None => None,
+        };
+        let Some(offer) = offer else { return };
+
+        // We only handle file drags. Reject anything without `text/uri-list`
+        // so the compositor shows the "can't drop here" cursor over us.
+        let accepts = offer.with_mime_types(|mimes| mimes.iter().any(|m| m == URI_LIST_MIME));
+        if !accepts {
+            offer.accept_mime_type(offer.serial, None);
+            return;
+        }
+        // Accept a *copy* (never move — we must not make the source delete the
+        // user's file) and tell the source we'll take the uri-list.
+        offer.set_actions(DndAction::Copy, DndAction::Copy);
+        offer.accept_mime_type(offer.serial, Some(URI_LIST_MIME.to_string()));
+        let _ = conn.flush();
+
+        let anchor = self.surface_anchor(surface);
+        let pos = Point::new(x.floor() as i32 + anchor.x, y.floor() as i32 + anchor.y);
+        self.drag = Some(DragSession { anchor, pos });
+        self.dispatch(Event::DragEnter { pos });
+        self.mark_popups_dirty();
+    }
+
+    fn leave(&mut self, _conn: &Connection, _qh: &QueueHandle<Self>, _data_device: &WlDataDevice) {
+        if self.drag.take().is_some() {
+            self.dispatch(Event::DragLeave);
+            self.mark_popups_dirty();
+        }
+    }
+
+    fn motion(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _data_device: &WlDataDevice,
+        x: f64,
+        y: f64,
+    ) {
+        let Some(anchor) = self.drag.as_ref().map(|d| d.anchor) else {
+            return;
+        };
+        let pos = Point::new(x.floor() as i32 + anchor.x, y.floor() as i32 + anchor.y);
+        if let Some(drag) = self.drag.as_mut() {
+            drag.pos = pos;
+        }
+        self.dispatch(Event::DragMove { pos });
+        self.mark_popups_dirty();
+    }
+
+    fn selection(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _data_device: &WlDataDevice,
+    ) {
+        // Clipboard selection — saudade uses arboard for the clipboard, so we
+        // ignore the selection offer here.
+    }
+
+    fn drop_performed(
+        &mut self,
+        conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _data_device: &WlDataDevice,
+    ) {
+        let Some(drag) = self.drag.take() else { return };
+        let pos = drag.pos;
+        let offer = match self.data_device.as_ref() {
+            Some(dd) => dd.data().drag_offer(),
+            None => None,
+        };
+        let Some(offer) = offer else {
+            // No payload offer (e.g. an internal drag): still report the drop so
+            // a target can clear its highlight.
+            self.dispatch(Event::Drop {
+                pos,
+                data: DragData::default(),
+            });
+            self.mark_popups_dirty();
+            return;
+        };
+
+        // The drop is the protocol-guaranteed point at which the data is
+        // readable. Ask for the uri-list and read it *asynchronously* off the
+        // returned pipe via calloop — a blocking read here would freeze the UI
+        // if the source were slow to write.
+        let read_pipe = match offer.receive(URI_LIST_MIME.to_string()) {
+            Ok(p) => p,
+            Err(_) => {
+                offer.finish();
+                offer.destroy();
+                self.dispatch(Event::Drop {
+                    pos,
+                    data: DragData::default(),
+                });
+                self.mark_popups_dirty();
+                return;
+            }
+        };
+        let _ = conn.flush();
+
+        // Read the uri-list asynchronously off the pipe; `offer` is moved into
+        // the reader closure and finished/destroyed once we hit EOF.
+        let mut buf: Vec<u8> = Vec::new();
+        let inserted =
+            self.loop_handle
+                .insert_source(read_pipe, move |_event, file, state: &mut State| {
+                    use std::io::Read;
+                    // SAFETY: we only read from the fd; calloop owns and closes it.
+                    let f: &mut std::fs::File = unsafe { file.get_mut() };
+                    let mut chunk = [0u8; 4096];
+                    match f.read(&mut chunk) {
+                        Ok(0) => {
+                            // EOF: the source finished writing the uri-list.
+                            let text = String::from_utf8_lossy(&buf);
+                            let paths = parse_uri_list(text.as_ref());
+                            offer.finish();
+                            offer.destroy();
+                            state.dispatch(Event::Drop {
+                                pos,
+                                data: DragData::from_paths(paths),
+                            });
+                            state.mark_popups_dirty();
+                            PostAction::Remove
+                        }
+                        Ok(n) => {
+                            buf.extend_from_slice(&chunk[..n]);
+                            PostAction::Continue
+                        }
+                        Err(ref e)
+                            if matches!(
+                                e.kind(),
+                                std::io::ErrorKind::Interrupted | std::io::ErrorKind::WouldBlock
+                            ) =>
+                        {
+                            // Spurious wakeup / signal — wait for the next.
+                            PostAction::Continue
+                        }
+                        Err(_) => {
+                            offer.finish();
+                            offer.destroy();
+                            PostAction::Remove
+                        }
+                    }
+                });
+        if inserted.is_err() {
+            // Couldn't register the reader; report an empty drop so the UI
+            // doesn't get stuck mid-drag.
+            self.dispatch(Event::Drop {
+                pos,
+                data: DragData::default(),
+            });
+            self.mark_popups_dirty();
+        }
+    }
+}
+
+impl DataOfferHandler for State {
+    fn source_actions(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        offer: &mut DragOffer,
+        _actions: DndAction,
+    ) {
+        // We only ever copy dropped files in — never move or link.
+        offer.set_actions(DndAction::Copy, DndAction::Copy);
+    }
+
+    fn selected_action(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _offer: &mut DragOffer,
+        _actions: DndAction,
+    ) {
+    }
+}
+
+// saudade only *receives* drops; it never creates a drag or clipboard source.
+// `delegate_data_device!` still wires the `wl_data_source` dispatch (which
+// requires this handler), so the methods are deliberate no-ops.
+impl DataSourceHandler for State {
+    fn accept_mime(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: &WlDataSource,
+        _: Option<String>,
+    ) {
+    }
+    fn send_request(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: &WlDataSource,
+        _: String,
+        _: WritePipe,
+    ) {
+    }
+    fn cancelled(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &WlDataSource) {}
+    fn dnd_dropped(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &WlDataSource) {}
+    fn dnd_finished(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &WlDataSource) {}
+    fn action(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &WlDataSource, _: DndAction) {}
+}
+
 impl ShmHandler for State {
     fn shm_state(&mut self) -> &mut Shm {
         &mut self.shm
@@ -1085,6 +1365,7 @@ delegate_compositor!(State);
 delegate_output!(State);
 delegate_shm!(State);
 delegate_seat!(State);
+delegate_data_device!(State);
 delegate_keyboard!(State);
 delegate_pointer!(State);
 delegate_xdg_shell!(State);
@@ -1104,6 +1385,55 @@ fn sanitize(s: &str) -> String {
             }
         })
         .collect()
+}
+
+/// The MIME type that carries a newline-separated list of dragged file URIs.
+/// It's the de-facto standard every file manager (Nautilus, Dolphin, Thunar, …)
+/// offers for dragged files.
+const URI_LIST_MIME: &str = "text/uri-list";
+
+/// Parse an RFC 2483 `text/uri-list` payload into the local file paths it
+/// references. Blank lines, comments (`#…`), and non-`file:` URIs are skipped.
+fn parse_uri_list(text: &str) -> Vec<PathBuf> {
+    text.lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty() && !line.starts_with('#'))
+        .filter_map(file_uri_to_path)
+        .collect()
+}
+
+/// Turn a single `file://[host]/path` URI into a [`PathBuf`], percent-decoding
+/// the path. Returns `None` for URIs that aren't `file:` (we can't open a
+/// remote resource as a path).
+fn file_uri_to_path(uri: &str) -> Option<PathBuf> {
+    let rest = uri.strip_prefix("file://")?;
+    // Drop an optional authority (host) component: the path starts at the
+    // first '/'. `file:///path` → empty authority, path "/path";
+    // `file://host/path` → authority "host", path "/path".
+    let path = &rest[rest.find('/')?..];
+    Some(PathBuf::from(percent_decode(path)))
+}
+
+/// Decode `%XX` escapes in a URI path into raw bytes, then read the result as
+/// UTF-8 (lossily — non-UTF-8 paths are rare and not worth refusing the drop).
+fn percent_decode(s: &str) -> String {
+    let bytes = s.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            let hi = (bytes[i + 1] as char).to_digit(16);
+            let lo = (bytes[i + 2] as char).to_digit(16);
+            if let (Some(h), Some(l)) = (hi, lo) {
+                out.push((h * 16 + l) as u8);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
 }
 
 fn map_button(button: u32) -> Option<MouseButton> {
@@ -1237,3 +1567,44 @@ impl Dispatch<WpFractionalScaleV1, ()> for State {
 // state across worker threads).
 #[allow(dead_code)]
 fn _unused(_b: Buffer, _arc: Arc<()>) {}
+
+#[cfg(test)]
+mod tests {
+    use super::{file_uri_to_path, parse_uri_list, percent_decode};
+    use std::path::PathBuf;
+
+    #[test]
+    fn parses_a_uri_list_into_paths() {
+        // Real file managers terminate lines with CRLF and may include a
+        // leading comment line; both must be tolerated.
+        let payload = "#comment\r\nfile:///home/rob/a.txt\r\nfile:///tmp/b.png\r\n";
+        assert_eq!(
+            parse_uri_list(payload),
+            vec![
+                PathBuf::from("/home/rob/a.txt"),
+                PathBuf::from("/tmp/b.png"),
+            ]
+        );
+    }
+
+    #[test]
+    fn percent_escapes_are_decoded() {
+        assert_eq!(
+            file_uri_to_path("file:///tmp/a%20b%2Bc.txt"),
+            Some(PathBuf::from("/tmp/a b+c.txt"))
+        );
+        assert_eq!(percent_decode("%41%42"), "AB");
+        // A stray, truncated escape is left verbatim rather than panicking.
+        assert_eq!(percent_decode("100%"), "100%");
+    }
+
+    #[test]
+    fn drops_authority_and_non_file_uris() {
+        assert_eq!(
+            file_uri_to_path("file://localhost/etc/hosts"),
+            Some(PathBuf::from("/etc/hosts"))
+        );
+        assert_eq!(file_uri_to_path("https://example.com/x"), None);
+        assert!(parse_uri_list("https://example.com/x\n\n").is_empty());
+    }
+}

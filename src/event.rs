@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use crate::geometry::{Point, Size};
 
 /// How many document lines one mouse-wheel detent (notch) scrolls. Matches the
@@ -85,7 +87,40 @@ impl Modifiers {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
+/// The payload of a drag-and-drop operation — what the user is dragging into
+/// the window.
+///
+/// Today this is the list of file-system paths a drag carries (parsed from the
+/// platform's `text/uri-list` on Wayland, or winit's `HoveredFile` /
+/// `DroppedFile` paths). It's a struct rather than a bare `Vec<PathBuf>` so that
+/// future payload kinds (dragged text, an image) can be added without breaking
+/// the [`Event`] variants that carry it.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct DragData {
+    /// File-system paths being dragged. Empty when the drag carries no files
+    /// the backend could resolve to local paths.
+    pub paths: Vec<PathBuf>,
+}
+
+impl DragData {
+    /// A payload carrying the given file paths.
+    pub fn from_paths(paths: impl IntoIterator<Item = PathBuf>) -> Self {
+        Self {
+            paths: paths.into_iter().collect(),
+        }
+    }
+
+    /// `true` when the drag resolved to at least one file path.
+    pub fn has_paths(&self) -> bool {
+        !self.paths.is_empty()
+    }
+}
+
+/// Note: [`Event`] is `Clone` but **not** `Copy` — the drag variants carry a
+/// [`DragData`] (which owns a `Vec`). Dispatch always passes `&Event`, so this
+/// costs nothing on the hot path; only a widget that wants to *keep* a dropped
+/// payload pays for the clone.
+#[derive(Clone, Debug)]
 pub enum Event {
     PointerMove {
         pos: Point,
@@ -112,6 +147,37 @@ pub enum Event {
         delta_x: f32,
         delta_y: f32,
     },
+    /// A drag carrying droppable content entered the window over `pos`. A drop
+    /// target highlights itself here. The payload itself arrives with
+    /// [`Event::Drop`] — not here — because the platforms only let us read it
+    /// reliably once the user actually drops (reading mid-hover can block on a
+    /// source that withholds the data until then). `pos` is the pointer
+    /// location in logical pixels; on Wayland it is exact, on the winit backends
+    /// (macOS / Windows / X11) it is best-effort — winit reports no cursor
+    /// coordinates during a file drag, so it reflects the last in-window
+    /// pointer position.
+    DragEnter {
+        pos: Point,
+    },
+    /// The drag moved to `pos` while still inside the window. Routed to the
+    /// widget under the cursor, so dragging across widgets hands the highlight
+    /// from one drop target to the next. Only the Wayland backend tracks the
+    /// pointer during a drag and emits this; the winit backends go straight
+    /// from [`Event::DragEnter`] to [`Event::Drop`].
+    DragMove {
+        pos: Point,
+    },
+    /// The drag left the window, or was cancelled, without dropping. Like
+    /// [`Event::PointerLeave`] it carries no position and is broadcast to every
+    /// widget so any drop target can clear its highlight.
+    DragLeave,
+    /// The content was released over `pos`. This is where the payload (see
+    /// [`DragData`]) is consumed — e.g. open the dropped file. Routed to the
+    /// widget under the cursor exactly like [`Event::PointerUp`].
+    Drop {
+        pos: Point,
+        data: DragData,
+    },
     KeyDown {
         key: Key,
         modifiers: Modifiers,
@@ -137,7 +203,10 @@ impl Event {
             Event::PointerMove { pos }
             | Event::PointerDown { pos, .. }
             | Event::PointerUp { pos, .. }
-            | Event::Scroll { pos, .. } => Some(*pos),
+            | Event::Scroll { pos, .. }
+            | Event::DragEnter { pos, .. }
+            | Event::DragMove { pos, .. }
+            | Event::Drop { pos, .. } => Some(*pos),
             _ => None,
         }
     }
