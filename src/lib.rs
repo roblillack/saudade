@@ -34,6 +34,7 @@ mod font;
 mod geometry;
 pub mod mock;
 mod painter;
+mod svg;
 mod theme;
 #[cfg(all(unix, not(target_os = "macos")))]
 mod wayland;
@@ -46,6 +47,12 @@ pub use event::{Event, EventCtx, Key, Modifiers, MouseButton, NamedKey};
 pub use font::Font;
 pub use geometry::{Color, Point, Rect, Size};
 pub use painter::Painter;
+// `include_svg!` reads an SVG at compile time and expands to a const
+// `SvgImage`; the runtime side just fills the baked polygons (no SVG parser in
+// the binary). The macro emits paths like `::saudade::SvgImage`, so these
+// re-exports are also the names its output references.
+pub use saudade_macros::include_svg;
+pub use svg::{FillRule, SvgImage, SvgPolygon};
 pub use theme::Theme;
 pub use widget::{PopupKind, PopupRequest, Widget};
 pub use widgets::{

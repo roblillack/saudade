@@ -403,6 +403,13 @@ impl<'a> Painter<'a> {
         }
     }
 
+    /// Fill a compile-time-baked [`SvgImage`](crate::SvgImage) into the logical
+    /// rectangle `rect`, aspect-fit and centered. Convenience wrapper for
+    /// [`SvgImage::draw`](crate::SvgImage::draw).
+    pub fn draw_svg(&mut self, image: &crate::svg::SvgImage, rect: Rect) {
+        image.draw(self, rect);
+    }
+
     pub fn font(&self) -> Option<&Font> {
         self.font
     }
