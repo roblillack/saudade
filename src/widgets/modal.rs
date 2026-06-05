@@ -225,6 +225,13 @@ impl Widget for Modal {
             }
         ) && !ctx.is_consumed()
         {
+            // Escape (or a WM close, which the runtime maps to Escape) that no
+            // child handled cancels the dialog. Let the content react — e.g.
+            // revert a live preview — before it is torn down, so closing this
+            // way is as clean as pressing the content's own Cancel button.
+            if let Some(content) = self.content.as_mut() {
+                content.on_cancel(ctx);
+            }
             self.fire_dismiss(ctx);
         }
     }
