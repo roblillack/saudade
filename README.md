@@ -875,9 +875,15 @@ power.draw(painter, Rect::new(8, 8, 32, 32));
 The geometry is resolution-independent, so the same constant fills crisply
 at any size or scale factor. The supported SVG subset is the practical one —
 `path` / `rect` / `circle` / `ellipse` / `line`, groups with inherited
-fills/strokes, solid colors, and the usual `M L H V C Q Z` path commands;
-gradients, patterns, transforms, and embedded images are not baked. The
-`svg` example renders icons both this way and via runtime `resvg`, and
+fills/strokes, solid colors, the usual path commands, and `transform`s (usvg
+folds these into the baked coordinates). What it *can't* bake — gradients and
+pattern fills, `clipPath`/`mask`/`filter`, group opacity, embedded raster
+`<image>`s, and `<text>` — is **dropped with a compile-time warning** at the
+`include_svg!` call site naming exactly what was skipped, so a surprising SVG
+fails loudly rather than rendering blank. (Under `#![deny(warnings)]` that
+warning is an error — by design.)
+
+The `svg` example renders icons both this way and via runtime `resvg`, and
 benchmarks the two (the baked path is several times faster at icon sizes and
 matches `resvg`'s rasterization to within ~0.5% per channel).
 
