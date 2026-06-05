@@ -188,18 +188,22 @@ impl Widget for Button {
                 ctx.request_paint();
             }
             // Keyboard arm: Enter / Space while focused (or Enter anywhere when
-            // we're the default-button accelerator) sinks the button. Autorepeat
-            // keeps re-arming, which is a no-op once we're already armed — the
-            // action waits for the matching KeyUp so a held key fires once, on
-            // release, just like a mouse press.
+            // we're the default-button accelerator) sinks the button; the action
+            // waits for the matching KeyUp, so a held key fires once, on release,
+            // just like a mouse press. The *first* KeyDown arms; an autorepeated
+            // one is a no-op — but we still consume it, so a held default-button
+            // accelerator can't leak past us to a focused sibling (e.g. in a
+            // `Container`) and arm that one too.
             Event::KeyDown { key, modifiers }
-                if self.press == Press::None
+                if self.press != Press::Mouse
                     && !modifiers.has_command()
                     && self.keyboard_arms(key) =>
             {
-                self.press = Press::Keyboard;
-                self.armed = true;
-                ctx.request_paint();
+                if self.press == Press::None {
+                    self.press = Press::Keyboard;
+                    self.armed = true;
+                    ctx.request_paint();
+                }
                 ctx.consume_event();
             }
             // Keyboard fire: release of the arming key activates if still armed.
@@ -268,5 +272,39 @@ impl Widget for Button {
     /// button gives up the accelerator so Enter falls through.
     fn accepts_accelerators(&self) -> bool {
         self.default && self.enabled
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::event::Modifiers;
+
+    fn enter() -> Event {
+        Event::KeyDown {
+            key: Key::Named(NamedKey::Enter),
+            modifiers: Modifiers::default(),
+        }
+    }
+
+    #[test]
+    fn held_default_button_consumes_its_autorepeat() {
+        // A default button arms on Enter even unfocused (the dialog
+        // accelerator). While it stays armed, every autorepeated Enter must
+        // also be consumed — otherwise, hosted in a `Container` next to a
+        // focused sibling, the held key would leak through and arm that one too
+        // (the "both buttons depressed" bug).
+        let mut button = Button::new(Rect::new(0, 0, 70, 26), "OK").default(true);
+
+        let mut ctx = EventCtx::new();
+        button.event(&enter(), &mut ctx);
+        assert!(ctx.is_consumed(), "the first Enter arms and is consumed");
+
+        let mut ctx = EventCtx::new();
+        button.event(&enter(), &mut ctx);
+        assert!(
+            ctx.is_consumed(),
+            "an autorepeated Enter is still consumed while armed"
+        );
     }
 }
