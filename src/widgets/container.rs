@@ -85,6 +85,28 @@ impl Container {
         self.focused
     }
 
+    /// Direct keyboard focus to a specific child by index (its position in add
+    /// order), delegating into it via `focus_first` so wrapper widgets pick the
+    /// right nested leaf. Returns `true` if the index named a focusable child.
+    /// Use it to choose a non-default initial focus target — e.g. a confirm
+    /// box opening with its Cancel button focused rather than the first one.
+    pub fn focus_child(&mut self, index: usize) -> bool {
+        if self.children.get(index).map(|c| c.focusable()) != Some(true) {
+            return false;
+        }
+        if let Some(old) = self.focused
+            && old != index
+            && let Some(c) = self.children.get_mut(old)
+        {
+            c.set_focused(false);
+        }
+        let focused = self.children[index].focus_first();
+        if focused {
+            self.focused = Some(index);
+        }
+        focused
+    }
+
     fn choose_target(&self, event: &Event) -> Option<usize> {
         if event.is_keyboard() {
             return self.focused;
