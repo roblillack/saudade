@@ -12,6 +12,9 @@ const BOX_SIZE: i32 = 13;
 const LABEL_GAP: i32 = 4;
 const FOCUS_PAD_X: i32 = 2;
 const FOCUS_PAD_Y: i32 = 1;
+/// Lift the label a hair above the box's geometric center so it reads as
+/// aligned with the check glyph rather than sitting a touch low.
+const LABEL_NUDGE_Y: i32 = 1;
 
 /// The check glyph, baked from SVG at compile time. Its 13-unit viewBox maps
 /// 1:1 onto the 13×13 box, and `SvgImage::draw_tinted` re-snaps it crisply at
@@ -143,11 +146,11 @@ impl Widget for Checkbox {
         }
 
         // Label sits to the right of the box, vertically centered with the
-        // widget's bounds.
+        // widget's bounds and lifted a hair (see `LABEL_NUDGE_Y`).
         let text_size = theme.font_size;
         let measured = painter.measure_text(&self.label, text_size);
         let text_x = box_rect.right() + LABEL_GAP;
-        let text_y = self.rect.y + ((self.rect.h - measured.h).max(0)) / 2;
+        let text_y = self.rect.y + ((self.rect.h - measured.h).max(0)) / 2 - LABEL_NUDGE_Y;
         painter.text(text_x, text_y, &self.label, text_size, fg);
 
         if self.focused && self.enabled {
