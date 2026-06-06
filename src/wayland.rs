@@ -700,6 +700,26 @@ impl State {
             .map(|p| Point::new(p.anchor.x, p.anchor.y))
             .unwrap_or(Point::new(0, 0))
     }
+
+    /// Create this seat's data device (once) so drag offers start arriving. A
+    /// drag is delivered through the seat that owns the pointer; one device is
+    /// enough for the single-seat setups saudade targets.
+    ///
+    /// This must be driven from `new_capability`, not only `new_seat`:
+    /// `SeatHandler::new_seat` fires only for seats *hotplugged* after startup.
+    /// The seat that already exists when the app launches — the usual case — is
+    /// bound directly inside `SeatState::new` and never routed through
+    /// `new_seat` (the registry's `new_global` is "not called during initial
+    /// enumeration of globals"). `new_capability` *does* fire for that
+    /// pre-existing seat, so creating the device there is what actually makes
+    /// file drops work on a normal Wayland session.
+    fn ensure_data_device(&mut self, qh: &QueueHandle<Self>, seat: &wl_seat::WlSeat) {
+        if self.data_device.is_none()
+            && let Some(mgr) = self.data_device_manager.as_ref()
+        {
+            self.data_device = Some(mgr.get_data_device(qh, seat));
+        }
+    }
 }
 
 // ---------------------------------------------------------------- Handlers
@@ -884,15 +904,11 @@ impl SeatHandler for State {
         &mut self.seat_state
     }
     fn new_seat(&mut self, _conn: &Connection, qh: &QueueHandle<Self>, seat: wl_seat::WlSeat) {
-        // Create this seat's data device so drag offers start arriving. A drag
-        // is delivered through the seat that owns the pointer; binding the
-        // first seat is enough for the single-seat setups saudade targets.
-        if self.data_device.is_none()
-            && let Some(mgr) = self.data_device_manager.as_ref()
-        {
-            let device = mgr.get_data_device(qh, &seat);
-            self.data_device = Some(device);
-        }
+        // A seat hotplugged after startup: wire up its data device so drag
+        // offers start arriving. The seat that already exists at launch never
+        // reaches here — `new_capability` covers that one (see
+        // `ensure_data_device`).
+        self.ensure_data_device(qh, &seat);
     }
     fn new_capability(
         &mut self,
@@ -901,6 +917,11 @@ impl SeatHandler for State {
         seat: wl_seat::WlSeat,
         capability: Capability,
     ) {
+        // Create the seat's data device the first time we see any capability on
+        // it. This is the path that catches the seat already present at startup
+        // (the common case), which `new_seat` is never called for; without it
+        // no drag offers ever arrive and file drops silently do nothing.
+        self.ensure_data_device(qh, &seat);
         if capability == Capability::Keyboard && self.keyboard.is_none() {
             // Use the repeat-aware constructor so SCTK arms a calloop timer
             // based on the compositor's RepeatInfo. The callback fires once
