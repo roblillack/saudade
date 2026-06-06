@@ -14,6 +14,26 @@ categories = ["gui"]
 # published crate.
 exclude = ["tests/snapshots", "tests/fonts"]
 
+# saudade-specific cargo-release settings (workspace-wide defaults live in
+# release.toml). These rewrites run on each `saudade` release (not the macro
+# crate's, since they live in saudade's own package metadata).
+[package.metadata.release]
+pre-release-replacements = [
+    # Keep the README install snippet (`saudade = "…"`) on the new version.
+    { file = "README.md", search = 'saudade = "[0-9.]+"', replace = 'saudade = "{{version}}"' },
+
+    # Roll CHANGELOG's [Unreleased] over to the new version and re-seed a fresh
+    # [Unreleased] above it (the Keep a Changelog + cargo-release marker idiom).
+    # Order matters: the version/date/compare substitutions run first, *then*
+    # the markers re-insert the literal "Unreleased"/"ReleaseDate" tokens so the
+    # next release finds them again.
+    { file = "CHANGELOG.md", search = "Unreleased", replace = "{{version}}" },
+    { file = "CHANGELOG.md", search = '\.\.\.HEAD', replace = "...{{tag_name}}", exactly = 1 },
+    { file = "CHANGELOG.md", search = "ReleaseDate", replace = "{{date}}" },
+    { file = "CHANGELOG.md", search = "<!-- next-header -->", replace = "<!-- next-header -->\n\n## [Unreleased] - ReleaseDate", exactly = 1 },
+    { file = "CHANGELOG.md", search = "<!-- next-url -->", replace = "<!-- next-url -->\n[Unreleased]: https://github.com/roblillack/saudade/compare/{{tag_name}}...HEAD", exactly = 1 },
+]
+
 # saudade is also the root of a tiny workspace. The only other member is
 # `saudade-macros`, the proc-macro crate that backs `include_svg!`. It lives in
 # its own crate because a `proc-macro = true` library can't share a crate with
