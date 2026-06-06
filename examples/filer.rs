@@ -1,17 +1,22 @@
 //! filer — a tiny saudade demo that walks the local filesystem inside a
 //! list widget. Double-click (or Enter) on a directory descends into it;
-//! double-click on `..` ascends to the parent.
+//! double-click on `..` ascends to the parent. Drag an entry out of the window
+//! to drop it onto another application (Wayland only — see
+//! `EventCtx::start_drag`).
 
 use std::path::{Path, PathBuf};
 
 use saudade::{
-    App, Color, Event, EventCtx, List, ListIcon, ListItem, Painter, Rect, Theme, Widget,
-    WindowConfig,
+    App, Color, DragData, Event, EventCtx, List, ListIcon, ListItem, MouseButton, Painter, Point,
+    Rect, Theme, Widget, WindowConfig,
 };
 
 const WINDOW_W: i32 = 420;
 const WINDOW_H: i32 = 360;
 const HEADER_H: i32 = 22;
+/// How far (logical px) the pointer must travel from a press before we treat it
+/// as a drag-out rather than a click — the usual click-vs-drag dead zone.
+const DRAG_THRESHOLD: i64 = 5;
 
 fn main() {
     let start = std::env::args()
@@ -42,6 +47,10 @@ struct FileBrowser {
     path: PathBuf,
     bounds: Rect,
     icons: Icons,
+    /// A press is "armed" for a possible drag-out: the index pressed and where.
+    /// Set on a left press over a real entry, cleared on release/leave or once
+    /// the pointer moves far enough to actually start the drag.
+    drag_armed: Option<(usize, Point)>,
 }
 
 impl FileBrowser {
@@ -51,6 +60,7 @@ impl FileBrowser {
             path,
             bounds: Rect::new(0, 0, 0, 0),
             icons: Icons::new(),
+            drag_armed: None,
         };
         me.reload();
         me
@@ -99,6 +109,37 @@ impl FileBrowser {
             ctx.request_paint();
         }
     }
+
+    /// Arm a possible drag-out after a left press the list has already turned
+    /// into a selection. We only arm over a real entry inside the list — never
+    /// `..` (dragging "go up" makes no sense) or the header strip.
+    fn arm_drag(&mut self, pos: Point) {
+        self.drag_armed = None;
+        if !self.list.bounds().contains(pos) {
+            return;
+        }
+        if let Some(idx) = self.list.selected_index()
+            && self.list.items().get(idx).is_some_and(|i| i.label != "..")
+        {
+            self.drag_armed = Some((idx, pos));
+        }
+    }
+
+    /// If an armed press has dragged past the dead zone, hand the entry's
+    /// absolute path to the runtime as a drag-and-drop payload and disarm.
+    fn maybe_start_drag(&mut self, pos: Point, ctx: &mut EventCtx) {
+        let Some((idx, start)) = self.drag_armed else {
+            return;
+        };
+        let (dx, dy) = ((pos.x - start.x) as i64, (pos.y - start.y) as i64);
+        if dx * dx + dy * dy < DRAG_THRESHOLD * DRAG_THRESHOLD {
+            return;
+        }
+        self.drag_armed = None;
+        if let Some(name) = self.list.items().get(idx).map(|i| i.label.clone()) {
+            ctx.start_drag(DragData::from_paths([self.path.join(name)]));
+        }
+    }
 }
 
 impl Widget for FileBrowser {
@@ -121,7 +162,21 @@ impl Widget for FileBrowser {
     }
 
     fn event(&mut self, event: &Event, ctx: &mut EventCtx) {
+        // Drag-out gesture: a left press over an entry arms it, and enough
+        // motion before release turns it into a drag. Plain clicks (no motion)
+        // and double-clicks to descend still fall through to the list normally.
+        if let Event::PointerMove { pos } = event {
+            self.maybe_start_drag(*pos, ctx);
+        }
         self.list.event(event, ctx);
+        match event {
+            Event::PointerDown {
+                pos,
+                button: MouseButton::Left,
+            } => self.arm_drag(*pos),
+            Event::PointerUp { .. } | Event::PointerLeave => self.drag_armed = None,
+            _ => {}
+        }
         self.handle_activation(ctx);
     }
 

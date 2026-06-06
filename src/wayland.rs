@@ -17,7 +17,7 @@ use std::time::Duration;
 use smithay_client_toolkit::compositor::{CompositorHandler, CompositorState};
 use smithay_client_toolkit::data_device_manager::data_device::{DataDevice, DataDeviceHandler};
 use smithay_client_toolkit::data_device_manager::data_offer::{DataOfferHandler, DragOffer};
-use smithay_client_toolkit::data_device_manager::data_source::DataSourceHandler;
+use smithay_client_toolkit::data_device_manager::data_source::{DataSourceHandler, DragSource};
 use smithay_client_toolkit::data_device_manager::{DataDeviceManagerState, WritePipe};
 use smithay_client_toolkit::output::{OutputHandler, OutputState};
 use smithay_client_toolkit::reexports::calloop::{
@@ -172,6 +172,11 @@ pub(crate) fn run(app: App) {
         data_device_manager,
         data_device: None,
         drag: None,
+        drag_grab_serial: None,
+        drag_origin_surface: None,
+        drag_source: None,
+        drag_payload: Vec::new(),
+        drag_icon: None,
         modifiers: Modifiers::default(),
         bg: BackgroundState::from_env(),
         cursor: None,
@@ -247,6 +252,18 @@ struct State {
     data_device_manager: Option<DataDeviceManagerState>,
     data_device: Option<DataDevice>,
     drag: Option<DragSession>,
+    /// Outbound drag-and-drop (us as the *source*). `drag_grab_serial` /
+    /// `drag_origin_surface` remember the latest pointer press — Wayland
+    /// requires both to start a drag, since the press's implicit grab is what
+    /// the drag rides on. `drag_source` keeps the live `wl_data_source` alive
+    /// for the duration of the drag, and `drag_payload` is the serialized
+    /// `text/uri-list` we hand the target when it asks (`send_request`).
+    drag_grab_serial: Option<u32>,
+    drag_origin_surface: Option<wl_surface::WlSurface>,
+    drag_source: Option<DragSource>,
+    drag_payload: Vec<u8>,
+    /// The cursor-following icon for the active outbound drag, if any.
+    drag_icon: Option<DragIcon>,
     modifiers: Modifiers,
     /// Background pattern + color for the main window, toggled with the
     /// `p` / `c` debug keys. Popups/dialogs ignore it and stay white.
@@ -345,6 +362,17 @@ struct DragSession {
     pos: Point,
 }
 
+/// The little surface that follows the cursor during an *outbound* drag — the
+/// visual feedback for "you're carrying this." Its buffer and the pool backing
+/// it must outlive the drag (the compositor reads from them while the icon is
+/// up), so we park all three here and tear them down together when the drag
+/// ends.
+struct DragIcon {
+    surface: wl_surface::WlSurface,
+    _pool: SlotPool,
+    _buffer: Buffer,
+}
+
 impl State {
     /// Per-loop housekeeping: sync popup window state with the widget
     /// tree, then redraw any surface that asked for it. Idle iterations
@@ -406,6 +434,131 @@ impl State {
         }
         if let Some(size) = ctx.resize_request {
             self.apply_resize(size);
+        }
+        if let Some(data) = ctx.drag_request.take() {
+            self.begin_drag(data);
+        }
+    }
+
+    /// Start an outbound drag carrying `data`'s file paths, in response to a
+    /// widget's [`EventCtx::start_drag`]. Needs the data-device plumbing plus
+    /// the latest pointer press (its serial + surface): Wayland only lets a
+    /// client begin a drag off the implicit grab a button press established, so
+    /// this is expected to be called while that button is still held. Bails
+    /// quietly if any of that is missing or the payload has no paths — there's
+    /// nothing the user could have grabbed.
+    fn begin_drag(&mut self, data: DragData) {
+        let (Some(mgr), Some(dd), Some(serial)) = (
+            self.data_device_manager.as_ref(),
+            self.data_device.as_ref(),
+            self.drag_grab_serial,
+        ) else {
+            return;
+        };
+        if data.paths.is_empty() {
+            return;
+        }
+        // The origin must be one of our surfaces; fall back to the main window
+        // if we somehow never recorded a press surface.
+        let origin = self
+            .drag_origin_surface
+            .clone()
+            .unwrap_or_else(|| self.window.wl_surface().clone());
+
+        // A small surface that rides the cursor so the user can see what
+        // they're carrying. Built before we borrow the device/manager (it only
+        // needs `&self`); `None` if we couldn't allocate it — the drag still
+        // works, just without the icon.
+        let icon = self.build_drag_icon(&data);
+
+        // Offer only the uri-list, copy-only (we never want a move to make the
+        // source side delete the user's files).
+        let source = mgr.create_drag_and_drop_source(&self.qh, [URI_LIST_MIME], DndAction::Copy);
+        source.start_drag(dd, &origin, icon.as_ref().map(|i| &i.surface), serial);
+        // The drag-icon role is assigned by `start_drag`; commit the prepared
+        // buffer now so the compositor actually shows it.
+        if let Some(i) = &icon {
+            i.surface.commit();
+        }
+        self.drag_payload = paths_to_uri_list(&data.paths).into_bytes();
+        self.drag_source = Some(source);
+        self.drag_icon = icon;
+    }
+
+    /// Render the cursor-following drag icon: a small raised panel naming what's
+    /// being dragged (the file's name, or "N items"). Returns `None` if there's
+    /// no font or the buffer can't be allocated — callers treat that as "no
+    /// icon" and drag without one.
+    fn build_drag_icon(&self, data: &DragData) -> Option<DragIcon> {
+        let label = drag_icon_label(&data.paths);
+        let font = self.font.as_ref()?;
+        let size = self.theme.font_size;
+        let (text_w, text_h) = font.measure(&label, size);
+
+        const PAD: i32 = 6;
+        let logical_w = text_w.ceil() as i32 + PAD * 2;
+        let logical_h = text_h.ceil() as i32 + PAD * 2;
+        let scale = self.scale.max(1);
+        let buf_w = logical_w * scale;
+        let buf_h = logical_h * scale;
+        let stride = buf_w * 4;
+
+        let mut pool = SlotPool::new((buf_w * buf_h * 4) as usize, &self.shm).ok()?;
+        let buffer = pool
+            .create_buffer(buf_w, buf_h, stride, wl_shm::Format::Argb8888)
+            .ok()?
+            .0;
+        let canvas = pool.canvas(&buffer)?;
+        let pixels = bytes_as_u32_mut(canvas);
+        {
+            let mut painter = Painter::with_popup_anchor(
+                pixels,
+                buf_w,
+                buf_h,
+                scale as f32,
+                0,
+                0,
+                self.font.as_ref(),
+                self.mono_font.as_ref(),
+                None,
+            );
+            painter.set_system_scale(self.fractional_scale.unwrap_or(scale as f32));
+            let area = Rect::new(0, 0, logical_w, logical_h);
+            painter.fill_rect(area, self.theme.background);
+            painter.raised_bevel(area, self.theme.highlight, self.theme.shadow);
+            painter.text(PAD, PAD, &label, size, self.theme.text);
+        }
+
+        let surface = self.compositor.create_surface(&self.qh);
+        surface.set_buffer_scale(scale);
+        buffer.attach_to(&surface).ok()?;
+        surface.damage_buffer(0, 0, buf_w, buf_h);
+        // Deliberately *not* committed here — the surface only becomes a drag
+        // icon once `start_drag` assigns the role, so the caller commits after.
+        Some(DragIcon {
+            surface,
+            _pool: pool,
+            _buffer: buffer,
+        })
+    }
+
+    /// Tear down the active outbound drag source once it's no longer needed
+    /// (the target finished reading, or the drag was cancelled). Destroying the
+    /// `wl_data_source` is the client's responsibility after `dnd_finished` /
+    /// `cancelled`; we only do so for *our* source.
+    fn end_drag_source(&mut self, source: &WlDataSource) {
+        if self
+            .drag_source
+            .as_ref()
+            .is_some_and(|s| s.inner() == source)
+        {
+            if let Some(s) = self.drag_source.take() {
+                s.inner().destroy();
+            }
+            if let Some(icon) = self.drag_icon.take() {
+                icon.surface.destroy();
+            }
+            self.drag_payload.clear();
         }
     }
 
@@ -1102,10 +1255,16 @@ impl PointerHandler for State {
                     }
                     self.dispatch(Event::PointerLeave);
                 }
-                PointerEventKind::Press { button, .. } => {
+                PointerEventKind::Press { button, serial, .. } => {
                     let Some(b) = map_button(button) else {
                         continue;
                     };
+                    // Remember the press: a drag the widget may start during the
+                    // following motion rides on this press's implicit grab, and
+                    // `start_drag` needs both the serial and the surface it
+                    // happened on.
+                    self.drag_grab_serial = Some(serial);
+                    self.drag_origin_surface = Some(event.surface.clone());
                     self.dispatch(Event::PointerDown { pos, button: b });
                     self.mark_popups_dirty();
                 }
@@ -1342,9 +1501,10 @@ impl DataOfferHandler for State {
     }
 }
 
-// saudade only *receives* drops; it never creates a drag or clipboard source.
-// `delegate_data_device!` still wires the `wl_data_source` dispatch (which
-// requires this handler), so the methods are deliberate no-ops.
+// saudade is a drag source only for outbound file drags started via
+// `EventCtx::start_drag` (we never create a clipboard/selection source). The
+// handler serves the uri-list when a target asks and tears the source down when
+// the drag ends; the clipboard-source callbacks stay no-ops.
 impl DataSourceHandler for State {
     fn accept_mime(
         &mut self,
@@ -1358,14 +1518,38 @@ impl DataSourceHandler for State {
         &mut self,
         _: &Connection,
         _: &QueueHandle<Self>,
-        _: &WlDataSource,
-        _: String,
-        _: WritePipe,
+        source: &WlDataSource,
+        mime: String,
+        write_pipe: WritePipe,
     ) {
+        // The target is reading our drag's payload. Only serve the uri-list,
+        // and only for the source we actually started. The payload is a handful
+        // of paths — well under a pipe's buffer — so a direct write can't block
+        // the UI in practice.
+        let ours = self
+            .drag_source
+            .as_ref()
+            .is_some_and(|s| s.inner() == source);
+        if !ours || mime != URI_LIST_MIME {
+            return;
+        }
+        use std::io::Write;
+        use std::os::fd::OwnedFd;
+        let mut file = std::fs::File::from(OwnedFd::from(write_pipe));
+        let _ = file.write_all(&self.drag_payload);
     }
-    fn cancelled(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &WlDataSource) {}
-    fn dnd_dropped(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &WlDataSource) {}
-    fn dnd_finished(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &WlDataSource) {}
+    fn cancelled(&mut self, _: &Connection, _: &QueueHandle<Self>, source: &WlDataSource) {
+        // The drag was aborted (dropped on empty space, Escape, …). Discard it.
+        self.end_drag_source(source);
+    }
+    fn dnd_dropped(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &WlDataSource) {
+        // The target accepted the drop; it may still be reading via
+        // `send_request`. Keep the source alive until `dnd_finished`.
+    }
+    fn dnd_finished(&mut self, _: &Connection, _: &QueueHandle<Self>, source: &WlDataSource) {
+        // Transfer complete: the source has done its job, so destroy it.
+        self.end_drag_source(source);
+    }
     fn action(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &WlDataSource, _: DndAction) {}
 }
 
@@ -1455,6 +1639,57 @@ fn percent_decode(s: &str) -> String {
         i += 1;
     }
     String::from_utf8_lossy(&out).into_owned()
+}
+
+/// Serialize file paths into an RFC 2483 `text/uri-list` payload — the inverse
+/// of [`parse_uri_list`] — for handing to a drop target. Each path becomes one
+/// CRLF-terminated `file://` URI with its bytes percent-encoded. Relative paths
+/// are skipped: a `file:` URI must be absolute, and a widget hands us absolute
+/// paths anyway.
+fn paths_to_uri_list(paths: &[PathBuf]) -> String {
+    use std::os::unix::ffi::OsStrExt;
+    let mut out = String::new();
+    for path in paths {
+        if !path.is_absolute() {
+            continue;
+        }
+        out.push_str("file://");
+        out.push_str(&percent_encode_path(path.as_os_str().as_bytes()));
+        out.push_str("\r\n");
+    }
+    out
+}
+
+/// Percent-encode a path for a `file:` URI: keep the RFC 3986 unreserved set
+/// (`A–Z a–z 0–9 - . _ ~`) and the path separator `/` verbatim, escape every
+/// other byte as `%XX`. Operates on raw bytes so non-UTF-8 paths round-trip
+/// through [`percent_decode`] unchanged.
+fn percent_encode_path(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789ABCDEF";
+    let mut out = String::with_capacity(bytes.len());
+    for &b in bytes {
+        if b.is_ascii_alphanumeric() || matches!(b, b'-' | b'.' | b'_' | b'~' | b'/') {
+            out.push(b as char);
+        } else {
+            out.push('%');
+            out.push(HEX[(b >> 4) as usize] as char);
+            out.push(HEX[(b & 0x0f) as usize] as char);
+        }
+    }
+    out
+}
+
+/// The label shown on the cursor-following drag icon: the single file's name,
+/// or "N items" for a multi-file drag.
+fn drag_icon_label(paths: &[PathBuf]) -> String {
+    match paths {
+        [] => String::new(),
+        [one] => one
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| one.display().to_string()),
+        many => format!("{} items", many.len()),
+    }
 }
 
 fn map_button(button: u32) -> Option<MouseButton> {
@@ -1591,7 +1826,9 @@ fn _unused(_b: Buffer, _arc: Arc<()>) {}
 
 #[cfg(test)]
 mod tests {
-    use super::{file_uri_to_path, parse_uri_list, percent_decode};
+    use super::{
+        file_uri_to_path, parse_uri_list, paths_to_uri_list, percent_decode, percent_encode_path,
+    };
     use std::path::PathBuf;
 
     #[test]
@@ -1627,5 +1864,44 @@ mod tests {
         );
         assert_eq!(file_uri_to_path("https://example.com/x"), None);
         assert!(parse_uri_list("https://example.com/x\n\n").is_empty());
+    }
+
+    #[test]
+    fn serializes_paths_to_a_crlf_uri_list() {
+        // Each path becomes one `file://` line, CRLF-terminated, with special
+        // characters percent-encoded — the format a drop target expects.
+        let list = paths_to_uri_list(&[
+            PathBuf::from("/home/rob/a.txt"),
+            PathBuf::from("/tmp/a b+c.txt"),
+        ]);
+        assert_eq!(
+            list,
+            "file:///home/rob/a.txt\r\nfile:///tmp/a%20b%2Bc.txt\r\n"
+        );
+    }
+
+    #[test]
+    fn skips_relative_paths_that_cant_be_file_uris() {
+        // A `file:` URI must be absolute; a relative path has no valid encoding.
+        assert_eq!(paths_to_uri_list(&[PathBuf::from("relative/x")]), "");
+    }
+
+    #[test]
+    fn encoding_round_trips_through_the_parser() {
+        // What we emit as a source must parse back to the same paths when we're
+        // the target — the encoder and decoder agree on the escaping.
+        let paths = vec![
+            PathBuf::from("/tmp/plain.txt"),
+            PathBuf::from("/tmp/with space & symbols#1.txt"),
+            PathBuf::from("/home/rob/Bilder/Größe.png"),
+        ];
+        assert_eq!(parse_uri_list(&paths_to_uri_list(&paths)), paths);
+    }
+
+    #[test]
+    fn keeps_unreserved_and_slash_but_escapes_the_rest() {
+        assert_eq!(percent_encode_path(b"/a-b_c.d~e/f"), "/a-b_c.d~e/f");
+        assert_eq!(percent_encode_path(b"a b"), "a%20b");
+        assert_eq!(percent_encode_path(b"#?%"), "%23%3F%25");
     }
 }

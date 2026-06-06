@@ -491,6 +491,13 @@ impl AppHandler {
         if let Some(size) = ctx.resize_request {
             self.apply_resize(size);
         }
+        if ctx.drag_request.is_some() {
+            // A widget asked to start an outbound drag. winit exposes no API to
+            // initiate a drag-and-drop operation on any of its platforms
+            // (macOS, Windows, X11), so we can only drop the request here —
+            // drag *sources* are a Wayland-only capability (see
+            // `EventCtx::start_drag`). Receiving drops still works everywhere.
+        }
     }
 
     /// Turn the file paths buffered from `HoveredFile` / `DroppedFile` events

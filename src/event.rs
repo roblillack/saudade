@@ -243,6 +243,11 @@ pub struct EventCtx {
     /// requests. The window's size is the app's to choose (unlike the scale
     /// factor, which only the OS sets).
     pub(crate) resize_request: Option<Size>,
+    /// Set when a widget calls [`Self::start_drag`] to begin dragging content
+    /// out of the window. Consumed by the backend after dispatch, which turns
+    /// it into a real OS drag. Only the Wayland backend acts on it (see the
+    /// method docs); the winit backends drop it.
+    pub(crate) drag_request: Option<DragData>,
 }
 
 impl EventCtx {
@@ -255,6 +260,7 @@ impl EventCtx {
             consumed: false,
             dismiss_requested: false,
             resize_request: None,
+            drag_request: None,
         }
     }
 
@@ -343,5 +349,21 @@ impl EventCtx {
     /// controls.
     pub fn request_window_size(&mut self, width: i32, height: i32) {
         self.resize_request = Some(Size::new(width.max(1), height.max(1)));
+    }
+
+    /// Begin dragging `data` out of this window as an OS drag-and-drop
+    /// operation — the mirror of receiving a [`Event::Drop`]. Call this from a
+    /// widget's `event` handler once a press-then-move gesture is recognized
+    /// (typically on [`Event::PointerMove`] after the pointer has travelled a
+    /// few pixels from a [`Event::PointerDown`]), so a plain click still reads
+    /// as a click rather than starting a drag.
+    ///
+    /// **Wayland only.** The winit backends (macOS, Windows, X11) expose no API
+    /// to *initiate* a drag, so this is a no-op there; only the Wayland backend
+    /// turns it into a real drag whose `text/uri-list` payload other
+    /// applications can drop. Receiving drops, by contrast, works on every
+    /// backend. The drag copies (never moves) the referenced files.
+    pub fn start_drag(&mut self, data: DragData) {
+        self.drag_request = Some(data);
     }
 }

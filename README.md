@@ -28,7 +28,7 @@ Reference apps live under `examples/`. Run any of them with
 | Example         | What it shows                                                                                                                                                                                                                                                                                                                                                                                    |
 | --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `notepad`       | Editor window with menu bar (`MenuBar`, `TextEditor`).                                                                                                                                                                                                                                                                                                                                           |
-| `filer`         | Filesystem browser using `List` with folder/file icons.                                                                                                                                                                                                                                                                                                                                          |
+| `filer`         | Filesystem browser using `List` with folder/file icons. Drag an entry out of the window to drop it onto another app (drag *source* via `EventCtx::start_drag`; Wayland only).                                                                                                                                                                                                                       |
 | `dnd`           | A drop zone that highlights while a file drag hovers and lists the paths dropped onto it. Demonstrates OS file drag-and-drop (`DragEnter` / `DragMove` / `DragLeave` / `Drop`) across macOS, Windows, X11, and Wayland.                                                                                                                                                                            |
 | `picker`        | Pick-an-item dialog: `List` + buttons + `Dialog`, with Tab/Shift+Tab focus cycling.                                                                                                                                                                                                                                                                                                              |
 | `counter`       | [7GUIs](https://eugenkiss.github.io/7guis/) task 1 — a `Label` field and a `Button`.                                                                                                                                                                                                                                                                                                             |
@@ -268,6 +268,30 @@ Two per-backend caveats:
   drop never makes the source delete the user's file.
 
 See `examples/dnd.rs` (`cargo run --example dnd`) for a working drop zone.
+
+#### Dragging files out (Wayland only)
+
+A widget can also be a drag **source** — start an OS drag carrying file paths so
+another application can receive it — by calling `EventCtx::start_drag` once it
+recognizes a press-then-move gesture:
+
+```rust
+fn event(&mut self, event: &Event, ctx: &mut EventCtx) {
+    match event {
+        Event::PointerDown { pos, button: MouseButton::Left } => self.arm(*pos),
+        Event::PointerMove { pos } if self.moved_past_threshold(*pos) =>
+            ctx.start_drag(DragData::from_paths([self.path.clone()])),
+        Event::PointerUp { .. } => self.disarm(),
+        _ => {}
+    }
+}
+```
+
+This is **Wayland-only**: winit exposes no API to *initiate* a drag on any of
+its platforms (macOS, Windows, X11), so `start_drag` is a no-op there. The drag
+offers `text/uri-list` and copies (never moves) the files. Receiving drops, by
+contrast, works on every backend. See `examples/filer.rs` (`cargo run --example
+filer`) — drag an entry out of the window onto another app.
 
 ### `EventCtx`
 
