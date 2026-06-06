@@ -31,7 +31,7 @@ Reference apps live under `examples/`. Run any of them with
 
 | Example         | What it shows                                                                                                                                                                                                                                                                                                                                                                                    |
 | --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `notepad`       | Editor window with menu bar (`MenuBar`, `TextEditor`).                                                                                                                                                                                                                                                                                                                                           |
+| `notepad`       | Editor window with menu bar (`MenuBar`, `TextEditor`); File → Open / Save As drive a `FileDialog`.                                                                                                                                                                                                                                                                                                |
 | `filer`         | Filesystem browser using `List` with folder/file icons.                                                                                                                                                                                                                                                                                                                                          |
 | `picker`        | Pick-an-item dialog: `List` + buttons + `Dialog`, with Tab/Shift+Tab focus cycling.                                                                                                                                                                                                                                                                                                              |
 | `counter`       | [7GUIs](https://eugenkiss.github.io/7guis/) task 1 — a `Label` field and a `Button`.                                                                                                                                                                                                                                                                                                             |
@@ -121,7 +121,7 @@ to an object-oriented UI framework.
 | svg      | `SvgImage`, `SvgPolygon`, `FillRule` + the `include_svg!` macro — compile-time vector icons                                                                                                              |
 | font     | `Font` — system font lookup + glyph rasterization                                                                                                                                                        |
 | widget   | `Widget` trait (paint / event / focus / overlay hooks)                                                                                                                                                   |
-| widgets  | `Container`, `Column`, `Row`, `Label`, `Button`, `Checkbox`, `Bevel`, `Image`, `MenuBar`, `Menu`, `MenuItem`, `ScrollBar`, `Slider`, `ProgressBar`, `List`, `Modal`, `Dialog`, `TextInput`, `TextEditor` |
+| widgets  | `Container`, `Column`, `Row`, `Label`, `Button`, `Checkbox`, `Bevel`, `Image`, `MenuBar`, `Menu`, `MenuItem`, `ScrollBar`, `Slider`, `ProgressBar`, `List`, `Modal`, `Dialog`, `FileDialog`, `TextInput`, `TextEditor` |
 | app      | `App`, `WindowConfig` — runtime entry point                                                                                                                                                              |
 
 Everything user-facing is re-exported from the crate root; you generally
@@ -727,6 +727,65 @@ accelerator pass while the focused child is capturing, so a sibling **default
 instead. Once the list closes, Enter fires the default button again. The flight
 booker relies on this: its Book button is the default action _and_ lives next to
 the flight-type dropdown.
+
+### `FileDialog`
+
+A classic Win 3.1 **Open / Save** file picker, built on `Modal`. It shows the
+familiar two-column browser in its own top-level window: a directory list and
+"Drives" picker on the left, a file list with a "File Name" field and "List
+Files of Type" filter on the right, OK / Cancel on the far right. (The one swap
+from the original is the column order — folders sit on the left, the way modern
+pickers arrange them.)
+
+Own it as an overlay (`Rc<RefCell<FileDialog>>` added with
+`Column::add_overlay`, exactly like `Dialog`) and open it with `show_open` or
+`show_save`, passing a callback that receives the chosen `Path` on confirm.
+Cancel / Escape / the window's close button just close it.
+
+```rust
+let dialog = Rc::new(RefCell::new(
+    FileDialog::new()
+        .with_directory(std::env::current_dir().unwrap())
+        .with_filters(vec![
+            FileFilter::new("Text Files (*.txt)", ["*.txt"]),
+            FileFilter::all_files(),
+        ]),
+));
+
+// From a menu / button handler:
+dialog.borrow_mut().show_open(|cx, path| {
+    // load `path` …
+    cx.request_paint();
+});
+
+// Saving suggests a name and need not point at an existing file:
+dialog.borrow_mut().show_save("Untitled.txt", |cx, path| {
+    // write to `path` …
+    cx.request_paint();
+});
+```
+
+A `FileFilter` pairs a label with one or more glob patterns (`*` / `?`, matched
+case-insensitively); the file list shows only the names matching the selected
+filter, and switching the "List Files of Type" dropdown re-filters in place.
+`FileFilter::all_files()` is the catch-all `*.*`. `with_directory` /
+`set_directory` choose where the next open starts.
+
+Interaction mirrors the original:
+
+| Input                                | Effect                                       |
+| ------------------------------------ | -------------------------------------------- |
+| click a file                         | put its name in the **File Name** field      |
+| double-click a file / Enter / OK     | open it (resolve the field to a path)        |
+| double-click a directory or `..`     | descend / ascend                             |
+| Enter (directory list focused)       | descend into the selected directory          |
+| type a directory name + Enter        | descend into it                              |
+| type a wildcard (e.g. `*.rs`) + Enter | re-filter the list rather than open          |
+
+The picker lives in its own window with server-side decorations, so its title
+("Open" / "Save As") rides along on the `PopupRequest`; its "Drives" / "List
+Files of Type" dropdowns open as nested popups inside it. `examples/notepad.rs`
+wires it to File → Open and File → Save As.
 
 ### Disabled controls
 

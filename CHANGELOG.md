@@ -10,6 +10,14 @@ While pre-1.0, the minor version is bumped for breaking changes.
 
 ## [Unreleased] - ReleaseDate
 
+### Added
+
+- `FileDialog`: a classic Win 3.1-style Open / Save file picker (built on
+  `Modal`) with a directory list, file list, "File Name" field, "List Files of
+  Type" filter, and "Drives" picker — folders on the left, files on the right.
+  Glob-based `FileFilter`s drive the type filter. The `notepad` example now uses
+  it for File → Open and File → Save As.
+
 ## [0.2.0] - 2026-06-06
 
 ### Added
