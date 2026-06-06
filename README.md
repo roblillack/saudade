@@ -6,7 +6,8 @@
 
 A minimal, retained-mode GUI library for small Windows 3.1–styled utilities
 written in Rust. Built on `winit` + `softbuffer` with `fontdue` + `fontdb`
-for text — no GPU, no browser engine, no procedural-macro DSL.
+for text — no GPU, no browser engine, no mobile support, or complex developer
+tooling.
 
 ![Saudade widgets: a picker dialog, an about box, and a modal confirmation, all in Windows 3.1 chrome](screenshot.png)
 
@@ -15,12 +16,15 @@ viewers, simple text editors, mini control panels) that look like they
 fell out of 1992 while staying portable, density-independent, and crisp
 on modern displays.
 
-Applications built with Saudade pair exceptionally well with my Wayland Window Manager [Canoe](https://github.com/roblillack/canoe), but will work on any UNIX (Wayland/X11) or Mac system.
+Applications built with Saudade pair exceptionally well with my Wayland
+window manager [Canoe](https://github.com/roblillack/canoe), but will work
+on any UNIX (Wayland/X11) or Mac system.
 
 ## Status
 
 Pre-1.0, intentionally small. The current widget set is enough to
-assemble small single-window utilities. There is currently no documentation apart from this huge ~~braindump~~ README.
+assemble small single-window utilities. There is currently no documentation
+apart from this huge ~~braindump~~ README.
 
 Reference apps live under `examples/`. Run any of them with
 `cargo run --example <name>`:

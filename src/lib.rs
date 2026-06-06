@@ -1,8 +1,7 @@
-//! saudade — a minimal, retained-mode GUI library for small Win 3.1-styled
-//! utilities (about boxes, simple dialogs, system info viewers).
+//! Saudade — a minimal, retained-mode GUI library for small Win 3.1-styled
+//! programs and utilities. Targets Wayland, X11, Windows, macOS.
 //!
-//! The library follows the architecture sketched in `saudade.md` but stays
-//! intentionally small:
+//! The library stays intentionally small:
 //!
 //! * the runtime drives winit + softbuffer
 //! * widgets are ordinary Rust values implementing [`Widget`]
