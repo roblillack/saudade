@@ -29,7 +29,7 @@ use smithay_client_toolkit::seat::keyboard::{
     KeyEvent as WlKeyEvent, KeyboardHandler, Keysym, Modifiers as WlModifiers,
 };
 use smithay_client_toolkit::seat::pointer::{
-    AxisScroll, PointerEvent, PointerEventKind, PointerHandler,
+    AxisScroll, PointerData, PointerEvent, PointerEventKind, PointerHandler,
 };
 use smithay_client_toolkit::seat::{Capability, SeatHandler, SeatState};
 use smithay_client_toolkit::shell::WaylandSurface;
@@ -51,6 +51,10 @@ use wayland_client::protocol::wl_data_device_manager::DndAction;
 use wayland_client::protocol::wl_data_source::WlDataSource;
 use wayland_client::protocol::{wl_keyboard, wl_output, wl_pointer, wl_seat, wl_shm, wl_surface};
 use wayland_client::{Connection, Dispatch, Proxy, QueueHandle};
+use wayland_protocols::wp::cursor_shape::v1::client::wp_cursor_shape_device_v1::{
+    Shape, WpCursorShapeDeviceV1,
+};
+use wayland_protocols::wp::cursor_shape::v1::client::wp_cursor_shape_manager_v1::WpCursorShapeManagerV1;
 use wayland_protocols::wp::fractional_scale::v1::client::wp_fractional_scale_manager_v1::WpFractionalScaleManagerV1;
 use wayland_protocols::wp::fractional_scale::v1::client::wp_fractional_scale_v1::{
     self, WpFractionalScaleV1,
@@ -67,7 +71,7 @@ use crate::event::{
     WHEEL_LINES_PER_DETENT,
 };
 use crate::font::Font;
-use crate::geometry::{Point, Rect, Size};
+use crate::geometry::{Color, Point, Rect, Size};
 use crate::painter::Painter;
 use crate::theme::Theme;
 use crate::widget::{PopupKind, PopupRequest, Widget};
@@ -110,6 +114,12 @@ pub(crate) fn run(app: App) {
     // through its drag offers). Compositors universally advertise it; if one
     // doesn't, we simply never receive drops and everything else still works.
     let data_device_manager = DataDeviceManagerState::bind(&globals, &qh).ok();
+    // Optional: wp_cursor_shape lets us swap the pointer to a themed drag cursor
+    // while we're a drag source. v1 already has every shape we use; compositors
+    // without it just keep their default cursor during a drag.
+    let cursor_shape_mgr: Option<WpCursorShapeManagerV1> = globals
+        .bind::<WpCursorShapeManagerV1, _, _>(&qh, 1..=1, ())
+        .ok();
 
     let surface = compositor.create_surface(&qh);
     let window = xdg_shell.create_window(surface, WindowDecorations::RequestServer, &qh);
@@ -177,6 +187,8 @@ pub(crate) fn run(app: App) {
         drag_source: None,
         drag_payload: Vec::new(),
         drag_icon: None,
+        cursor_shape_mgr,
+        cursor_shape_device: None,
         modifiers: Modifiers::default(),
         bg: BackgroundState::from_env(),
         cursor: None,
@@ -264,6 +276,13 @@ struct State {
     drag_payload: Vec<u8>,
     /// The cursor-following icon for the active outbound drag, if any.
     drag_icon: Option<DragIcon>,
+    /// `wp_cursor_shape` plumbing used to swap the pointer to a drag cursor
+    /// (`copy` over a valid target, `no_drop` elsewhere) while we're the drag
+    /// source. `mgr` is the bound global; `device` is the per-pointer handle we
+    /// call `set_shape` on. Both `None` if the compositor lacks the protocol —
+    /// the drag still works, just with the compositor's default cursor.
+    cursor_shape_mgr: Option<WpCursorShapeManagerV1>,
+    cursor_shape_device: Option<WpCursorShapeDeviceV1>,
     modifiers: Modifiers,
     /// Background pattern + color for the main window, toggled with the
     /// `p` / `c` debug keys. Popups/dialogs ignore it and stay white.
@@ -362,15 +381,39 @@ struct DragSession {
     pos: Point,
 }
 
+/// Whether the spot under the cursor will accept the drop. River (and other
+/// wlroots compositors) revoke our pointer focus the instant a drag starts and
+/// then ignore `wp_cursor_shape.set_shape`, so we can't change the real cursor
+/// mid-drag; instead we bake this state into the drag icon as a badge.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum DragFeedback {
+    /// Over a target that accepts the drop — a green `+` badge.
+    Copy,
+    /// Nowhere valid to drop (over our own window, empty desktop, a
+    /// non-accepting app) — a red `−` badge.
+    NoDrop,
+}
+
 /// The little surface that follows the cursor during an *outbound* drag — the
-/// visual feedback for "you're carrying this." Its buffer and the pool backing
-/// it must outlive the drag (the compositor reads from them while the icon is
-/// up), so we park all three here and tear them down together when the drag
-/// ends.
+/// visual feedback for "you're carrying this": the file's name plus a badge
+/// showing whether it can be dropped here. We keep the pool and enough layout
+/// to *re-render* it as the feedback changes (the icon surface stays mapped for
+/// the whole drag, so re-committing it updates what the user sees), and tear it
+/// all down when the drag ends.
 struct DragIcon {
     surface: wl_surface::WlSurface,
-    _pool: SlotPool,
-    _buffer: Buffer,
+    pool: SlotPool,
+    /// File name shown on the chip.
+    label: String,
+    /// Chip size in logical pixels (the buffer is this times `scale`).
+    logical_w: i32,
+    logical_h: i32,
+    /// Side length of the square badge at the chip's left edge.
+    badge: i32,
+    /// Integer buffer scale the chip is rendered at.
+    scale: i32,
+    /// Currently painted feedback, so re-renders are skipped when unchanged.
+    feedback: DragFeedback,
 }
 
 impl State {
@@ -465,81 +508,126 @@ impl State {
             .clone()
             .unwrap_or_else(|| self.window.wl_surface().clone());
 
-        // A small surface that rides the cursor so the user can see what
-        // they're carrying. Built before we borrow the device/manager (it only
-        // needs `&self`); `None` if we couldn't allocate it — the drag still
-        // works, just without the icon.
-        let icon = self.build_drag_icon(&data);
+        // The surface that rides the cursor so the user can see what they're
+        // carrying. Laid out before we borrow the device/manager (needs only
+        // `&self`); `None` if we couldn't allocate it — the drag still works.
+        let icon = self.create_drag_icon(&data);
 
         // Offer only the uri-list, copy-only (we never want a move to make the
         // source side delete the user's files).
         let source = mgr.create_drag_and_drop_source(&self.qh, [URI_LIST_MIME], DndAction::Copy);
         source.start_drag(dd, &origin, icon.as_ref().map(|i| &i.surface), serial);
-        // The drag-icon role is assigned by `start_drag`; commit the prepared
-        // buffer now so the compositor actually shows it.
-        if let Some(i) = &icon {
-            i.surface.commit();
-        }
         self.drag_payload = paths_to_uri_list(&data.paths).into_bytes();
         self.drag_source = Some(source);
-        self.drag_icon = icon;
+        // Now that `start_drag` has given the surface the drag-icon role, paint
+        // and commit it. It starts as "no-drop" (nothing valid under the cursor
+        // yet); `action` upgrades it to "copy" once a target accepts.
+        if let Some(mut icon) = icon {
+            self.paint_drag_icon(&mut icon);
+            self.drag_icon = Some(icon);
+        }
+        // Also ask for a themed copy/no-drop cursor. River ignores this mid-drag
+        // (it revokes our pointer focus), but compositors that render DnD cursors
+        // (GNOME, KDE) honor it — so the cursor is right there and the icon badge
+        // covers wlroots.
+        self.set_drag_cursor(Shape::NoDrop);
     }
 
-    /// Render the cursor-following drag icon: a small raised panel naming what's
-    /// being dragged (the file's name, or "N items"). Returns `None` if there's
-    /// no font or the buffer can't be allocated — callers treat that as "no
-    /// icon" and drag without one.
-    fn build_drag_icon(&self, data: &DragData) -> Option<DragIcon> {
+    /// Lay out the cursor-following drag icon and allocate its surface + pool,
+    /// but don't paint it yet — the surface only becomes a drag icon once
+    /// `start_drag` assigns the role, so [`Self::paint_drag_icon`] is called
+    /// (which commits) afterwards. Returns `None` if there's no font, so callers
+    /// drag without an icon.
+    fn create_drag_icon(&self, data: &DragData) -> Option<DragIcon> {
         let label = drag_icon_label(&data.paths);
         let font = self.font.as_ref()?;
-        let size = self.theme.font_size;
-        let (text_w, text_h) = font.measure(&label, size);
+        let (text_w, text_h) = font.measure(&label, self.theme.font_size);
+        let text_h = text_h.ceil() as i32;
 
-        const PAD: i32 = 6;
-        let logical_w = text_w.ceil() as i32 + PAD * 2;
-        let logical_h = text_h.ceil() as i32 + PAD * 2;
+        let badge = text_h.max(DRAG_ICON_BADGE_MIN);
+        let logical_w =
+            DRAG_ICON_PAD + badge + DRAG_ICON_GAP + text_w.ceil() as i32 + DRAG_ICON_PAD;
+        let logical_h = DRAG_ICON_PAD + badge.max(text_h) + DRAG_ICON_PAD;
         let scale = self.scale.max(1);
-        let buf_w = logical_w * scale;
-        let buf_h = logical_h * scale;
-        let stride = buf_w * 4;
+        // Room for two buffers so a re-render (on a feedback change) can grab a
+        // fresh slot while the compositor still holds the previous one.
+        let pool_bytes = (logical_w * scale * logical_h * scale * 4) as usize * 2;
+        let pool = SlotPool::new(pool_bytes, &self.shm).ok()?;
+        let surface = self.compositor.create_surface(&self.qh);
 
-        let mut pool = SlotPool::new((buf_w * buf_h * 4) as usize, &self.shm).ok()?;
-        let buffer = pool
-            .create_buffer(buf_w, buf_h, stride, wl_shm::Format::Argb8888)
-            .ok()?
-            .0;
-        let canvas = pool.canvas(&buffer)?;
+        Some(DragIcon {
+            surface,
+            pool,
+            label,
+            logical_w,
+            logical_h,
+            badge,
+            scale,
+            feedback: DragFeedback::NoDrop,
+        })
+    }
+
+    /// (Re)paint the drag icon for its current `feedback` and commit it. Safe to
+    /// call repeatedly during a drag — the icon surface stays mapped, so each
+    /// commit just swaps what follows the cursor. A no-op if the pool's buffer
+    /// is momentarily busy (the previous frame stays up until the next change).
+    fn paint_drag_icon(&self, icon: &mut DragIcon) {
+        let buf_w = icon.logical_w * icon.scale;
+        let buf_h = icon.logical_h * icon.scale;
+        let stride = buf_w * 4;
+        let Ok((buffer, _)) =
+            icon.pool
+                .create_buffer(buf_w, buf_h, stride, wl_shm::Format::Argb8888)
+        else {
+            return;
+        };
+        let Some(canvas) = icon.pool.canvas(&buffer) else {
+            return;
+        };
         let pixels = bytes_as_u32_mut(canvas);
         {
             let mut painter = Painter::with_popup_anchor(
                 pixels,
                 buf_w,
                 buf_h,
-                scale as f32,
+                icon.scale as f32,
                 0,
                 0,
                 self.font.as_ref(),
                 self.mono_font.as_ref(),
                 None,
             );
-            painter.set_system_scale(self.fractional_scale.unwrap_or(scale as f32));
-            let area = Rect::new(0, 0, logical_w, logical_h);
+            painter.set_system_scale(self.fractional_scale.unwrap_or(icon.scale as f32));
+            let area = Rect::new(0, 0, icon.logical_w, icon.logical_h);
             painter.fill_rect(area, self.theme.background);
             painter.raised_bevel(area, self.theme.highlight, self.theme.shadow);
-            painter.text(PAD, PAD, &label, size, self.theme.text);
+            let badge = Rect::new(DRAG_ICON_PAD, DRAG_ICON_PAD, icon.badge, icon.badge);
+            draw_drag_badge(&mut painter, badge, icon.feedback);
+            painter.text(
+                DRAG_ICON_PAD + icon.badge + DRAG_ICON_GAP,
+                DRAG_ICON_PAD,
+                &icon.label,
+                self.theme.font_size,
+                self.theme.text,
+            );
         }
+        let _ = buffer.attach_to(&icon.surface);
+        icon.surface.set_buffer_scale(icon.scale);
+        icon.surface.damage_buffer(0, 0, buf_w, buf_h);
+        icon.surface.commit();
+    }
 
-        let surface = self.compositor.create_surface(&self.qh);
-        surface.set_buffer_scale(scale);
-        buffer.attach_to(&surface).ok()?;
-        surface.damage_buffer(0, 0, buf_w, buf_h);
-        // Deliberately *not* committed here — the surface only becomes a drag
-        // icon once `start_drag` assigns the role, so the caller commits after.
-        Some(DragIcon {
-            surface,
-            _pool: pool,
-            _buffer: buffer,
-        })
+    /// Swap the drag icon's badge to reflect whether the spot under the cursor
+    /// accepts the drop, repainting only when it actually changed.
+    fn update_drag_feedback(&mut self, feedback: DragFeedback) {
+        let Some(mut icon) = self.drag_icon.take() else {
+            return;
+        };
+        if icon.feedback != feedback {
+            icon.feedback = feedback;
+            self.paint_drag_icon(&mut icon);
+        }
+        self.drag_icon = Some(icon);
     }
 
     /// Tear down the active outbound drag source once it's no longer needed
@@ -559,6 +647,27 @@ impl State {
                 icon.surface.destroy();
             }
             self.drag_payload.clear();
+            // Hand the pointer back to its normal cursor.
+            self.set_drag_cursor(Shape::Default);
+        }
+    }
+
+    /// Set the pointer to `shape` via `wp_cursor_shape` — used to show the drag
+    /// cursor (copy / no-drop) while we're the drag source. `set_shape` wants
+    /// the latest `wl_pointer.enter` serial, which SCTK tracks for us. A no-op
+    /// when the protocol is unavailable or no serial is on record; if the
+    /// compositor declines to honor it mid-drag, the cursor simply stays put.
+    fn set_drag_cursor(&self, shape: Shape) {
+        let (Some(device), Some(pointer)) =
+            (self.cursor_shape_device.as_ref(), self.pointer.as_ref())
+        else {
+            return;
+        };
+        if let Some(serial) = pointer
+            .data::<PointerData>()
+            .and_then(|d| d.latest_enter_serial())
+        {
+            device.set_shape(serial, shape);
         }
     }
 
@@ -1096,6 +1205,12 @@ impl SeatHandler for State {
         }
         if capability == Capability::Pointer && self.pointer.is_none() {
             self.pointer = self.seat_state.get_pointer(qh, &seat).ok();
+            // Pair the pointer with a cursor-shape device so a drag can swap in
+            // the copy / no-drop cursor. Sender-only; no events come back.
+            if let (Some(mgr), Some(ptr)) = (self.cursor_shape_mgr.as_ref(), self.pointer.as_ref())
+            {
+                self.cursor_shape_device = Some(mgr.get_pointer(ptr, qh, ()));
+            }
         }
     }
     fn remove_capability(
@@ -1550,7 +1665,41 @@ impl DataSourceHandler for State {
         // Transfer complete: the source has done its job, so destroy it.
         self.end_drag_source(source);
     }
-    fn action(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &WlDataSource, _: DndAction) {}
+    fn action(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        source: &WlDataSource,
+        action: DndAction,
+    ) {
+        // The compositor reports the action the current target would take as the
+        // pointer moves: a real action (copy/move) means a valid drop target is
+        // under the cursor, an empty action means there isn't one. Reflect that
+        // in the cursor so the user can see where a drop will land.
+        if !self
+            .drag_source
+            .as_ref()
+            .is_some_and(|s| s.inner() == source)
+        {
+            return;
+        }
+        let valid = action.contains(DndAction::Copy) || action.contains(DndAction::Move);
+        // The badge is the feedback that actually shows on wlroots; the cursor
+        // shape is the bonus for compositors that honor it mid-drag.
+        self.update_drag_feedback(if valid {
+            DragFeedback::Copy
+        } else {
+            DragFeedback::NoDrop
+        });
+        let shape = if action.contains(DndAction::Move) {
+            Shape::Move
+        } else if valid {
+            Shape::Copy
+        } else {
+            Shape::NoDrop
+        };
+        self.set_drag_cursor(shape);
+    }
 }
 
 impl ShmHandler for State {
@@ -1679,6 +1828,73 @@ fn percent_encode_path(bytes: &[u8]) -> String {
     out
 }
 
+/// Drag-icon layout, in logical pixels: padding around the chip, the gap
+/// between the badge and the label, and a floor on the badge size so it stays
+/// legible with tiny fonts.
+const DRAG_ICON_PAD: i32 = 6;
+const DRAG_ICON_GAP: i32 = 6;
+const DRAG_ICON_BADGE_MIN: i32 = 12;
+
+/// Paint the drop-feedback badge into `area`: a white checkmark on a green
+/// square when the target accepts the drop, a white cross on a red square when
+/// it doesn't. The glyph strokes are drawn in physical pixels (inside
+/// [`Painter::physical`]) so the diagonals stay crisp at any scale.
+fn draw_drag_badge(painter: &mut Painter, area: Rect, feedback: DragFeedback) {
+    let (bg, accept) = match feedback {
+        DragFeedback::Copy => (Color::GREEN, true),
+        DragFeedback::NoDrop => (Color::RED, false),
+    };
+    painter.fill_rect(area, bg);
+    painter.physical(area, |p, r| {
+        let stroke = (r.w / 7).max(2);
+        // A point at fraction (fx, fy) across the badge, in physical pixels.
+        let at = |fx: f32, fy: f32| -> (i32, i32) {
+            (
+                r.x + (r.w as f32 * fx).round() as i32,
+                r.y + (r.h as f32 * fy).round() as i32,
+            )
+        };
+        if accept {
+            // Checkmark: a short stroke down into the valley, then a long one up.
+            let (ax, ay) = at(0.20, 0.52);
+            let (bx, by) = at(0.42, 0.72);
+            let (cx, cy) = at(0.80, 0.26);
+            draw_thick_line(p, ax, ay, bx, by, stroke, Color::WHITE);
+            draw_thick_line(p, bx, by, cx, cy, stroke, Color::WHITE);
+        } else {
+            // Cross: the two diagonals of an X.
+            let (ax, ay) = at(0.27, 0.27);
+            let (bx, by) = at(0.73, 0.73);
+            let (cx, cy) = at(0.73, 0.27);
+            let (dx, dy) = at(0.27, 0.73);
+            draw_thick_line(p, ax, ay, bx, by, stroke, Color::WHITE);
+            draw_thick_line(p, cx, cy, dx, dy, stroke, Color::WHITE);
+        }
+    });
+}
+
+/// Draw a `thickness`-wide line between two points by stepping along the longer
+/// axis and stamping a square at each step — enough for the small badge glyphs.
+/// Expects physical-pixel coordinates (call inside [`Painter::physical`]).
+fn draw_thick_line(
+    painter: &mut Painter,
+    x0: i32,
+    y0: i32,
+    x1: i32,
+    y1: i32,
+    thickness: i32,
+    color: Color,
+) {
+    let steps = (x1 - x0).abs().max((y1 - y0).abs()).max(1);
+    let half = thickness / 2;
+    for i in 0..=steps {
+        let t = i as f32 / steps as f32;
+        let x = x0 + ((x1 - x0) as f32 * t).round() as i32;
+        let y = y0 + ((y1 - y0) as f32 * t).round() as i32;
+        painter.fill_rect(Rect::new(x - half, y - half, thickness, thickness), color);
+    }
+}
+
 /// The label shown on the cursor-following drag icon: the single file's name,
 /// or "N items" for a multi-file drag.
 fn drag_icon_label(paths: &[PathBuf]) -> String {
@@ -1775,6 +1991,33 @@ impl Dispatch<XdgDialogV1, ()> for State {
         _state: &mut Self,
         _proxy: &XdgDialogV1,
         _event: <XdgDialogV1 as Proxy>::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qhandle: &QueueHandle<Self>,
+    ) {
+    }
+}
+
+// wp_cursor_shape_manager_v1 and its per-pointer device are both sender-only
+// (we only call get_pointer / set_shape). Empty Dispatch impls satisfy the
+// queue handle.
+impl Dispatch<WpCursorShapeManagerV1, ()> for State {
+    fn event(
+        _state: &mut Self,
+        _proxy: &WpCursorShapeManagerV1,
+        _event: <WpCursorShapeManagerV1 as Proxy>::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qhandle: &QueueHandle<Self>,
+    ) {
+    }
+}
+
+impl Dispatch<WpCursorShapeDeviceV1, ()> for State {
+    fn event(
+        _state: &mut Self,
+        _proxy: &WpCursorShapeDeviceV1,
+        _event: <WpCursorShapeDeviceV1 as Proxy>::Event,
         _data: &(),
         _conn: &Connection,
         _qhandle: &QueueHandle<Self>,
