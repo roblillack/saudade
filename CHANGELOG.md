@@ -10,6 +10,8 @@ While pre-1.0, the minor version is bumped for breaking changes.
 
 ## [Unreleased] - ReleaseDate
 
+## [0.2.0] - 2026-06-06
+
 ### Added
 
 - Compile-time SVG support: the `include_svg!` macro bakes an SVG into
@@ -41,5 +43,6 @@ While pre-1.0, the minor version is bumped for breaking changes.
 Initial release.
 
 <!-- next-url -->
-[Unreleased]: https://github.com/roblillack/saudade/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/roblillack/saudade/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/roblillack/saudade/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/roblillack/saudade/releases/tag/v0.1.0
