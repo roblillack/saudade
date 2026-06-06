@@ -82,8 +82,10 @@ impl Widget for DropZone {
 
     fn event(&mut self, event: &Event, ctx: &mut EventCtx) {
         match event {
-            // A drag is hovering: light up so the user sees this is a target.
+            // A drag is hovering: opt in as a drop target (so the source sees a
+            // valid drop here) and light up so the user sees it too.
             Event::DragEnter { .. } | Event::DragMove { .. } => {
+                ctx.accept_drop();
                 if !self.hovering {
                     self.hovering = true;
                     ctx.request_paint();

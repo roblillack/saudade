@@ -235,19 +235,32 @@ A widget opts in by matching these in its `event` handler — there's no separat
 trait method. `DragEnter` / `DragMove` / `Drop` carry a `pos` and route to the
 widget under the cursor exactly like pointer events; `DragLeave` carries no
 position and is broadcast to every widget (like `PointerLeave`), so any drop
-target can clear a highlight. A typical drop target highlights on `DragEnter`,
+target can clear a highlight. A drop target **must call `ctx.accept_drop()`**
+while handling `DragEnter` / `DragMove` to declare it will take a drop there;
+without it the runtime treats the widget as uninterested and the drag falls
+through. That's also what tells the *source* app the spot is a valid target —
+its drag cursor reflects it — so windows with no drop zone correctly read as
+"no drop". A typical drop target accepts + highlights on `DragEnter`,
 un-highlights on `DragLeave`, and consumes `data.paths` on `Drop`:
 
 ```rust
 fn event(&mut self, event: &Event, ctx: &mut EventCtx) {
     match event {
-        Event::DragEnter { .. } | Event::DragMove { .. } => { self.hot = true; ctx.request_paint(); }
+        Event::DragEnter { .. } | Event::DragMove { .. } => {
+            ctx.accept_drop();           // <- required to receive the drop
+            self.hot = true;
+            ctx.request_paint();
+        }
         Event::DragLeave => { self.hot = false; ctx.request_paint(); }
         Event::Drop { data, .. } => { self.open_files(&data.paths); ctx.request_paint(); }
         _ => {}
     }
 }
 ```
+
+(On Wayland `accept_drop` accepts the drag offer per position; on the winit
+backends the OS has already committed to the drop, so it's advisory there but
+keeps drop targets portable.)
 
 The **payload only arrives with `Drop`**, never with `DragEnter` / `DragMove`:
 the platforms only let us read a drag's contents reliably once the user actually

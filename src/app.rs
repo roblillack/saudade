@@ -498,6 +498,11 @@ impl AppHandler {
             // drag *sources* are a Wayland-only capability (see
             // `EventCtx::start_drag`). Receiving drops still works everywhere.
         }
+        // A drop target may have called `accept_drop`, but the OS has already
+        // committed to offering the file drag on the winit backends — we can't
+        // refuse it the way Wayland can — so the flag is advisory here and the
+        // `Drop` is delivered regardless.
+        let _ = ctx.accepts_drop;
     }
 
     /// Turn the file paths buffered from `HoveredFile` / `DroppedFile` events

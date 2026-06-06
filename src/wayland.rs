@@ -379,6 +379,10 @@ struct DragSession {
     anchor: Point,
     /// Last reported position in widget-tree logical coordinates.
     pos: Point,
+    /// Whether a widget under the cursor opted in to the drop on the last
+    /// `DragEnter`/`DragMove`. Tracked so we only re-tell the offer when the
+    /// answer actually changes as the drag moves within the window.
+    accepted: bool,
 }
 
 /// Whether the spot under the cursor will accept the drop. River (and other
@@ -465,7 +469,12 @@ impl State {
         ));
     }
 
-    fn dispatch(&mut self, event: Event) {
+    /// Dispatch `event` into the widget tree and apply the requests it left on
+    /// the [`EventCtx`]. Returns whether a widget called
+    /// [`EventCtx::accept_drop`] — meaningful only for the incoming-drag events,
+    /// where the caller turns it into accept/reject on the drag offer; every
+    /// other caller ignores it.
+    fn dispatch(&mut self, event: Event) -> bool {
         let mut ctx = EventCtx::new();
         self.root.event(&event, &mut ctx);
         if ctx.paint_requested {
@@ -481,6 +490,7 @@ impl State {
         if let Some(data) = ctx.drag_request.take() {
             self.begin_drag(data);
         }
+        ctx.accepts_drop
     }
 
     /// Start an outbound drag carrying `data`'s file paths, in response to a
@@ -963,6 +973,22 @@ impl State {
             .unwrap_or(Point::new(0, 0))
     }
 
+    /// Tell an incoming drag offer whether we'll take it. Accepting asks for a
+    /// *copy* (never move — we must not make the source delete the user's file)
+    /// and names the uri-list; rejecting clears the action and mime so the
+    /// source sees "no drop" over us. Flushed right away so the source's cursor
+    /// updates without waiting for the next loop turn.
+    fn apply_drag_offer(&self, offer: &DragOffer, accepted: bool, conn: &Connection) {
+        if accepted {
+            offer.set_actions(DndAction::Copy, DndAction::Copy);
+            offer.accept_mime_type(offer.serial, Some(URI_LIST_MIME.to_string()));
+        } else {
+            offer.set_actions(DndAction::empty(), DndAction::empty());
+            offer.accept_mime_type(offer.serial, None);
+        }
+        let _ = conn.flush();
+    }
+
     /// Create this seat's data device (once) so drag offers start arriving. A
     /// drag is delivered through the seat that owns the pointer; one device is
     /// enough for the single-seat setups saudade targets.
@@ -1441,22 +1467,29 @@ impl DataDeviceHandler for State {
         let Some(offer) = offer else { return };
 
         // We only handle file drags. Reject anything without `text/uri-list`
-        // so the compositor shows the "can't drop here" cursor over us.
-        let accepts = offer.with_mime_types(|mimes| mimes.iter().any(|m| m == URI_LIST_MIME));
-        if !accepts {
+        // outright so the compositor shows "can't drop here" over us.
+        let has_uri = offer.with_mime_types(|mimes| mimes.iter().any(|m| m == URI_LIST_MIME));
+        if !has_uri {
             offer.accept_mime_type(offer.serial, None);
             return;
         }
-        // Accept a *copy* (never move — we must not make the source delete the
-        // user's file) and tell the source we'll take the uri-list.
-        offer.set_actions(DndAction::Copy, DndAction::Copy);
-        offer.accept_mime_type(offer.serial, Some(URI_LIST_MIME.to_string()));
-        let _ = conn.flush();
 
         let anchor = self.surface_anchor(surface);
         let pos = Point::new(x.floor() as i32 + anchor.x, y.floor() as i32 + anchor.y);
-        self.drag = Some(DragSession { anchor, pos });
-        self.dispatch(Event::DragEnter { pos });
+        self.drag = Some(DragSession {
+            anchor,
+            pos,
+            accepted: false,
+        });
+        // Offer the drag to the widget tree first; only accept it if a widget
+        // opts in via `EventCtx::accept_drop`. Accepting unconditionally would
+        // tell the source every window is a drop target, even ones with no drop
+        // zone — so the source's cursor would wrongly read "copy" over us.
+        let accepted = self.dispatch(Event::DragEnter { pos });
+        if let Some(d) = self.drag.as_mut() {
+            d.accepted = accepted;
+        }
+        self.apply_drag_offer(&offer, accepted, conn);
         self.mark_popups_dirty();
     }
 
@@ -1469,7 +1502,7 @@ impl DataDeviceHandler for State {
 
     fn motion(
         &mut self,
-        _conn: &Connection,
+        conn: &Connection,
         _qh: &QueueHandle<Self>,
         _data_device: &WlDataDevice,
         x: f64,
@@ -1482,7 +1515,22 @@ impl DataDeviceHandler for State {
         if let Some(drag) = self.drag.as_mut() {
             drag.pos = pos;
         }
-        self.dispatch(Event::DragMove { pos });
+        // Re-evaluate acceptance for the new position — a drag can cross from a
+        // drop zone to plain content within one window — and only re-tell the
+        // offer when the answer flipped.
+        let accepted = self.dispatch(Event::DragMove { pos });
+        let changed = self.drag.as_ref().is_some_and(|d| d.accepted != accepted);
+        if let Some(drag) = self.drag.as_mut() {
+            drag.accepted = accepted;
+        }
+        if changed
+            && let Some(offer) = self
+                .data_device
+                .as_ref()
+                .and_then(|dd| dd.data().drag_offer())
+        {
+            self.apply_drag_offer(&offer, accepted, conn);
+        }
         self.mark_popups_dirty();
     }
 
@@ -1625,9 +1673,24 @@ impl DataSourceHandler for State {
         &mut self,
         _: &Connection,
         _: &QueueHandle<Self>,
-        _: &WlDataSource,
-        _: Option<String>,
+        source: &WlDataSource,
+        mime: Option<String>,
     ) {
+        // The compositor reports whether the destination under the cursor
+        // accepts one of our mime types — `Some` means a real target, `None`
+        // means none. It's a more immediate signal than `action`, so mirror it
+        // into the badge too.
+        if self
+            .drag_source
+            .as_ref()
+            .is_some_and(|s| s.inner() == source)
+        {
+            self.update_drag_feedback(if mime.is_some() {
+                DragFeedback::Copy
+            } else {
+                DragFeedback::NoDrop
+            });
+        }
     }
     fn send_request(
         &mut self,

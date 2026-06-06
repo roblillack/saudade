@@ -248,6 +248,12 @@ pub struct EventCtx {
     /// it into a real OS drag. Only the Wayland backend acts on it (see the
     /// method docs); the winit backends drop it.
     pub(crate) drag_request: Option<DragData>,
+    /// Set when a widget calls [`Self::accept_drop`] while handling an incoming
+    /// [`Event::DragEnter`] / [`Event::DragMove`] to say it will take a drop at
+    /// this position. The Wayland backend reads it after dispatch to accept or
+    /// reject the drag offer, so the source app learns whether this is a valid
+    /// drop target.
+    pub(crate) accepts_drop: bool,
 }
 
 impl EventCtx {
@@ -261,6 +267,7 @@ impl EventCtx {
             dismiss_requested: false,
             resize_request: None,
             drag_request: None,
+            accepts_drop: false,
         }
     }
 
@@ -365,5 +372,22 @@ impl EventCtx {
     /// backend. The drag copies (never moves) the referenced files.
     pub fn start_drag(&mut self, data: DragData) {
         self.drag_request = Some(data);
+    }
+
+    /// Signal, while handling an incoming [`Event::DragEnter`] or
+    /// [`Event::DragMove`], that this widget will accept a drop at the current
+    /// position. A drop target **must** call this to receive drops: the runtime
+    /// treats a widget that doesn't as not interested, so the drag falls through
+    /// it. Re-evaluated on every move, so a target can accept only over its hot
+    /// region and decline elsewhere in the same window.
+    ///
+    /// On Wayland this is what tells the source app the spot is a valid target
+    /// (its drag cursor / feedback reflects it) and is the prerequisite for a
+    /// later [`Event::Drop`] landing here. On the winit backends the OS has
+    /// already committed to offering the drop, so this is advisory there —
+    /// [`Event::Drop`] arrives regardless — but calling it keeps drop targets
+    /// portable.
+    pub fn accept_drop(&mut self) {
+        self.accepts_drop = true;
     }
 }
