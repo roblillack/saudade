@@ -29,6 +29,17 @@ While pre-1.0, the minor version is bumped for breaking changes.
   dropping it: each gradient bakes into a stack of flat-color bands (strips for
   linear, nested disks for radial) clipped to the painted shape. Gradient fills
   and strokes are no longer reported as unsupported.
+- File drag-and-drop: drop files from the OS onto a window. New `Event::DragEnter`
+  / `DragMove` / `DragLeave` / `Drop` events carry a `DragData` of file paths,
+  and a drop target opts in by calling `EventCtx::accept_drop()` while handling
+  `DragEnter` / `DragMove`. Works on macOS, Windows, X11, and Wayland. See the
+  `dnd` example. (#23)
+- Dragging files *out* of a window (drag source), Wayland only:
+  `EventCtx::start_drag()` begins an OS `text/uri-list` drag from a widget's
+  press-and-drag gesture, with an icon that follows the cursor and shows a green
+  checkmark over a target that accepts the drop or a red cross elsewhere. The
+  winit backends (macOS, Windows, X11) expose no API to initiate a drag, so it
+  is a no-op there. See the `filer` example. (#23)
 
 ## [0.2.0] - 2026-06-06
 
