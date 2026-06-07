@@ -82,9 +82,9 @@ While pre-1.0, the minor version is bumped for breaking changes.
 - `ScrollBar` chrome now matches Win 3.1 more closely: the arrow buttons and
   thumb use the lighter `light_button` frame (square outline, one highlight line
   instead of two), the track gains a thin black outline that collapses into the
-  button/thumb frames where they meet, the arrow glyphs are inset so they sit
-  centered on the button face with the classic margin instead of filling it edge
-  to edge, and the empty track shows the classic black-on-gray "newsprint"
+  button/thumb frames where they meet, the arrow glyphs sit centered on the
+  button face with the classic margin instead of filling it edge to edge, and
+  the empty track shows the classic black-on-gray "newsprint"
   checkerboard instead of a flat gray fill.
 
 ## [0.2.0] - 2026-06-06

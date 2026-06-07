@@ -11,12 +11,6 @@ use crate::widget::Widget;
 pub const SCROLLBAR_THICKNESS: i32 = 16;
 const ARROW_BTN: i32 = SCROLLBAR_THICKNESS;
 const MIN_THUMB: i32 = 16;
-/// Logical-pixel margin left around the arrow glyph inside its button, so the
-/// small triangle sits centered on the face rather than filling the button edge
-/// to edge — the classic Win 3.1 proportion. The lighter [`Painter::light_button`]
-/// frame no longer visually recesses the glyph the way the old heavy bevel did,
-/// so the inset restores that breathing room explicitly.
-const ARROW_INSET: i32 = 3;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Orientation {
@@ -390,7 +384,10 @@ const ARROW_LEFT: SvgImage = include_svg!("assets/scrollbar/left.svg");
 const ARROW_RIGHT: SvgImage = include_svg!("assets/scrollbar/right.svg");
 
 /// Fill the arrow glyph into `btn` in `color`, pointing in the requested
-/// direction for the bar's orientation.
+/// direction for the bar's orientation. The SVG is drawn across the whole
+/// button rect: each glyph's 16-unit viewBox already centers the small triangle
+/// with the classic Win 3.1 margin around it, so it maps 1:1 onto the 16px
+/// button at 1.0x without any extra inset.
 fn draw_arrow(painter: &mut Painter, btn: Rect, orient: Orientation, dir: ArrowDir, color: Color) {
     let arrow = match (orient, dir) {
         (Orientation::Vertical, ArrowDir::Negative) => &ARROW_UP,
@@ -398,5 +395,5 @@ fn draw_arrow(painter: &mut Painter, btn: Rect, orient: Orientation, dir: ArrowD
         (Orientation::Horizontal, ArrowDir::Negative) => &ARROW_LEFT,
         (Orientation::Horizontal, ArrowDir::Positive) => &ARROW_RIGHT,
     };
-    arrow.draw_tinted(painter, btn.inset(ARROW_INSET), color);
+    arrow.draw_tinted(painter, btn, color);
 }
