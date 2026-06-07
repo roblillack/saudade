@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use crate::geometry::{Point, Size};
 
 /// How many document lines one mouse-wheel detent (notch) scrolls. Matches the
@@ -85,7 +87,40 @@ impl Modifiers {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
+/// The payload of a drag-and-drop operation — what the user is dragging into
+/// the window.
+///
+/// Today this is the list of file-system paths a drag carries (parsed from the
+/// platform's `text/uri-list` on Wayland, or winit's `HoveredFile` /
+/// `DroppedFile` paths). It's a struct rather than a bare `Vec<PathBuf>` so that
+/// future payload kinds (dragged text, an image) can be added without breaking
+/// the [`Event`] variants that carry it.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct DragData {
+    /// File-system paths being dragged. Empty when the drag carries no files
+    /// the backend could resolve to local paths.
+    pub paths: Vec<PathBuf>,
+}
+
+impl DragData {
+    /// A payload carrying the given file paths.
+    pub fn from_paths(paths: impl IntoIterator<Item = PathBuf>) -> Self {
+        Self {
+            paths: paths.into_iter().collect(),
+        }
+    }
+
+    /// `true` when the drag resolved to at least one file path.
+    pub fn has_paths(&self) -> bool {
+        !self.paths.is_empty()
+    }
+}
+
+/// Note: [`Event`] is `Clone` but **not** `Copy` — the drag variants carry a
+/// [`DragData`] (which owns a `Vec`). Dispatch always passes `&Event`, so this
+/// costs nothing on the hot path; only a widget that wants to *keep* a dropped
+/// payload pays for the clone.
+#[derive(Clone, Debug)]
 pub enum Event {
     PointerMove {
         pos: Point,
@@ -112,6 +147,37 @@ pub enum Event {
         delta_x: f32,
         delta_y: f32,
     },
+    /// A drag carrying droppable content entered the window over `pos`. A drop
+    /// target highlights itself here. The payload itself arrives with
+    /// [`Event::Drop`] — not here — because the platforms only let us read it
+    /// reliably once the user actually drops (reading mid-hover can block on a
+    /// source that withholds the data until then). `pos` is the pointer
+    /// location in logical pixels; on Wayland it is exact, on the winit backends
+    /// (macOS / Windows / X11) it is best-effort — winit reports no cursor
+    /// coordinates during a file drag, so it reflects the last in-window
+    /// pointer position.
+    DragEnter {
+        pos: Point,
+    },
+    /// The drag moved to `pos` while still inside the window. Routed to the
+    /// widget under the cursor, so dragging across widgets hands the highlight
+    /// from one drop target to the next. Only the Wayland backend tracks the
+    /// pointer during a drag and emits this; the winit backends go straight
+    /// from [`Event::DragEnter`] to [`Event::Drop`].
+    DragMove {
+        pos: Point,
+    },
+    /// The drag left the window, or was cancelled, without dropping. Like
+    /// [`Event::PointerLeave`] it carries no position and is broadcast to every
+    /// widget so any drop target can clear its highlight.
+    DragLeave,
+    /// The content was released over `pos`. This is where the payload (see
+    /// [`DragData`]) is consumed — e.g. open the dropped file. Routed to the
+    /// widget under the cursor exactly like [`Event::PointerUp`].
+    Drop {
+        pos: Point,
+        data: DragData,
+    },
     KeyDown {
         key: Key,
         modifiers: Modifiers,
@@ -137,7 +203,10 @@ impl Event {
             Event::PointerMove { pos }
             | Event::PointerDown { pos, .. }
             | Event::PointerUp { pos, .. }
-            | Event::Scroll { pos, .. } => Some(*pos),
+            | Event::Scroll { pos, .. }
+            | Event::DragEnter { pos, .. }
+            | Event::DragMove { pos, .. }
+            | Event::Drop { pos, .. } => Some(*pos),
             _ => None,
         }
     }
@@ -174,6 +243,17 @@ pub struct EventCtx {
     /// requests. The window's size is the app's to choose (unlike the scale
     /// factor, which only the OS sets).
     pub(crate) resize_request: Option<Size>,
+    /// Set when a widget calls [`Self::start_drag`] to begin dragging content
+    /// out of the window. Consumed by the backend after dispatch, which turns
+    /// it into a real OS drag. Only the Wayland backend acts on it (see the
+    /// method docs); the winit backends drop it.
+    pub(crate) drag_request: Option<DragData>,
+    /// Set when a widget calls [`Self::accept_drop`] while handling an incoming
+    /// [`Event::DragEnter`] / [`Event::DragMove`] to say it will take a drop at
+    /// this position. The Wayland backend reads it after dispatch to accept or
+    /// reject the drag offer, so the source app learns whether this is a valid
+    /// drop target.
+    pub(crate) accepts_drop: bool,
 }
 
 impl EventCtx {
@@ -186,6 +266,8 @@ impl EventCtx {
             consumed: false,
             dismiss_requested: false,
             resize_request: None,
+            drag_request: None,
+            accepts_drop: false,
         }
     }
 
@@ -274,5 +356,38 @@ impl EventCtx {
     /// controls.
     pub fn request_window_size(&mut self, width: i32, height: i32) {
         self.resize_request = Some(Size::new(width.max(1), height.max(1)));
+    }
+
+    /// Begin dragging `data` out of this window as an OS drag-and-drop
+    /// operation — the mirror of receiving a [`Event::Drop`]. Call this from a
+    /// widget's `event` handler once a press-then-move gesture is recognized
+    /// (typically on [`Event::PointerMove`] after the pointer has travelled a
+    /// few pixels from a [`Event::PointerDown`]), so a plain click still reads
+    /// as a click rather than starting a drag.
+    ///
+    /// **Wayland only.** The winit backends (macOS, Windows, X11) expose no API
+    /// to *initiate* a drag, so this is a no-op there; only the Wayland backend
+    /// turns it into a real drag whose `text/uri-list` payload other
+    /// applications can drop. Receiving drops, by contrast, works on every
+    /// backend. The drag copies (never moves) the referenced files.
+    pub fn start_drag(&mut self, data: DragData) {
+        self.drag_request = Some(data);
+    }
+
+    /// Signal, while handling an incoming [`Event::DragEnter`] or
+    /// [`Event::DragMove`], that this widget will accept a drop at the current
+    /// position. A drop target **must** call this to receive drops: the runtime
+    /// treats a widget that doesn't as not interested, so the drag falls through
+    /// it. Re-evaluated on every move, so a target can accept only over its hot
+    /// region and decline elsewhere in the same window.
+    ///
+    /// On Wayland this is what tells the source app the spot is a valid target
+    /// (its drag cursor / feedback reflects it) and is the prerequisite for a
+    /// later [`Event::Drop`] landing here. On the winit backends the OS has
+    /// already committed to offering the drop, so this is advisory there —
+    /// [`Event::Drop`] arrives regardless — but calling it keeps drop targets
+    /// portable.
+    pub fn accept_drop(&mut self) {
+        self.accepts_drop = true;
     }
 }
