@@ -18,7 +18,7 @@ use crate::widgets::{Button, Container, Dropdown, TextInput};
 // ----------------------------------------------------------------------------
 
 /// Default client size of the dialog. Roomy enough for one tall list plus the
-/// File name / Filter rows and the OK / Cancel buttons beside them.
+/// File name / File types rows and the OK / Cancel buttons beside them.
 const DIALOG_W: i32 = 460;
 const DIALOG_H: i32 = 300;
 /// Outer padding inside the dialog client rect.
@@ -33,7 +33,7 @@ const LIST_GAP: i32 = 6;
 const BTN_W: i32 = 75;
 const BTN_H: i32 = 26;
 const BTN_GAP: i32 = 8;
-/// Gap between the File name / Filter fields and the button column.
+/// Gap between the File name / File types fields and the button column.
 const COL_GAP: i32 = 14;
 /// Width reserved for the inline "File name:" / "File types:" labels.
 const LABEL_COL_W: i32 = 78;
@@ -193,20 +193,21 @@ impl FileDialog {
 
     /// Open the dialog to pick a file. `on_open` runs with the chosen path when
     /// the user confirms (Open / double-click / Enter); Cancel or Escape close
-    /// it without calling back. The **File name** field starts on the selected
-    /// filter's pattern.
+    /// it without calling back. The focused **File name** field starts empty —
+    /// the user picks a file from the list or types a name.
     pub fn show_open<F>(&mut self, on_open: F)
     where
         F: FnMut(&mut EventCtx, &Path) + 'static,
     {
-        // No suggested name → the body seeds the field with the active filter
-        // pattern (e.g. `*.txt`).
+        // No suggested name → the field opens empty and focused.
         self.show("Open", None, Box::new(on_open));
     }
 
     /// Open the dialog to choose a save destination. `suggested_name` pre-fills
-    /// the **File name** field (e.g. the current document's name); `on_save`
-    /// runs with the chosen path on confirm. The path need not exist yet.
+    /// the focused **File name** field (e.g. the current document's name), fully
+    /// selected with the cursor at the end so it's ready to keep, edit, or
+    /// replace by typing; `on_save` runs with the chosen path on confirm. The
+    /// path need not exist yet.
     pub fn show_save<F>(&mut self, suggested_name: impl Into<String>, on_save: F)
     where
         F: FnMut(&mut EventCtx, &Path) + 'static,
@@ -322,6 +323,10 @@ struct FileDialogBody {
     /// Patterns the file list is currently filtered by — the selected filter's,
     /// or a one-off wildcard the user typed into the File name field.
     active_patterns: Vec<String>,
+    /// True for `show_save` (a suggested name was supplied). In Save mode the
+    /// typed filename is carried across folder navigation; in Open mode the
+    /// field follows the current folder's selection and clears as you move.
+    save_mode: bool,
     /// Entries parallel to the list rows, so an activation or selection change
     /// can tell a folder from a file.
     entries: Vec<Entry>,
@@ -385,25 +390,23 @@ impl FileDialogBody {
             dir,
             filters,
             active_patterns,
+            save_mode: suggested_name.is_some(),
             entries: Vec::new(),
             icons: Icons::new(),
             last_sel: None,
         };
 
-        // Seed the list and the File name field.
+        // Seed the list, then the File name field. Open starts empty (the user
+        // picks or types a name); Save starts on the suggested name, fully
+        // selected with the cursor at the end so typing replaces it or the end
+        // can be edited straight away.
         body.reload_list();
-        let initial = suggested_name.unwrap_or_else(|| body.pattern_hint());
-        body.name.borrow_mut().set_text(&initial);
+        if let Some(suggested) = suggested_name {
+            let mut name = body.name.borrow_mut();
+            name.set_text(&suggested);
+            name.select_all();
+        }
         body
-    }
-
-    /// The pattern shown in the File name field when no real name is entered —
-    /// the active filter's first pattern (e.g. `*.txt`), or `*` as a fallback.
-    fn pattern_hint(&self) -> String {
-        self.active_patterns
-            .first()
-            .cloned()
-            .unwrap_or_else(|| "*".to_string())
     }
 
     /// Re-read the current directory and repopulate the combined list: `..`
@@ -435,8 +438,8 @@ impl FileDialogBody {
         self.entries = entries;
         let mut list = self.list.borrow_mut();
         list.set_items(items);
-        // Leave the list unselected so the File name field keeps showing the
-        // pattern hint until the user actually picks something.
+        // Leave the list unselected; the File name field is only filled once the
+        // user actually picks (or types) something.
         list.set_selected(None);
         self.last_sel = None;
     }
@@ -449,11 +452,12 @@ impl FileDialogBody {
     fn set_dir(&mut self, dir: PathBuf) {
         self.dir = dir;
         self.reload_list();
-        // Re-seed the field with the pattern unless the user has a real name in
-        // it (Save mode), matching the original's behavior.
-        let cur = self.name.borrow().text();
-        if cur.is_empty() || is_pattern(&cur) {
-            self.name.borrow_mut().set_text(&self.pattern_hint());
+        // In Open mode the field tracks the current folder's selection, so a
+        // stale name carried over from the previous folder is cleared. In Save
+        // mode the chosen filename rides along as the user navigates to the
+        // target folder.
+        if !self.save_mode {
+            self.name.borrow_mut().set_text("");
         }
     }
 
@@ -528,12 +532,10 @@ impl FileDialogBody {
         if let Some(idx) = self.signals.filter.take()
             && let Some(filter) = self.filters.get(idx)
         {
+            // Switching the File types filter only re-filters the list; the
+            // File name field is left as the user left it.
             self.active_patterns = filter.patterns().to_vec();
             self.reload_list();
-            let cur = self.name.borrow().text();
-            if cur.is_empty() || is_pattern(&cur) {
-                self.name.borrow_mut().set_text(&self.pattern_hint());
-            }
             ctx.request_paint();
         }
 
@@ -548,7 +550,7 @@ impl FileDialogBody {
         }
 
         // Reflect a fresh single-click *file* selection into the name field;
-        // folder selections leave the typed / hinted name alone.
+        // folder selections leave the typed name alone.
         let sel = self.list.borrow().selected_index();
         if sel != self.last_sel {
             self.last_sel = sel;
@@ -1091,6 +1093,19 @@ mod tests {
         }
     }
 
+    /// Type `s` into the focused widget, one `Char` event per character.
+    fn type_text(backend: &MockBackend, dlg: &mut FileDialog, s: &str) {
+        for ch in s.chars() {
+            backend.dispatch(
+                dlg,
+                &Event::Char {
+                    ch,
+                    modifiers: Default::default(),
+                },
+            );
+        }
+    }
+
     fn click(backend: &MockBackend, dlg: &mut FileDialog, x: i32, y: i32) {
         let pos = Point::new(x, y);
         backend.dispatch(
@@ -1276,6 +1291,7 @@ mod tests {
     fn typing_a_wildcard_refilters_without_accepting() {
         let dir = unique_temp();
         std::fs::write(dir.join("hello.txt"), b"hi").unwrap();
+        std::fs::write(dir.join("lib.rs"), b"//").unwrap();
 
         let chosen: Rc<RefCell<Option<PathBuf>>> = Rc::new(RefCell::new(None));
         let mut dlg = FileDialog::new().with_directory(&dir);
@@ -1286,8 +1302,10 @@ mod tests {
         let backend = MockBackend::new(DIALOG_W, DIALOG_H);
         backend.render(&mut dlg);
 
-        // The File name field opens on the "*" pattern; Enter on a wildcard
-        // re-filters rather than accepting, so the dialog stays open.
+        // The File name field opens empty and focused. Type a wildcard, then
+        // Enter re-filters the list rather than accepting, so the dialog stays
+        // open and nothing is chosen.
+        type_text(&backend, &mut dlg, "*.rs");
         backend.dispatch(&mut dlg, &key(NamedKey::Enter, true));
         backend.dispatch(&mut dlg, &key(NamedKey::Enter, false));
 
@@ -1296,6 +1314,52 @@ mod tests {
             "a wildcard pattern is not accepted"
         );
         assert!(dlg.is_open(), "the dialog stays open after re-filtering");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn open_starts_empty_and_save_starts_selected() {
+        let dir = unique_temp();
+        std::fs::write(dir.join("hello.txt"), b"hi").unwrap();
+
+        // Open: the File name field is empty, so OK / Enter with nothing picked
+        // does nothing — the dialog stays open and no path is chosen.
+        let chosen: Rc<RefCell<Option<PathBuf>>> = Rc::new(RefCell::new(None));
+        let mut dlg = FileDialog::new().with_directory(&dir);
+        {
+            let chosen = chosen.clone();
+            dlg.show_open(move |_cx, path| *chosen.borrow_mut() = Some(path.to_path_buf()));
+        }
+        let backend = MockBackend::new(DIALOG_W, DIALOG_H);
+        backend.render(&mut dlg);
+        backend.dispatch(&mut dlg, &key(NamedKey::Enter, true));
+        backend.dispatch(&mut dlg, &key(NamedKey::Enter, false));
+        assert!(
+            chosen.borrow().is_none(),
+            "an empty Open field accepts nothing"
+        );
+        assert!(dlg.is_open(), "Open stays open with an empty field");
+
+        // Save: the field is pre-filled and fully selected, so typing replaces
+        // the whole suggested name in one go (proving the selection covered it).
+        let chosen: Rc<RefCell<Option<PathBuf>>> = Rc::new(RefCell::new(None));
+        let mut dlg = FileDialog::new().with_directory(&dir);
+        {
+            let chosen = chosen.clone();
+            dlg.show_save("draft.txt", move |_cx, path| {
+                *chosen.borrow_mut() = Some(path.to_path_buf())
+            });
+        }
+        backend.render(&mut dlg);
+        type_text(&backend, &mut dlg, "final.txt");
+        backend.dispatch(&mut dlg, &key(NamedKey::Enter, true));
+        backend.dispatch(&mut dlg, &key(NamedKey::Enter, false));
+        assert_eq!(
+            chosen.borrow().as_deref(),
+            Some(dir.join("final.txt").as_path()),
+            "typing over the fully-selected suggested name replaces it entirely"
+        );
+
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
