@@ -26,6 +26,11 @@ While pre-1.0, the minor version is bumped for breaking changes.
   drawn geometry at build time (via `i_overlay`), so clipped artwork bakes
   correctly instead of being dropped. `i_overlay` is a compile-time-only
   dependency of `saudade-macros` and never reaches a shipped binary. (#27)
+- `include_svg!` takes an optional `crop` argument —
+  `include_svg!("logo.svg", crop)` — that frames the baked image by the tight
+  bounding box of the drawn geometry instead of the SVG's declared viewport,
+  dropping any padding so the mark fills its target rect. The default is still
+  viewport framing (matching resvg). (#31)
 - `include_svg!` now approximates linear and radial gradient paint instead of
   dropping it: each gradient bakes into a stack of flat-color bands (strips for
   linear, nested disks for radial) clipped to the painted shape. Gradient fills
