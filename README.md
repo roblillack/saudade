@@ -730,12 +730,14 @@ the flight-type dropdown.
 
 ### `FileDialog`
 
-A classic Win 3.1 **Open / Save** file picker, built on `Modal`. It shows the
-familiar two-column browser in its own top-level window: a directory list and
-"Drives" picker on the left, a file list with a "File Name" field and "List
-Files of Type" filter on the right, OK / Cancel on the far right. (The one swap
-from the original is the column order — folders sit on the left, the way modern
-pickers arrange them.)
+A modern, single-pane **Open / Save** file picker, built on `Modal`. In its own
+top-level window it shows the current path along the top, one combined list of
+folders (shown first) and files below it, a "File name" field and a "File types"
+filter dropdown along the bottom, and OK / Cancel to their right — the flat
+layout modern KDE / Windows pickers use, rather than the Win 3.1 two-column
+"Directories" / "Drives" arrangement. Each label carries an accelerator that
+focuses its control: **Alt+L** ("Location") the list, **Alt+N** the File name
+field, **Alt+T** the File types filter.
 
 Own it as an overlay (`Rc<RefCell<FileDialog>>` added with
 `Column::add_overlay`, exactly like `Dialog`) and open it with `show_open` or
@@ -766,26 +768,27 @@ dialog.borrow_mut().show_save("Untitled.txt", |cx, path| {
 ```
 
 A `FileFilter` pairs a label with one or more glob patterns (`*` / `?`, matched
-case-insensitively); the file list shows only the names matching the selected
-filter, and switching the "List Files of Type" dropdown re-filters in place.
+case-insensitively); the list shows folders plus only the files matching the
+selected filter, and switching the "File types" dropdown re-filters in place.
 `FileFilter::all_files()` is the catch-all `*.*`. `with_directory` /
 `set_directory` choose where the next open starts.
 
-Interaction mirrors the original:
+Interaction:
 
-| Input                                | Effect                                       |
-| ------------------------------------ | -------------------------------------------- |
-| click a file                         | put its name in the **File Name** field      |
-| double-click a file / Enter / OK     | open it (resolve the field to a path)        |
-| double-click a directory or `..`     | descend / ascend                             |
-| Enter (directory list focused)       | descend into the selected directory          |
-| type a directory name + Enter        | descend into it                              |
+| Input                                 | Effect                                       |
+| ------------------------------------- | -------------------------------------------- |
+| click a file                          | put its name in the **File name** field      |
+| double-click a file / Enter / OK      | open it (resolve the field to a path)        |
+| double-click a folder or `..`         | descend / ascend                             |
+| Enter (a folder selected in the list) | descend into the selected folder             |
+| type a directory name + Enter         | descend into it                              |
 | type a wildcard (e.g. `*.rs`) + Enter | re-filter the list rather than open          |
+| Alt+L / Alt+N / Alt+T                 | focus the list / File name / File types      |
 
 The picker lives in its own window with server-side decorations, so its title
-("Open" / "Save As") rides along on the `PopupRequest`; its "Drives" / "List
-Files of Type" dropdowns open as nested popups inside it. `examples/notepad.rs`
-wires it to File → Open and File → Save As.
+("Open" / "Save As") rides along on the `PopupRequest`; its "File types" dropdown
+opens as a nested popup inside it. `examples/notepad.rs` wires it to File → Open
+and File → Save As.
 
 ### Disabled controls
 

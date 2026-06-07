@@ -17,31 +17,41 @@ use crate::widgets::{Button, Container, Dropdown, TextInput};
 // only magic numbers.
 // ----------------------------------------------------------------------------
 
-/// Default client size of the dialog. Roomy enough for two tall list columns
-/// plus the OK / Cancel button stack on the right.
+/// Default client size of the dialog. Roomy enough for one tall list plus the
+/// File name / Filter rows and the OK / Cancel buttons beside them.
 const DIALOG_W: i32 = 460;
 const DIALOG_H: i32 = 300;
 /// Outer padding inside the dialog client rect.
 const PAD: i32 = 14;
-/// Height of a section label ("File Name:", "Directories:", …).
+/// Height of a one-line text row (the path along the top).
 const LABEL_H: i32 = 16;
-/// Height of the text field and the two dropdowns.
+/// Height of the File name field and the File types dropdown.
 const FIELD_H: i32 = 22;
-/// Gap between a field/label and the list below it.
+/// Gap between the path / list and the rows above and below them.
 const LIST_GAP: i32 = 6;
-/// Push-button geometry for the OK / Cancel stack.
+/// Push-button geometry for the OK / Cancel pair.
 const BTN_W: i32 = 75;
 const BTN_H: i32 = 26;
 const BTN_GAP: i32 = 8;
-/// Gap between the two list columns, and before the button stack.
+/// Gap between the File name / Filter fields and the button column.
 const COL_GAP: i32 = 14;
+/// Width reserved for the inline "File name:" / "File types:" labels.
+const LABEL_COL_W: i32 = 78;
 
-// Index of the directory list among the `Container`'s children (its add order
-// below). Used to recognise "directory list focused" for the Enter-navigates
-// shortcut; the other children don't need naming.
-const IDX_DIRS: usize = 3;
+// Child indices within the `Container` (its add order below). Used to recognise
+// "list focused" for the Enter-descends shortcut and to point the label
+// mnemonics (Alt+N / Alt+T / Alt+L) at the right widget.
+const IDX_NAME: usize = 0;
+const IDX_LIST: usize = 1;
+const IDX_TYPE: usize = 2;
 
-/// A file-type choice shown in the dialog's "List Files of Type" dropdown.
+// Section labels, with their `&` mnemonic markers. `Location` focuses the list,
+// `name` the File name field, `types` the filter dropdown.
+const LABEL_LOCATION: &str = "&Location:";
+const LABEL_NAME: &str = "File &name:";
+const LABEL_TYPES: &str = "File &types:";
+
+/// A file-type choice shown in the dialog's "File types" dropdown.
 ///
 /// A filter pairs a human label with one or more glob patterns (`*` and `?`
 /// wildcards, matched case-insensitively). The file list shows only the names
@@ -91,15 +101,19 @@ impl FileFilter {
     }
 }
 
-/// A classic Win 3.1-style **Open / Save** file dialog.
+/// A modern, single-pane **Open / Save** file dialog.
 ///
 /// Built on the general-purpose [`Modal`](crate::Modal), `FileDialog` presents
-/// the familiar two-column file browser in its own top-level window: a
-/// directory list and "Drives" picker on the left, a file list with a "File
-/// Name" field and "List Files of Type" filter on the right, and OK / Cancel on
-/// the far right. (The column order is the one swap from the Windows 3.1
-/// original — folders sit on the left, the way modern file pickers arrange
-/// them.)
+/// a file browser in its own top-level window: the current path along the top,
+/// one combined list of folders (shown first) and files below it, a **File
+/// name** field and a **File types** filter dropdown along the bottom, and
+/// OK / Cancel to their right. That's the arrangement modern KDE / Windows
+/// pickers use, rather than the Win 3.1 two-column "Directories" / "Drives"
+/// layout — a single flat pane with no separate drive selector.
+///
+/// Each section label carries a keyboard accelerator that moves focus to its
+/// control: **Alt+L** ("Location") to the list, **Alt+N** to the File name
+/// field, **Alt+T** to the File types filter.
 ///
 /// The application owns it as an overlay — typically `Rc<RefCell<FileDialog>>`
 /// added with [`Column::add_overlay`](crate::Column::add_overlay), exactly like
@@ -128,12 +142,12 @@ impl FileFilter {
 /// });
 /// ```
 ///
-/// Interaction mirrors the original:
+/// Interaction:
 ///
-/// * single-click a file to put its name in the **File Name** field;
+/// * single-click a file to put its name in the **File name** field;
 /// * double-click a file (or select it and press Enter / OK) to open it;
-/// * double-click a directory — or `..` — to descend / ascend (with the
-///   directory list focused, Enter navigates too);
+/// * double-click a folder — or `..` — to descend / ascend (with a folder
+///   selected in the list, Enter navigates into it too);
 /// * type a name and press Enter / OK to accept it; type a wildcard pattern
 ///   (e.g. `*.rs`) to re-filter the list; type a directory name to descend.
 pub struct FileDialog {
@@ -179,8 +193,8 @@ impl FileDialog {
 
     /// Open the dialog to pick a file. `on_open` runs with the chosen path when
     /// the user confirms (Open / double-click / Enter); Cancel or Escape close
-    /// it without calling back. The **File Name** field starts on the selected
-    /// filter's pattern, the Win 3.1 way.
+    /// it without calling back. The **File name** field starts on the selected
+    /// filter's pattern.
     pub fn show_open<F>(&mut self, on_open: F)
     where
         F: FnMut(&mut EventCtx, &Path) + 'static,
@@ -191,7 +205,7 @@ impl FileDialog {
     }
 
     /// Open the dialog to choose a save destination. `suggested_name` pre-fills
-    /// the **File Name** field (e.g. the current document's name); `on_save`
+    /// the **File name** field (e.g. the current document's name); `on_save`
     /// runs with the chosen path on confirm. The path need not exist yet.
     pub fn show_save<F>(&mut self, suggested_name: impl Into<String>, on_save: F)
     where
@@ -267,8 +281,8 @@ impl Widget for FileDialog {
 // `Container` (which gives us focus cycling, Tab, pointer capture, and the
 // default-button Enter accelerator for free) and owns the navigation state.
 //
-// The widgets the body needs to read or mutate after dispatch — the lists, the
-// name field, the dropdowns — are held behind `Rc<RefCell<…>>`, with a
+// The widgets the body needs to read or mutate after dispatch — the list, the
+// name field, the filter dropdown — are held behind `Rc<RefCell<…>>`, with a
 // `Shared` clone living in the `Container`. Buttons and dropdown changes report
 // back through the small `Signals` cells; the body drains them once `Container`
 // dispatch returns, where it can borrow everything without contention.
@@ -283,19 +297,22 @@ type AcceptHandler = Box<dyn FnMut(&mut EventCtx, &Path)>;
 struct Signals {
     /// OK pressed (button click, or Enter via the default-button accelerator).
     accept: Cell<bool>,
-    /// "List Files of Type" changed to this index.
+    /// "File types" filter changed to this index.
     filter: Cell<Option<usize>>,
-    /// "Drives" changed to this index.
-    drive: Cell<Option<usize>>,
+}
+
+/// One row in the combined list: its display name and whether it is a directory
+/// (true for real subdirectories and the `..` parent entry).
+struct Entry {
+    name: String,
+    is_dir: bool,
 }
 
 struct FileDialogBody {
     rect: Rect,
     container: Container,
     name: Rc<RefCell<TextInput>>,
-    files: Rc<RefCell<List>>,
-    dirs: Rc<RefCell<List>>,
-    drive_dd: Rc<RefCell<Dropdown>>,
+    list: Rc<RefCell<List>>,
     signals: Rc<Signals>,
     on_accept: AcceptHandler,
 
@@ -303,13 +320,15 @@ struct FileDialogBody {
     dir: PathBuf,
     filters: Vec<FileFilter>,
     /// Patterns the file list is currently filtered by — the selected filter's,
-    /// or a one-off wildcard the user typed into the File Name field.
+    /// or a one-off wildcard the user typed into the File name field.
     active_patterns: Vec<String>,
-    drives: Vec<PathBuf>,
+    /// Entries parallel to the list rows, so an activation or selection change
+    /// can tell a folder from a file.
+    entries: Vec<Entry>,
     icons: Icons,
-    /// File-list selection at the previous dispatch, so a genuine change can be
-    /// reflected into the File Name field without clobbering typed text.
-    last_file_sel: Option<usize>,
+    /// List selection at the previous dispatch, so a genuine change can be
+    /// reflected into the File name field without clobbering typed text.
+    last_sel: Option<usize>,
 }
 
 impl FileDialogBody {
@@ -328,8 +347,7 @@ impl FileDialogBody {
         let name = Rc::new(RefCell::new(
             TextInput::new(geo.name_field).with_font_size(13.0),
         ));
-        let files = Rc::new(RefCell::new(List::new(geo.file_list)));
-        let dirs = Rc::new(RefCell::new(List::new(geo.dir_list)));
+        let list = Rc::new(RefCell::new(List::new(geo.list)));
 
         let type_dd = Rc::new(RefCell::new(
             Dropdown::new(geo.type_dd).with_items(filters.iter().map(FileFilter::label)),
@@ -337,15 +355,6 @@ impl FileDialogBody {
         type_dd.borrow_mut().set_on_change({
             let signals = signals.clone();
             move |_cx, idx| signals.filter.set(Some(idx))
-        });
-
-        let drives = list_drives(&dir);
-        let drive_dd = Rc::new(RefCell::new(
-            Dropdown::new(geo.drive_dd).with_items(drives.iter().map(|d| drive_label(d))),
-        ));
-        drive_dd.borrow_mut().set_on_change({
-            let signals = signals.clone();
-            move |_cx, idx| signals.drive.set(Some(idx))
         });
 
         // OK is the default action, so Enter from any field accepts. Cancel
@@ -356,14 +365,12 @@ impl FileDialogBody {
         });
         let cancel = Button::new(geo.cancel, "Cancel").on_click(|cx| cx.request_dismiss());
 
-        // Add order == Tab order: name field, file list, type filter, dir list,
-        // drives, OK, Cancel. Must match the IDX_* constants above.
+        // Add order == Tab order: name field, list, filter, OK, Cancel. Must
+        // match the IDX_LIST constant above.
         let container = Container::new(DIALOG_W, DIALOG_H)
             .add(Shared(name.clone()))
-            .add(Shared(files.clone()))
+            .add(Shared(list.clone()))
             .add(Shared(type_dd.clone()))
-            .add(Shared(dirs.clone()))
-            .add(Shared(drive_dd.clone()))
             .add(ok)
             .add(cancel);
 
@@ -372,28 +379,25 @@ impl FileDialogBody {
             rect: Rect::new(0, 0, 0, 0),
             container,
             name,
-            files,
-            dirs,
-            drive_dd,
+            list,
             signals,
             on_accept,
             dir,
             filters,
             active_patterns,
-            drives,
+            entries: Vec::new(),
             icons: Icons::new(),
-            last_file_sel: None,
+            last_sel: None,
         };
 
-        // Seed the file list / dir list and the File Name field.
-        body.reload_all();
+        // Seed the list and the File name field.
+        body.reload_list();
         let initial = suggested_name.unwrap_or_else(|| body.pattern_hint());
         body.name.borrow_mut().set_text(&initial);
-        body.sync_drive_selection();
         body
     }
 
-    /// The pattern shown in the File Name field when no real name is entered —
+    /// The pattern shown in the File name field when no real name is entered —
     /// the active filter's first pattern (e.g. `*.txt`), or `*` as a fallback.
     fn pattern_hint(&self) -> String {
         self.active_patterns
@@ -402,66 +406,49 @@ impl FileDialogBody {
             .unwrap_or_else(|| "*".to_string())
     }
 
-    /// Re-read the current directory and repopulate both lists.
-    fn reload_all(&mut self) {
-        self.reload_dirs();
-        self.reload_files();
-    }
-
-    fn reload_dirs(&mut self) {
+    /// Re-read the current directory and repopulate the combined list: `..`
+    /// (when there's a parent), then the subfolders, then the files matching
+    /// the active filter.
+    fn reload_list(&mut self) {
         let mut items = Vec::new();
+        let mut entries = Vec::new();
         if self.dir.parent().is_some() {
             items.push(ListItem::new("..").with_icon(self.icons.up.clone()));
+            entries.push(Entry {
+                name: "..".to_string(),
+                is_dir: true,
+            });
         }
         for name in read_dir_names(&self.dir, true) {
-            items.push(ListItem::new(name).with_icon(self.icons.folder.clone()));
+            items.push(ListItem::new(name.clone()).with_icon(self.icons.folder.clone()));
+            entries.push(Entry { name, is_dir: true });
         }
-        let mut dirs = self.dirs.borrow_mut();
-        dirs.set_items(items);
-        if !dirs.items().is_empty() {
-            dirs.set_selected(Some(0));
+        for name in read_dir_names(&self.dir, false) {
+            if self.matches_active(&name) {
+                items.push(ListItem::new(name.clone()).with_icon(self.icons.file.clone()));
+                entries.push(Entry {
+                    name,
+                    is_dir: false,
+                });
+            }
         }
-    }
-
-    fn reload_files(&mut self) {
-        let items: Vec<ListItem> = read_dir_names(&self.dir, false)
-            .into_iter()
-            .filter(|n| self.matches_active(n))
-            .map(|n| ListItem::new(n).with_icon(self.icons.file.clone()))
-            .collect();
-        let mut files = self.files.borrow_mut();
-        files.set_items(items);
-        // Leave the file list unselected so the File Name field keeps showing
-        // the pattern hint until the user actually picks something.
-        files.set_selected(None);
-        self.last_file_sel = None;
+        self.entries = entries;
+        let mut list = self.list.borrow_mut();
+        list.set_items(items);
+        // Leave the list unselected so the File name field keeps showing the
+        // pattern hint until the user actually picks something.
+        list.set_selected(None);
+        self.last_sel = None;
     }
 
     fn matches_active(&self, name: &str) -> bool {
         self.active_patterns.iter().any(|p| glob_match(p, name))
     }
 
-    /// Point the "Drives" dropdown at whichever root the current directory
-    /// lives under, without firing its `on_change`.
-    fn sync_drive_selection(&mut self) {
-        let idx = self
-            .drives
-            .iter()
-            .enumerate()
-            .filter(|(_, root)| self.dir.starts_with(root))
-            // Prefer the longest matching root (e.g. `/Volumes/Disk` over `/`).
-            .max_by_key(|(_, root)| root.as_os_str().len())
-            .map(|(i, _)| i);
-        if let Some(i) = idx {
-            self.drive_dd.borrow_mut().set_selected(Some(i));
-        }
-    }
-
     /// Switch to a new directory and refresh everything that depends on it.
     fn set_dir(&mut self, dir: PathBuf) {
         self.dir = dir;
-        self.reload_all();
-        self.sync_drive_selection();
+        self.reload_list();
         // Re-seed the field with the pattern unless the user has a real name in
         // it (Save mode), matching the original's behavior.
         let cur = self.name.borrow().text();
@@ -470,36 +457,35 @@ impl FileDialogBody {
         }
     }
 
-    /// Resolve the directory-list row `idx` to a path and navigate to it.
-    fn navigate_dir(&mut self, idx: usize, ctx: &mut EventCtx) {
-        let label = self.dirs.borrow().items().get(idx).map(|i| i.label.clone());
-        let Some(label) = label else { return };
-        let target = if label == ".." {
-            self.dir.parent().map(Path::to_path_buf)
-        } else {
-            Some(self.dir.join(&label))
+    /// Act on list row `idx`: ascend via `..`, descend into a folder, or open a
+    /// file. The single place a double-click / Enter on a row funnels through.
+    fn navigate_entry(&mut self, idx: usize, ctx: &mut EventCtx) {
+        let Some(entry) = self.entries.get(idx) else {
+            return;
         };
-        if let Some(target) = target.filter(|t| t.is_dir()) {
+        let name = entry.name.clone();
+        let is_dir = entry.is_dir;
+
+        if name == ".." {
+            if let Some(parent) = self.dir.parent().map(Path::to_path_buf) {
+                self.set_dir(parent);
+                ctx.request_paint();
+            }
+            return;
+        }
+
+        let target = self.dir.join(&name);
+        if is_dir && target.is_dir() {
             self.set_dir(target);
             ctx.request_paint();
-        }
-    }
-
-    /// Open the file-list row `idx` (a double-click / Enter on a file).
-    fn open_file(&mut self, idx: usize, ctx: &mut EventCtx) {
-        let label = self
-            .files
-            .borrow()
-            .items()
-            .get(idx)
-            .map(|i| i.label.clone());
-        if let Some(label) = label {
-            self.name.borrow_mut().set_text(&label);
+        } else {
+            // A file row → put its name in the field and accept it.
+            self.name.borrow_mut().set_text(&name);
             self.accept(ctx);
         }
     }
 
-    /// Act on the File Name field: descend into a directory, re-filter on a
+    /// Act on the File name field: descend into a directory, re-filter on a
     /// wildcard, or accept a concrete path. The single place OK / Enter /
     /// double-click all funnel through.
     fn accept(&mut self, ctx: &mut EventCtx) {
@@ -511,7 +497,7 @@ impl FileDialogBody {
         // A wildcard pattern re-filters the list rather than opening anything.
         if is_pattern(&raw) {
             self.active_patterns = vec![raw];
-            self.reload_files();
+            self.reload_list();
             ctx.request_paint();
             return;
         }
@@ -543,7 +529,7 @@ impl FileDialogBody {
             && let Some(filter) = self.filters.get(idx)
         {
             self.active_patterns = filter.patterns().to_vec();
-            self.reload_files();
+            self.reload_list();
             let cur = self.name.borrow().text();
             if cur.is_empty() || is_pattern(&cur) {
                 self.name.borrow_mut().set_text(&self.pattern_hint());
@@ -551,38 +537,26 @@ impl FileDialogBody {
             ctx.request_paint();
         }
 
-        if let Some(idx) = self.signals.drive.take()
-            && let Some(root) = self.drives.get(idx).cloned()
-        {
-            self.set_dir(root);
-            ctx.request_paint();
-        }
-
-        // Bind the activations to locals first so the `RefMut` is dropped
-        // before the `&mut self` navigation / open calls borrow the body.
-        let dir_activated = self.dirs.borrow_mut().take_activated();
-        if let Some(idx) = dir_activated {
-            self.navigate_dir(idx, ctx);
-        }
-
-        let file_activated = self.files.borrow_mut().take_activated();
-        if let Some(idx) = file_activated {
-            self.open_file(idx, ctx);
+        // Bind the activation to a local first so the `RefMut` is dropped before
+        // the `&mut self` navigation call borrows the body.
+        let activated = self.list.borrow_mut().take_activated();
+        if let Some(idx) = activated {
+            self.navigate_entry(idx, ctx);
             if ctx.is_dismiss_requested() {
                 return;
             }
         }
 
-        // Reflect a fresh single-click file selection into the name field.
-        let sel = self.files.borrow().selected_index();
-        if sel != self.last_file_sel {
-            self.last_file_sel = sel;
+        // Reflect a fresh single-click *file* selection into the name field;
+        // folder selections leave the typed / hinted name alone.
+        let sel = self.list.borrow().selected_index();
+        if sel != self.last_sel {
+            self.last_sel = sel;
             let label = sel.and_then(|idx| {
-                self.files
-                    .borrow()
-                    .items()
+                self.entries
                     .get(idx)
-                    .map(|i| i.label.clone())
+                    .filter(|e| !e.is_dir)
+                    .map(|e| e.name.clone())
             });
             if let Some(label) = label {
                 self.name.borrow_mut().set_text(&label);
@@ -608,27 +582,32 @@ impl Widget for FileDialogBody {
 
     fn paint(&mut self, painter: &mut Painter, theme: &Theme) {
         let geo = Geometry::compute(self.rect);
-        // The Win 3.1 dialog interior is the gray button face, not the white
-        // the modal fills with — repaint it so the sunken white fields read
-        // against it.
-        painter.fill_rect(self.rect, theme.face);
+        // No interior fill — the dialog rides on the modal's plain background,
+        // the way modern (KDE / Windows) pickers present a flat pane. The
+        // sunken white fields read against it on their own.
 
-        // Section labels.
-        label(painter, geo.dir_label, "&Directories:", theme);
-        label(painter, geo.file_label, "File &Name:", theme);
-        label(painter, geo.drive_label, "Dri&ves:", theme);
-        label(painter, geo.type_label, "List Files of &Type:", theme);
+        let th = painter.measure_text("Ag", theme.font_size).h;
 
-        // Current path under the Directories label, clipped to its column.
+        // "Location:" label, then the current directory beside it (indented to
+        // line up with the File name / File types fields below), clipped to its
+        // column.
+        let loc_y = geo.path_text.y + (geo.path_text.h - th) / 2;
+        draw_label(painter, geo.label_x, loc_y, LABEL_LOCATION, theme);
         let saved = painter.push_clip(geo.path_text);
         painter.text(
             geo.path_text.x,
-            geo.path_text.y,
+            loc_y,
             &self.dir.display().to_string(),
             theme.font_size,
             theme.text,
         );
         painter.restore_clip(saved);
+
+        // Inline field labels, vertically centered against their fields.
+        let name_ly = geo.name_field.y + (geo.name_field.h - th) / 2;
+        let type_ly = geo.type_dd.y + (geo.type_dd.h - th) / 2;
+        draw_label(painter, geo.label_x, name_ly, LABEL_NAME, theme);
+        draw_label(painter, geo.label_x, type_ly, LABEL_TYPES, theme);
 
         self.container.paint(painter, theme);
     }
@@ -638,18 +617,40 @@ impl Widget for FileDialogBody {
     }
 
     fn event(&mut self, event: &Event, ctx: &mut EventCtx) {
-        // With the directory list focused, Enter navigates into the selected
-        // folder. The default OK button would otherwise swallow Enter via the
-        // accelerator pass, so intercept it before forwarding.
+        // Label mnemonics: Alt+L focuses the list, Alt+N the File name field,
+        // Alt+T the File types filter. Like the menu bar, they just move
+        // focus — the CUA way of reaching a labelled control from the keyboard.
+        if let Some(ch) = mnemonic_key(event) {
+            let target = match ch {
+                'l' => Some(IDX_LIST),
+                'n' => Some(IDX_NAME),
+                't' => Some(IDX_TYPE),
+                _ => None,
+            };
+            if let Some(idx) = target {
+                self.container.focus_child(idx);
+                ctx.request_paint();
+                return;
+            }
+        }
+
+        // With the list focused and a folder selected, Enter descends into it.
+        // The default OK button would otherwise swallow Enter via the
+        // accelerator pass, so intercept it first. A selected file falls
+        // through to OK, which accepts the name now sitting in the field.
         if let Event::KeyDown {
             key: Key::Named(NamedKey::Enter),
             ..
         } = event
-            && self.container.focused_index() == Some(IDX_DIRS)
+            && self.container.focused_index() == Some(IDX_LIST)
         {
-            let sel = self.dirs.borrow().selected_index();
-            if let Some(idx) = sel {
-                self.navigate_dir(idx, ctx);
+            let folder = self
+                .list
+                .borrow()
+                .selected_index()
+                .filter(|&i| self.entries.get(i).is_some_and(|e| e.is_dir));
+            if let Some(idx) = folder {
+                self.navigate_entry(idx, ctx);
                 return;
             }
         }
@@ -690,31 +691,19 @@ impl Widget for FileDialogBody {
     }
 }
 
-/// Draw a section label at the top-left of `rect`.
-fn label(painter: &mut Painter, rect: Rect, text: &str, theme: &Theme) {
-    // Mnemonics aren't wired through to focus here, so strip the '&' marker and
-    // just draw the plain text.
-    let plain: String = text.replace('&', "");
-    painter.text(rect.x, rect.y, &plain, theme.font_size, theme.text);
-}
-
 // ----------------------------------------------------------------------------
 // Geometry — every rect inside the dialog, derived from the client rect so the
 // modal's centered origin (and any future resize) just works. Child widgets are
-// built against `Rect::new(0, 0, W, H)`; labels are painted against `self.rect`.
-// The container shifts the children to match.
+// built against `Rect::new(0, 0, W, H)`; the path and labels are painted against
+// `self.rect`. The container shifts the children to match.
 // ----------------------------------------------------------------------------
 
 struct Geometry {
-    dir_label: Rect,
     path_text: Rect,
-    dir_list: Rect,
-    drive_label: Rect,
-    drive_dd: Rect,
-    file_label: Rect,
+    list: Rect,
+    /// Left edge for both inline labels ("File name:" / "Filter:").
+    label_x: i32,
     name_field: Rect,
-    file_list: Rect,
-    type_label: Rect,
     type_dd: Rect,
     ok: Rect,
     cancel: Rect,
@@ -722,42 +711,106 @@ struct Geometry {
 
 impl Geometry {
     fn compute(base: Rect) -> Self {
-        let top = base.y + PAD;
-
-        // Button stack on the far right.
-        let btn_x = base.right() - PAD - BTN_W;
-        let ok = Rect::new(btn_x, top, BTN_W, BTN_H);
-        let cancel = Rect::new(btn_x, ok.bottom() + BTN_GAP, BTN_W, BTN_H);
-
-        // Two equal list columns fill the space left of the button stack.
         let left = base.x + PAD;
-        let cols_right = btn_x - COL_GAP;
-        let col_w = ((cols_right - left) - COL_GAP) / 2;
-        let dir_x = left;
-        let file_x = left + col_w + COL_GAP;
+        let right = base.right() - PAD;
+        let top = base.y + PAD;
+        let bottom = base.bottom() - PAD;
+        let content_w = (right - left).max(0);
 
-        // Bottom row: a labeled dropdown under each column.
-        let dd_y = base.bottom() - PAD - FIELD_H;
-        let dd_label_y = dd_y - LABEL_H - 2;
+        // Two buttons on the right, aligned with the two bottom field rows.
+        let btn_x = right - BTN_W;
+        let filter_row = bottom - BTN_H;
+        let name_row = filter_row - BTN_GAP - BTN_H;
+        let ok = Rect::new(btn_x, name_row, BTN_W, BTN_H);
+        let cancel = Rect::new(btn_x, filter_row, BTN_W, BTN_H);
 
-        // Lists run from below the top label/field down to the bottom dropdowns.
-        let list_top = top + LABEL_H + 2 + FIELD_H + LIST_GAP;
-        let list_h = (dd_label_y - LIST_GAP - list_top).max(0);
+        // Fields fill the space between the inline label gutter and the button
+        // column, vertically centered in their (taller) button-height rows.
+        let fields_right = btn_x - COL_GAP;
+        let field_x = left + LABEL_COL_W;
+        let field_w = (fields_right - field_x).max(0);
+        let field_dy = (BTN_H - FIELD_H) / 2;
+        let name_field = Rect::new(field_x, name_row + field_dy, field_w, FIELD_H);
+        let type_dd = Rect::new(field_x, filter_row + field_dy, field_w, FIELD_H);
+
+        // Path along the top — indented past the "Location:" label so it lines
+        // up with the fields below — then the (full-width) list filling
+        // everything between it and the bottom field rows.
+        let path_text = Rect::new(field_x, top, (right - field_x).max(0), LABEL_H);
+        let list_top = top + LABEL_H + LIST_GAP;
+        let list_h = (name_row - LIST_GAP - list_top).max(0);
+        let list = Rect::new(left, list_top, content_w, list_h);
 
         Self {
-            dir_label: Rect::new(dir_x, top, col_w, LABEL_H),
-            path_text: Rect::new(dir_x, top + LABEL_H + 4, col_w, LABEL_H),
-            dir_list: Rect::new(dir_x, list_top, col_w, list_h),
-            drive_label: Rect::new(dir_x, dd_label_y, col_w, LABEL_H),
-            drive_dd: Rect::new(dir_x, dd_y, col_w, FIELD_H),
-            file_label: Rect::new(file_x, top, col_w, LABEL_H),
-            name_field: Rect::new(file_x, top + LABEL_H + 2, col_w, FIELD_H),
-            file_list: Rect::new(file_x, list_top, col_w, list_h),
-            type_label: Rect::new(file_x, dd_label_y, col_w, LABEL_H),
-            type_dd: Rect::new(file_x, dd_y, col_w, FIELD_H),
+            path_text,
+            list,
+            label_x: left,
+            name_field,
+            type_dd,
             ok,
             cancel,
         }
+    }
+}
+
+// ----------------------------------------------------------------------------
+// Label mnemonics. The dialog's section labels carry a Win 3.1 `&X` mnemonic
+// marker; we draw the marked glyph underlined and match Alt+X back to the
+// labelled control. (The menu bar has its own copy of this for its own labels.)
+// ----------------------------------------------------------------------------
+
+/// If `event` is an Alt+letter mnemonic keystroke, the lowercase letter. Some
+/// platforms route it as `KeyDown(Char)`, others as a bare `Char`; accept both,
+/// and exclude AltGr so composed characters still reach the text fields.
+fn mnemonic_key(event: &Event) -> Option<char> {
+    match event {
+        Event::KeyDown {
+            key: Key::Char(ch),
+            modifiers,
+        }
+        | Event::Char { ch, modifiers }
+            if modifiers.mnemonic_alt() =>
+        {
+            Some(ch.to_ascii_lowercase())
+        }
+        _ => None,
+    }
+}
+
+/// Draw a `&X`-marked label at `(x, y)` with the `&` stripped and the marked
+/// glyph underlined, so the dialog's accelerators are discoverable.
+fn draw_label(painter: &mut Painter, x: i32, y: i32, raw: &str, theme: &Theme) {
+    let mut display = String::with_capacity(raw.len());
+    let mut mnemonic_index = None;
+    let mut chars = raw.chars().peekable();
+    let mut idx = 0;
+    while let Some(c) = chars.next() {
+        if c == '&' {
+            if chars.peek() == Some(&'&') {
+                chars.next();
+                display.push('&');
+                idx += 1;
+            } else if chars.peek().is_some() {
+                mnemonic_index = Some(idx);
+            }
+        } else {
+            display.push(c);
+            idx += 1;
+        }
+    }
+
+    painter.text(x, y, &display, theme.font_size, theme.text);
+    if let Some(i) = mnemonic_index {
+        let prefix: String = display.chars().take(i).collect();
+        let glyph: String = display.chars().skip(i).take(1).collect();
+        if glyph.is_empty() {
+            return;
+        }
+        let prefix_w = painter.measure_text(&prefix, theme.font_size).w;
+        let glyph_w = painter.measure_text(&glyph, theme.font_size).w;
+        // One logical pixel below the baseline so it clears the glyph.
+        let underline_y = y + theme.font_size as i32 + 1;
+        painter.fill_rect(Rect::new(x + prefix_w, underline_y, glyph_w, 1), theme.text);
     }
 }
 
@@ -838,62 +891,6 @@ fn read_dir_names(path: &Path, dirs: bool) -> Vec<String> {
 /// Whether `name` reads as a wildcard pattern rather than a literal name.
 fn is_pattern(name: &str) -> bool {
     name.contains('*') || name.contains('?')
-}
-
-/// Display string for a drive/root in the "Drives" dropdown.
-fn drive_label(root: &Path) -> String {
-    let s = root.display().to_string();
-    if s.is_empty() { "/".to_string() } else { s }
-}
-
-/// The filesystem roots offered in the "Drives" dropdown, always including the
-/// root that contains `current`.
-#[cfg(windows)]
-fn list_drives(current: &Path) -> Vec<PathBuf> {
-    let mut roots = Vec::new();
-    for letter in b'A'..=b'Z' {
-        let root = PathBuf::from(format!("{}:\\", letter as char));
-        if root.exists() {
-            roots.push(root);
-        }
-    }
-    ensure_contains_root(&mut roots, current);
-    roots
-}
-
-#[cfg(not(windows))]
-fn list_drives(current: &Path) -> Vec<PathBuf> {
-    // Unix has a single tree rooted at `/`; surface any mounted volumes
-    // (macOS `/Volumes`) as extra "drives" so the picker can hop between them.
-    let mut roots = vec![PathBuf::from("/")];
-    if let Ok(read) = std::fs::read_dir("/Volumes") {
-        for entry in read.flatten() {
-            if entry.path().is_dir() {
-                roots.push(entry.path());
-            }
-        }
-    }
-    roots.sort();
-    roots.dedup();
-    ensure_contains_root(&mut roots, current);
-    roots
-}
-
-/// Make sure some root in `roots` is an ancestor of `current`; if none is, add
-/// `current`'s own root component so the drives list always reflects where we
-/// are.
-fn ensure_contains_root(roots: &mut Vec<PathBuf>, current: &Path) {
-    if roots.iter().any(|r| current.starts_with(r)) {
-        return;
-    }
-    let root = current
-        .ancestors()
-        .last()
-        .map(Path::to_path_buf)
-        .unwrap_or_else(|| current.to_path_buf());
-    if !roots.contains(&root) {
-        roots.push(root);
-    }
 }
 
 /// Case-insensitive glob match supporting `*` (any run) and `?` (one char).
@@ -1014,7 +1011,7 @@ fn up_icon() -> ListIcon {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::event::{Event, Key, MouseButton, NamedKey};
+    use crate::event::{Event, Key, Modifiers, MouseButton, NamedKey};
     use crate::geometry::Point;
     use crate::mock::MockBackend;
     use std::sync::atomic::{AtomicU32, Ordering};
@@ -1080,6 +1077,17 @@ mod tests {
             Event::KeyDown { key, modifiers }
         } else {
             Event::KeyUp { key, modifiers }
+        }
+    }
+
+    /// An Alt+`letter` mnemonic keystroke.
+    fn alt(letter: char) -> Event {
+        Event::KeyDown {
+            key: Key::Char(letter),
+            modifiers: Modifiers {
+                alt: true,
+                ..Default::default()
+            },
         }
     }
 
@@ -1160,15 +1168,11 @@ mod tests {
         let backend = MockBackend::new(DIALOG_W, DIALOG_H);
         backend.render(&mut dlg); // lays the dialog out, centered at the origin
 
-        // The *.txt filter leaves a single file — click it to load the name
-        // field, then Enter fires the default OK button.
+        // The *.txt filter leaves the combined list as `..`, the `sub` folder,
+        // then `hello.txt` (image.png is filtered out). Click the file to load
+        // the name field, then Enter fires the default OK button.
         let g = geo();
-        click(
-            &backend,
-            &mut dlg,
-            g.file_list.x + 24,
-            row_y(g.file_list, 0),
-        );
+        click(&backend, &mut dlg, g.list.x + 24, row_y(g.list, 2));
         backend.dispatch(&mut dlg, &key(NamedKey::Enter, true));
         backend.dispatch(&mut dlg, &key(NamedKey::Enter, false));
 
@@ -1200,10 +1204,11 @@ mod tests {
         let backend = MockBackend::new(DIALOG_W, DIALOG_H);
         backend.render(&mut dlg);
 
-        // Directory list: row 0 is "..", row 1 is "sub". Two quick presses on
-        // "sub" register as a double-click and descend into it.
+        // Combined list: row 0 is "..", row 1 is the "sub" folder (no *.txt
+        // files sit in `dir`). Two quick presses on "sub" register as a
+        // double-click and descend into it.
         let g = geo();
-        let (dx, dy) = (g.dir_list.x + 24, row_y(g.dir_list, 1));
+        let (dx, dy) = (g.list.x + 24, row_y(g.list, 1));
         let down = Event::PointerDown {
             pos: Point::new(dx, dy),
             button: MouseButton::Left,
@@ -1211,14 +1216,10 @@ mod tests {
         backend.dispatch(&mut dlg, &down);
         backend.dispatch(&mut dlg, &down);
 
-        // Now inside `sub`: the only *.txt is deep.txt — select it and accept.
+        // Now inside `sub`: row 0 is "..", row 1 is deep.txt — select it and
+        // accept.
         let g = geo();
-        click(
-            &backend,
-            &mut dlg,
-            g.file_list.x + 24,
-            row_y(g.file_list, 0),
-        );
+        click(&backend, &mut dlg, g.list.x + 24, row_y(g.list, 1));
         backend.dispatch(&mut dlg, &key(NamedKey::Enter, true));
         backend.dispatch(&mut dlg, &key(NamedKey::Enter, false));
 
@@ -1226,6 +1227,47 @@ mod tests {
             chosen.borrow().as_deref(),
             Some(sub.join("deep.txt").as_path()),
             "navigation followed by accept yields a path inside the subdirectory"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn alt_l_focuses_the_list_so_enter_descends() {
+        let dir = unique_temp();
+        let sub = dir.join("sub");
+        std::fs::create_dir(&sub).unwrap();
+        std::fs::write(sub.join("deep.txt"), b"deep").unwrap();
+
+        let chosen: Rc<RefCell<Option<PathBuf>>> = Rc::new(RefCell::new(None));
+        let mut dlg = FileDialog::new()
+            .with_directory(&dir)
+            .with_filters(vec![FileFilter::new("Text Files (*.txt)", ["*.txt"])]);
+        {
+            let chosen = chosen.clone();
+            dlg.show_open(move |_cx, path| *chosen.borrow_mut() = Some(path.to_path_buf()));
+        }
+        let backend = MockBackend::new(DIALOG_W, DIALOG_H);
+        backend.render(&mut dlg);
+
+        // The dialog opens with the File name field focused. Alt+L moves focus
+        // to the list; only then does Enter-on-a-folder descend (it's the
+        // "list focused" shortcut) rather than firing OK. Select the "sub"
+        // folder (the first Down moves off the empty selection onto row 1) and
+        // descend with Enter.
+        backend.dispatch(&mut dlg, &alt('l'));
+        backend.dispatch(&mut dlg, &key(NamedKey::Down, true));
+        backend.dispatch(&mut dlg, &key(NamedKey::Enter, true));
+        backend.dispatch(&mut dlg, &key(NamedKey::Enter, false));
+
+        // Inside `sub`: select deep.txt (row 1) and accept it.
+        backend.dispatch(&mut dlg, &key(NamedKey::Down, true));
+        backend.dispatch(&mut dlg, &key(NamedKey::Enter, true));
+        backend.dispatch(&mut dlg, &key(NamedKey::Enter, false));
+
+        assert_eq!(
+            chosen.borrow().as_deref(),
+            Some(sub.join("deep.txt").as_path()),
+            "Alt+L focused the list, so keyboard navigation descended and accepted"
         );
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -1244,7 +1286,7 @@ mod tests {
         let backend = MockBackend::new(DIALOG_W, DIALOG_H);
         backend.render(&mut dlg);
 
-        // The File Name field opens on the "*" pattern; Enter on a wildcard
+        // The File name field opens on the "*" pattern; Enter on a wildcard
         // re-filters rather than accepting, so the dialog stays open.
         backend.dispatch(&mut dlg, &key(NamedKey::Enter, true));
         backend.dispatch(&mut dlg, &key(NamedKey::Enter, false));

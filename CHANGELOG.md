@@ -12,11 +12,12 @@ While pre-1.0, the minor version is bumped for breaking changes.
 
 ### Added
 
-- `FileDialog`: a classic Win 3.1-style Open / Save file picker (built on
-  `Modal`) with a directory list, file list, "File Name" field, "List Files of
-  Type" filter, and "Drives" picker — folders on the left, files on the right.
-  Glob-based `FileFilter`s drive the type filter. The `notepad` example now uses
-  it for File → Open and File → Save As.
+- `FileDialog`: a modern, single-pane Open / Save file picker (built on `Modal`)
+  with the current path along the top, one combined list of folders and files,
+  a "File name" field, and a "File types" filter dropdown — the flat layout
+  modern KDE / Windows pickers use. Section labels carry Alt+L / Alt+N / Alt+T
+  accelerators. Glob-based `FileFilter`s drive the filter. The `notepad` example
+  now uses it for File → Open and File → Save As. (#26)
 
 ## [0.2.0] - 2026-06-06
 

@@ -288,9 +288,8 @@ impl Widget for SharedDialog {
 }
 
 /// And once more for the shared `FileDialog`. It forwards a couple more hooks
-/// than the message box: `collect_popups` so its "Drives" / "List Files of
-/// Type" dropdowns can open their own popup windows, and `wants_ticks` so the
-/// File Name field's caret blinks.
+/// than the message box: `collect_popups` so its "File types" dropdown can open
+/// its own popup window, and `wants_ticks` so the File name field's caret blinks.
 struct SharedFileDialog(Rc<RefCell<FileDialog>>);
 
 impl Widget for SharedFileDialog {
