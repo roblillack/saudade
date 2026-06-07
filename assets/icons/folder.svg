@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16">
+  <!-- Manila folder for directory rows. A black silhouette with a yellow face
+       drawn one unit inside it, so the black reads as a crisp 1px outline at
+       1x. The tab steps up on the left, the body fills the rest. -->
+  <path d="M1 4 H7 V6 H15 V13 H1 Z" fill="#000000"/>
+  <path d="M2 5 H6 V7 H14 V12 H2 Z" fill="#cccc00"/>
+</svg>

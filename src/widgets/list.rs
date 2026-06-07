@@ -3,6 +3,7 @@ use std::time::{Duration, Instant};
 use crate::event::{Event, EventCtx, Key, MouseButton, NamedKey};
 use crate::geometry::{Color, Point, Rect};
 use crate::painter::Painter;
+use crate::svg::SvgImage;
 use crate::theme::Theme;
 use crate::widget::Widget;
 use crate::widgets::scrollbar::{SCROLLBAR_THICKNESS, ScrollBar};
@@ -64,11 +65,24 @@ impl ListIcon {
     }
 }
 
+/// The art shown to the left of a [`ListItem`]'s label.
+enum IconArt {
+    /// A hand-built raster pixel buffer.
+    Raster(ListIcon),
+    /// A compile-time-baked vector image — crisp at any DPI, drawn straight
+    /// into the row. Typically produced by [`include_svg!`](crate::include_svg).
+    Svg(SvgImage),
+}
+
 /// A single entry inside a [`List`]: a text label and an optional icon shown to
-/// its left.
+/// its left. The icon may be a raster [`ListIcon`] (via [`with_icon`]) or a
+/// compile-time-baked [`SvgImage`] (via [`with_svg_icon`]).
+///
+/// [`with_icon`]: ListItem::with_icon
+/// [`with_svg_icon`]: ListItem::with_svg_icon
 pub struct ListItem {
     pub label: String,
-    pub icon: Option<ListIcon>,
+    icon: Option<IconArt>,
 }
 
 impl ListItem {
@@ -79,8 +93,18 @@ impl ListItem {
         }
     }
 
+    /// Show a raster [`ListIcon`] to the left of the label.
     pub fn with_icon(mut self, icon: ListIcon) -> Self {
-        self.icon = Some(icon);
+        self.icon = Some(IconArt::Raster(icon));
+        self
+    }
+
+    /// Show a compile-time-baked [`SvgImage`] to the left of the label — the
+    /// crisp, DPI-independent choice (e.g. the folder / file marks the filer and
+    /// file dialog use). [`SvgImage`] is `Copy`, so pass it by value, typically
+    /// straight from [`include_svg!`](crate::include_svg).
+    pub fn with_svg_icon(mut self, icon: SvgImage) -> Self {
+        self.icon = Some(IconArt::Svg(icon));
         self
     }
 }
@@ -345,14 +369,21 @@ impl Widget for List {
             }
 
             let item = &self.items[row];
-            let mut label_x = text_x + 2;
-            if let Some(icon) = &item.icon {
-                let icon_y = y + (ROW_HEIGHT - icon.height) / 2;
-                draw_icon(painter, icon, label_x, icon_y);
-                label_x += ICON_SIZE + ICON_PAD;
-            } else {
-                label_x += ICON_SIZE + ICON_PAD;
+            // The label always starts past a fixed icon gutter, so labels line
+            // up whether or not the row actually carries an icon.
+            let icon_x = text_x + 2;
+            match &item.icon {
+                Some(IconArt::Raster(icon)) => {
+                    let icon_y = y + (ROW_HEIGHT - icon.height) / 2;
+                    draw_icon(painter, icon, icon_x, icon_y);
+                }
+                Some(IconArt::Svg(svg)) => {
+                    let icon_y = y + (ROW_HEIGHT - ICON_SIZE) / 2;
+                    painter.draw_svg(svg, Rect::new(icon_x, icon_y, ICON_SIZE, ICON_SIZE));
+                }
+                None => {}
             }
+            let label_x = icon_x + ICON_SIZE + ICON_PAD;
             let label_y = y + (ROW_HEIGHT - theme.font_size as i32) / 2 - 1;
             painter.text(label_x, label_y, &item.label, theme.font_size, text_color);
         }

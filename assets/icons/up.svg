@@ -1,0 +1,4 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16">
+  <!-- "Up one level" (..) arrow: a solid black arrow pointing up. -->
+  <path d="M8 3 L13 8 H10 V13 H6 V8 H3 Z" fill="#000000"/>
+</svg>
