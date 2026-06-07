@@ -32,7 +32,8 @@ Reference apps live under `examples/`. Run any of them with
 | Example         | What it shows                                                                                                                                                                                                                                                                                                                                                                                    |
 | --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `notepad`       | Editor window with menu bar (`MenuBar`, `TextEditor`).                                                                                                                                                                                                                                                                                                                                           |
-| `filer`         | Filesystem browser using `List` with folder/file icons.                                                                                                                                                                                                                                                                                                                                          |
+| `filer`         | Filesystem browser using `List` with folder/file icons. Drag an entry out of the window to drop it onto another app (drag *source* via `EventCtx::start_drag`; Wayland only).                                                                                                                                                                                                                       |
+| `dnd`           | A drop zone that highlights while a file drag hovers and lists the paths dropped onto it. Demonstrates OS file drag-and-drop (`DragEnter` / `DragMove` / `DragLeave` / `Drop`) across macOS, Windows, X11, and Wayland.                                                                                                                                                                            |
 | `picker`        | Pick-an-item dialog: `List` + buttons + `Dialog`, with Tab/Shift+Tab focus cycling.                                                                                                                                                                                                                                                                                                              |
 | `counter`       | [7GUIs](https://eugenkiss.github.io/7guis/) task 1 — a `Label` field and a `Button`.                                                                                                                                                                                                                                                                                                             |
 | `temperature`   | 7GUIs task 2 — two `TextInput`s converting Celsius ↔ Fahrenheit live.                                                                                                                                                                                                                                                                                                                            |
@@ -46,7 +47,7 @@ Reference apps live under `examples/`. Run any of them with
 | `svg`           | Compares `include_svg!` (SVG baked to polygons at compile time, filled at runtime — no SVG crate in the binary) against `include_str!` + `resvg` (parse + rasterize at runtime). Draws six icons both ways for a side-by-side fidelity check and prints a micro-benchmark to the console (run with `--release`). Needs `resvg` only as a dev-dependency, for the comparison.                                                                                                                                                |
 
 ```console
-$ cargo run --example notepad        # or: filer, picker, counter, temperature,
+$ cargo run --example notepad        # or: filer, dnd, picker, counter, temperature,
                                      #     flight_booker, timer, crud, circle_drawer,
                                      #     cells, patterns, scaling, svg
 ```
@@ -115,7 +116,7 @@ to an object-oriented UI framework.
 | Module   | Contents                                                                                                                                                                                                 |
 | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | geometry | `Point`, `Size`, `Rect`, `Color`                                                                                                                                                                         |
-| event    | `Event`, `MouseButton`, `Key`, `NamedKey`, `Modifiers`, `EventCtx`                                                                                                                                       |
+| event    | `Event`, `DragData`, `MouseButton`, `Key`, `NamedKey`, `Modifiers`, `EventCtx`                                                                                                                           |
 | theme    | `Theme`, default `Theme::windows_31()` palette                                                                                                                                                           |
 | painter  | `Painter` — drawing primitives + Win 3.1 chrome helpers                                                                                                                                                  |
 | svg      | `SvgImage`, `SvgPolygon`, `FillRule` + the `include_svg!` macro — compile-time vector icons                                                                                                              |
@@ -170,10 +171,17 @@ pub enum Event {
     PointerUp    { pos: Point, button: MouseButton },
     PointerLeave,
     Scroll       { pos: Point, delta_x: f32, delta_y: f32 },
+    DragEnter    { pos: Point },              // a file drag entered the window
+    DragMove     { pos: Point },              // …and moved (Wayland only)
+    DragLeave,                                // …and left without dropping
+    Drop         { pos: Point, data: DragData }, // files were dropped
     KeyDown      { key: Key, modifiers: Modifiers },
     KeyUp        { key: Key, modifiers: Modifiers },
     Char         { ch: char, modifiers: Modifiers },
+    Tick,        // ~60 Hz while any widget wants_ticks()
 }
+
+pub struct DragData { pub paths: Vec<PathBuf> }
 
 pub enum MouseButton { Left, Right, Middle }
 
@@ -191,9 +199,14 @@ pub struct Modifiers { pub shift: bool, pub control: bool, pub alt: bool, pub lo
 ```
 
 `Event::position()` returns the cursor `Point` for positional events —
-including `Scroll`, so containers route a wheel turn to the widget under the
-pointer — or `None` for `PointerLeave` and keyboard events.
+including `Scroll` and the positional drag events (`DragEnter`, `DragMove`,
+`Drop`), so containers route them to the widget under the pointer — or `None`
+for `PointerLeave`, `DragLeave`, and keyboard events.
 `Event::is_keyboard()` distinguishes the three keyboard variants.
+
+`Event` is `Clone` but not `Copy`: `Drop` owns a `DragData` (a `Vec` of paths).
+Dispatch always passes `&Event`, so this costs nothing on the hot path — only a
+widget that keeps a dropped payload pays for the clone.
 
 `Scroll` carries the wheel / trackpad movement in document _lines_, positive
 toward the content's end (`delta_y` down, `delta_x` right). One wheel notch is
@@ -210,6 +223,94 @@ when a command modifier (Ctrl / Alt / Logo) is held so editors don't
 ingest "\x01" for Ctrl+A; the matching `KeyDown` still fires.
 
 `Modifiers::has_command()` is true if any of Ctrl / Alt / Logo is held.
+
+### Drag and drop
+
+Saudade receives **file drops from the OS** on every backend — drag files from
+Finder / Explorer / your file manager onto a window and the runtime turns the
+drag into the same typed events everything else uses:
+
+| Event       | When                                            | Carries          |
+| ----------- | ----------------------------------------------- | ---------------- |
+| `DragEnter` | a file drag entered the window                  | `pos`            |
+| `DragMove`  | the drag moved (Wayland only)                   | `pos`            |
+| `DragLeave` | the drag left / was cancelled without dropping  | —                |
+| `Drop`      | the files were released                         | `pos` + `DragData` |
+
+A widget opts in by matching these in its `event` handler — there's no separate
+trait method. `DragEnter` / `DragMove` / `Drop` carry a `pos` and route to the
+widget under the cursor exactly like pointer events; `DragLeave` carries no
+position and is broadcast to every widget (like `PointerLeave`), so any drop
+target can clear a highlight. A drop target **must call `ctx.accept_drop()`**
+while handling `DragEnter` / `DragMove` to declare it will take a drop there;
+without it the runtime treats the widget as uninterested and the drag falls
+through. That's also what tells the *source* app the spot is a valid target —
+its drag cursor reflects it — so windows with no drop zone correctly read as
+"no drop". A typical drop target accepts + highlights on `DragEnter`,
+un-highlights on `DragLeave`, and consumes `data.paths` on `Drop`:
+
+```rust
+fn event(&mut self, event: &Event, ctx: &mut EventCtx) {
+    match event {
+        Event::DragEnter { .. } | Event::DragMove { .. } => {
+            ctx.accept_drop();           // <- required to receive the drop
+            self.hot = true;
+            ctx.request_paint();
+        }
+        Event::DragLeave => { self.hot = false; ctx.request_paint(); }
+        Event::Drop { data, .. } => { self.open_files(&data.paths); ctx.request_paint(); }
+        _ => {}
+    }
+}
+```
+
+(On Wayland `accept_drop` accepts the drag offer per position; on the winit
+backends the OS has already committed to the drop, so it's advisory there but
+keeps drop targets portable.)
+
+The **payload only arrives with `Drop`**, never with `DragEnter` / `DragMove`:
+the platforms only let us read a drag's contents reliably once the user actually
+drops (reading mid-hover can block on a source that withholds the data), so the
+enter/move events are a presence-and-position signal and `Drop` delivers the
+files.
+
+Two per-backend caveats:
+
+- **Position.** On Wayland the drag position is exact and `DragMove` tracks the
+  pointer continuously, so per-widget routing during a drag works. On the winit
+  backends (macOS, Windows, X11) winit reports no cursor position during a file
+  drag — `DragEnter` / `Drop` use the last in-window pointer location and there
+  is no `DragMove`, so treat the whole window as one drop zone there.
+- **Paths only, copy only.** A drop currently resolves to local file paths
+  (`text/uri-list` on Wayland; winit's `HoveredFile` / `DroppedFile`
+  elsewhere). On Wayland we always accept the *copy* action, never move, so a
+  drop never makes the source delete the user's file.
+
+See `examples/dnd.rs` (`cargo run --example dnd`) for a working drop zone.
+
+#### Dragging files out (Wayland only)
+
+A widget can also be a drag **source** — start an OS drag carrying file paths so
+another application can receive it — by calling `EventCtx::start_drag` once it
+recognizes a press-then-move gesture:
+
+```rust
+fn event(&mut self, event: &Event, ctx: &mut EventCtx) {
+    match event {
+        Event::PointerDown { pos, button: MouseButton::Left } => self.arm(*pos),
+        Event::PointerMove { pos } if self.moved_past_threshold(*pos) =>
+            ctx.start_drag(DragData::from_paths([self.path.clone()])),
+        Event::PointerUp { .. } => self.disarm(),
+        _ => {}
+    }
+}
+```
+
+This is **Wayland-only**: winit exposes no API to *initiate* a drag on any of
+its platforms (macOS, Windows, X11), so `start_drag` is a no-op there. The drag
+offers `text/uri-list` and copies (never moves) the files. Receiving drops, by
+contrast, works on every backend. See `examples/filer.rs` (`cargo run --example
+filer`) — drag an entry out of the window onto another app.
 
 ### `EventCtx`
 
