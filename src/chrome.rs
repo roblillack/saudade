@@ -417,28 +417,38 @@ fn draw_title(painter: &mut Painter, m: &Metrics, slots: &ButtonSlots, chrome: &
 }
 
 /// Draw the soft, rounded drop shadow over the desktop. Replicates Canoe's
-/// quadratic-falloff rounded-rect shadow: the occluder is the window frame
-/// nudged down by half the shadow extent (so the shadow pools below the
-/// window), with the falloff curve `alpha = base · (1 − d/s)²` out to `s`.
+/// quadratic-falloff rounded-rect shadow with the falloff curve
+/// `alpha = base · (1 − d/s)²` out to `s`.
+///
+/// The occluder that casts the shadow is the window frame with its *top* edge
+/// pushed down by half the shadow extent while its bottom and sides stay on the
+/// frame (Canoe's `frame_height − shadow_size/2` height plus a `shadow_size/2`
+/// downward shift). So the shadow hugs the bottom and side borders with no gap,
+/// while the top stays light — the look of a window lit from above.
 fn draw_shadow(painter: &mut Painter, m: &Metrics) {
     let s = m.shadow;
     if s <= 0 {
         return;
     }
     let s_f = s as f32;
-    // Occluder = frame, shifted down by s/2 for the downward bias.
-    let off = (s / 2) as f32;
-    let cx = m.frame.x as f32 + m.frame.w as f32 / 2.0;
-    let cy = m.frame.y as f32 + m.frame.h as f32 / 2.0 + off;
-    let hx = m.frame.w as f32 / 2.0;
-    let hy = m.frame.h as f32 / 2.0;
-    let r = ((s / 2) as f32).clamp(0.0, hx.min(hy).max(0.0));
+    let shift = s / 2;
+    // Occluder: frame top moved down by `shift`, bottom/left/right unchanged.
+    let occ_x = m.frame.x;
+    let occ_y = m.frame.y + shift;
+    let occ_w = m.frame.w;
+    let occ_h = (m.frame.h - shift).max(1);
+
+    let cx = occ_x as f32 + occ_w as f32 / 2.0;
+    let cy = occ_y as f32 + occ_h as f32 / 2.0;
+    let hx = occ_w as f32 / 2.0;
+    let hy = occ_h as f32 / 2.0;
+    let r = (shift as f32).clamp(0.0, hx.min(hy).max(0.0));
 
     // Only the band around the occluder can carry shadow; scan that region.
-    let x0 = (m.frame.x - s - 1).max(0);
-    let x1 = (m.frame.right() + s + 1).min(m.buffer.w);
-    let y0 = (m.frame.y - s - 1).max(0);
-    let y1 = (m.frame.bottom() + s + s + 1).min(m.buffer.h);
+    let x0 = (occ_x - s - 1).max(0);
+    let x1 = (occ_x + occ_w + s + 1).min(m.buffer.w);
+    let y0 = (occ_y - s - 1).max(0);
+    let y1 = (occ_y + occ_h + s + 1).min(m.buffer.h);
 
     for py in y0..y1 {
         for px in x0..x1 {
