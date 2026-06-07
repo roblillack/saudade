@@ -12,12 +12,13 @@ While pre-1.0, the minor version is bumped for breaking changes.
 
 ### Fixed
 
-- `include_svg!` now frames a baked image by the artwork's own bounding box and
-  maps every contour through its `abs_transform` (the full ancestor chain,
-  viewBox→viewport scale included). This fixes SVGs that previously baked
-  mis-scaled or off-frame: a viewBox with a non-zero origin, an `<svg>` whose
-  width/height differ from the viewBox, or a drawing tucked into one corner of a
-  large canvas. (#27)
+- `include_svg!` now maps every contour through its `abs_transform` (the full
+  ancestor chain, viewBox→viewport origin offset and scale included), while still
+  framing the baked image by the SVG's declared viewport (the box resvg renders
+  into). This fixes SVGs that previously baked mis-scaled or off-frame — a viewBox
+  with a non-zero origin or an `<svg>` whose width/height differ from the viewBox
+  — without disturbing artwork that is deliberately padded inside its viewBox
+  (the scrollbar, dropdown, dialog, and checkbox marks). (#27, #31)
 
 ### Added
 
