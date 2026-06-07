@@ -498,6 +498,38 @@ impl<'a> Painter<'a> {
         }
     }
 
+    /// Fill the logical rectangle `rect` with a two-tone checkerboard: a solid
+    /// `base` fill stippled with `fg` on alternating cells. The cell size tracks
+    /// the DPI (one logical pixel, rounded to whole device pixels) and the grid
+    /// is anchored to the logical origin, so the texture keeps its proportions
+    /// and doesn't crawl when the content is letterboxed. This is the Win 3.1
+    /// scrollbar track's "newsprint" pattern; at the default 1.0x it's a classic
+    /// 1px black-on-gray checker.
+    pub fn fill_checker(&mut self, rect: Rect, base: Color, fg: Color) {
+        self.fill_rect(rect, base);
+        let x0 = self.origin_x + self.snap(rect.x);
+        let y0 = self.origin_y + self.snap(rect.y);
+        let x1 = self.origin_x + self.snap(rect.x + rect.w);
+        let y1 = self.origin_y + self.snap(rect.y + rect.h);
+        let (cx0, cy0, cx1, cy1) = self.clip_bounds();
+        let xs = x0.max(cx0);
+        let ys = y0.max(cy0);
+        let xe = x1.min(cx1);
+        let ye = y1.min(cy1);
+        let step = self.scale.round().max(1.0) as i32;
+        let fg = fg.0;
+        for y in ys..ye {
+            let ay = (y - self.origin_y).div_euclid(step);
+            let row = (y * self.width) as usize;
+            for x in xs..xe {
+                let ax = (x - self.origin_x).div_euclid(step);
+                if (ax + ay).rem_euclid(2) == 0 {
+                    self.pixels[row + x as usize] = fg;
+                }
+            }
+        }
+    }
+
     /// Solid-fill a physical-pixel rectangle. Used internally after logical
     /// coordinates have been snapped + offset.
     fn fill_phys(&mut self, x: i32, y: i32, w: i32, h: i32, color: Color) {
@@ -674,6 +706,36 @@ impl<'a> Painter<'a> {
             self.h_line(inner2.x, inner2.bottom() - 1, inner2.w, theme.shadow);
             self.v_line(inner2.right() - 1, inner2.y, inner2.h, theme.shadow);
         }
+    }
+
+    /// Lighter Win 3.1 chrome used by the scrollbar's arrow buttons and thumb:
+    /// a square (un-rounded) 1px black outline, a single highlight line on the
+    /// top/left, and a 2px shadow on the bottom/right. Reads as lighter than
+    /// [`Self::button`], whose rounded outline and doubled highlight give the
+    /// heavier "dialog" chrome.
+    pub fn light_button(&mut self, rect: Rect, theme: &Theme) {
+        if rect.w <= 0 || rect.h <= 0 {
+            return;
+        }
+        // Same crisp self-management as `button`: at the awkward fractional
+        // scales the 1-logical-pixel edges round unevenly, so redraw this recipe
+        // at exact device pixels there (the re-entry runs at `scale == 1.0`,
+        // which also breaks the recursion).
+        if self.wants_1x_crispness() {
+            return self.physical(rect, |p, r| p.light_button(r, theme));
+        }
+        self.stroke_rect(rect, theme.border);
+        let inner = rect.inset(1);
+        self.fill_rect(inner, theme.face);
+        // One highlight line on the top/left...
+        self.h_line(inner.x, inner.y, inner.w, theme.highlight);
+        self.v_line(inner.x, inner.y, inner.h, theme.highlight);
+        // ...against a 2px shadow on the bottom/right.
+        self.h_line(inner.x, inner.bottom() - 1, inner.w, theme.shadow);
+        self.v_line(inner.right() - 1, inner.y, inner.h, theme.shadow);
+        let inner2 = inner.inset(1);
+        self.h_line(inner2.x, inner2.bottom() - 1, inner2.w, theme.shadow);
+        self.v_line(inner2.right() - 1, inner2.y, inner2.h, theme.shadow);
     }
 
     /// Dotted Win 3.1 focus rectangle: a 1px dashed outline (every other

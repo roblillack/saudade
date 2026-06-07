@@ -280,21 +280,54 @@ impl Widget for ScrollBar {
     }
 
     fn paint(&mut self, painter: &mut Painter, theme: &Theme) {
-        // Track first — the light-gray strip that always shows behind the
-        // thumb. Win 3.1 used a checkered "newsprint" pattern; the flat
-        // light-gray fill we use here reads as the same thing at small
-        // scale and keeps the chrome simpler.
-        painter.fill_rect(self.rect, theme.face);
-
         let up = self.neg_arrow_rect();
         let down = self.pos_arrow_rect();
         let thumb_opt = (self.max > 0).then(|| self.thumb_rect());
 
-        painter.button(up, theme, false, false);
-        painter.button(down, theme, false, false);
+        // Track: the Win 3.1 "newsprint" checkerboard (black on gray) that shows
+        // in the gap between the buttons wherever the thumb isn't.
+        painter.fill_checker(self.track_rect(), theme.face, theme.border);
+
+        // Buttons and thumb in the lighter frame (square outline, single
+        // top/left highlight, 2px bottom/right shadow).
+        painter.light_button(up, theme);
+        painter.light_button(down, theme);
         if let Some(thumb) = thumb_opt {
-            painter.button(thumb, theme, false, false);
+            // Where the thumb sits flush against an arrow button, overlap that
+            // button's frame by 1px so the thumb's black outline lands on the
+            // *same* row/column as the button's, collapsing the divider to a
+            // single 1px line instead of stacking the two 1px frames into a 2px
+            // band.
+            let track = self.track_rect();
+            let mut t = thumb;
+            match self.orientation {
+                Orientation::Vertical => {
+                    if thumb.y <= track.y {
+                        t.y -= 1;
+                        t.h += 1;
+                    }
+                    if thumb.bottom() >= track.bottom() {
+                        t.h += 1;
+                    }
+                }
+                Orientation::Horizontal => {
+                    if thumb.x <= track.x {
+                        t.x -= 1;
+                        t.w += 1;
+                    }
+                    if thumb.right() >= track.right() {
+                        t.w += 1;
+                    }
+                }
+            }
+            painter.light_button(t, theme);
         }
+
+        // A single black outline around the whole bar. Its long sides are the
+        // track's own outline; they collapse into the button/thumb frames where
+        // they meet, and the button frames supply the dividers between the
+        // buttons and the track.
+        painter.stroke_rect(self.rect, theme.border);
         // The arrow glyphs are baked SVGs; `SvgImage::draw_tinted` already drops
         // to a crisp physical-pixel pass at every scale, so no manual `physical`
         // branch is needed. Tinted with `theme.text` so they track the theme
@@ -378,7 +411,10 @@ const ARROW_LEFT: SvgImage = include_svg!("assets/scrollbar/left.svg");
 const ARROW_RIGHT: SvgImage = include_svg!("assets/scrollbar/right.svg");
 
 /// Fill the arrow glyph into `btn` in `color`, pointing in the requested
-/// direction for the bar's orientation.
+/// direction for the bar's orientation. The SVG is drawn across the whole
+/// button rect: each glyph's 16-unit viewBox already centers the small triangle
+/// with the classic Win 3.1 margin around it, so it maps 1:1 onto the 16px
+/// button at 1.0x without any extra inset.
 fn draw_arrow(painter: &mut Painter, btn: Rect, orient: Orientation, dir: ArrowDir, color: Color) {
     let arrow = match (orient, dir) {
         (Orientation::Vertical, ArrowDir::Negative) => &ARROW_UP,

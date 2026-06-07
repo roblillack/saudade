@@ -77,12 +77,26 @@ While pre-1.0, the minor version is bumped for breaking changes.
 - `EventCtx::swallow_key_until_release()`: a handler that fully acts on a key
   press can ask the runtime to discard the rest of it — the trailing `Char`,
   autorepeat, and the release. (#30)
+- `Painter::light_button()` (a lighter chrome frame: square outline, single
+  top/left highlight, 2px bottom/right shadow) and `Painter::fill_checker()` (a
+  two-tone DPI-aware checkerboard fill). (#29)
 
 ### Changed
 
 - The folder / file / up-arrow icons in the file dialog and the `filer` example
   are now real SVG assets (`assets/icons/*.svg`) baked via `include_svg!` and
   shared between the two, instead of hand-coded pixel buffers. (#32)
+- `ScrollBar` chrome now matches Win 3.1 more closely: the arrow buttons and
+  thumb use the lighter `light_button` frame (square outline, one highlight line
+  instead of two), the track gains a thin black outline that collapses into the
+  button/thumb frames where they meet, the arrow glyphs sit centered on the
+  button face with the classic margin instead of filling it edge to edge, and
+  the empty track shows the classic black-on-gray "newsprint"
+  checkerboard instead of a flat gray fill. (#29)
+- Adjacent `ScrollBar` outlines no longer double up into a 2px band where they
+  meet — each shared edge collapses to a single 1px line: a thumb slid flush
+  against an arrow button shares that button's edge, and a scrollbar embedded in
+  a `List` or `TextEditor` shares its outer edge with the field's border. (#29)
 
 ## [0.2.0] - 2026-06-06
 

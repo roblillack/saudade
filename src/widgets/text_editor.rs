@@ -131,15 +131,20 @@ impl TextEditor {
     /// The rectangle used to render text — everything except the column the
     /// scrollbar occupies on the right edge.
     fn text_area(&self) -> Rect {
-        let sb_w = if self.v_scrollbar.rect().w > 0 {
-            SCROLLBAR_THICKNESS
+        // When the scrollbar is present the field overlaps it by 1px so the
+        // field's right border lands on the scrollbar's own left-border column,
+        // collapsing the divider to a single 1px line instead of stacking the
+        // two 1px borders into a 2px band. The scrollbar is painted last, on
+        // top, so that shared column reads as the scrollbar's edge.
+        let (sb_w, overlap) = if self.v_scrollbar.rect().w > 0 {
+            (SCROLLBAR_THICKNESS, 1)
         } else {
-            0
+            (0, 0)
         };
         Rect::new(
             self.rect.x,
             self.rect.y,
-            (self.rect.w - sb_w).max(0),
+            (self.rect.w - sb_w + overlap).max(0),
             self.rect.h,
         )
     }
