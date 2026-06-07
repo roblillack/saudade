@@ -17,10 +17,10 @@ While pre-1.0, the minor version is bumped for breaking changes.
   table by re-measuring every prefix of the line (O(n²)) and re-rasterized every
   glyph from scratch — including ones scrolled off the right edge — and the
   runtime repaints the whole tree on every scroll notch and resize step. The
-  font now caches rasterized glyphs and per-glyph advances, the caret table is
-  built in one O(n) pass over those advances, and `Font::draw_phys` stops at the
-  clip's right edge. Output is snapshot-identical; the worst case is ~100×
-  faster.
+  font now caches rasterized glyphs (in a bounded LRU) and per-glyph advances,
+  the caret table is built in one O(n) pass over those advances, and
+  `Font::draw_phys` stops at the clip's right edge. Output is snapshot-identical;
+  the worst case is ~100× faster.
 - `include_svg!` now maps every contour through its `abs_transform` (the full
   ancestor chain, viewBox→viewport origin offset and scale included), while still
   framing the baked image by the SVG's declared viewport (the box resvg renders

@@ -21,17 +21,29 @@ use crate::painter::Painter;
 /// cache hits, turning each subsequent frame from "rasterize N glyphs" into
 /// "blend N cached bitmaps". The caches use interior mutability so drawing can
 /// stay `&self` (the painter only ever holds a shared reference to the font).
+///
+/// The glyph bitmaps are the memory-heavy half, so that cache is LRU-bounded
+/// to [`GLYPH_CACHE_CAP`] entries: an app that cycles through many sizes (a
+/// smooth zoom) or a large character range (CJK) keeps only the most recently
+/// drawn glyphs instead of growing without limit. The advance cache holds a
+/// single `f32` per entry, so it stays an unbounded plain map.
 pub struct Font {
     inner: fontdue::Font,
     /// Rasterized glyphs, keyed by `(char, physical-size bits)`. The bitmaps
     /// are wrapped in `Rc` so a lookup can hand back a cheap clone and release
-    /// the cache borrow before the (longer-lived) blend loop runs.
-    glyphs: RefCell<HashMap<(char, u32), Rc<Glyph>>>,
+    /// the cache borrow before the (longer-lived) blend loop runs. LRU-bounded.
+    glyphs: RefCell<LruCache<(char, u32), Rc<Glyph>>>,
     /// Per-glyph advance widths, keyed by `(char, size bits)`. Feeds both text
     /// measurement and the editor's caret-offset table; far cheaper than a full
     /// rasterize when only the advance is needed.
     advances: RefCell<HashMap<(char, u32), f32>>,
 }
+
+/// Upper bound on the number of distinct rasterized glyphs kept in memory at
+/// once. The on-screen working set is a few hundred at most (printable ASCII
+/// across one or two sizes), so this leaves generous headroom while still
+/// capping memory when an app renders text at many sizes or over a wide script.
+const GLYPH_CACHE_CAP: usize = 1024;
 
 /// One rasterized glyph: fontdue's metrics plus its coverage bitmap.
 struct Glyph {
@@ -39,11 +51,60 @@ struct Glyph {
     bitmap: Vec<u8>,
 }
 
+/// A small least-recently-used cache: a plain map plus a monotonic access
+/// "clock" stamped on every entry. On overflow the entry with the oldest stamp
+/// is evicted. Eviction scans the map (O(capacity)), but it only happens on a
+/// miss that fills the cache — and a glyph rasterization, the thing a miss
+/// triggers, dwarfs that scan — so the simplicity is worth more than an
+/// intrusive-list O(1) variant here.
+struct LruCache<K, V> {
+    entries: HashMap<K, (V, u64)>,
+    clock: u64,
+    capacity: usize,
+}
+
+impl<K: Eq + std::hash::Hash + Copy, V: Clone> LruCache<K, V> {
+    fn new(capacity: usize) -> Self {
+        Self {
+            entries: HashMap::new(),
+            clock: 0,
+            capacity: capacity.max(1),
+        }
+    }
+
+    /// Fetch a value, marking it most-recently-used. Returns a clone so the
+    /// caller doesn't hold a borrow of the cache.
+    fn get(&mut self, key: &K) -> Option<V> {
+        self.clock += 1;
+        let stamp = self.clock;
+        let slot = self.entries.get_mut(key)?;
+        slot.1 = stamp;
+        Some(slot.0.clone())
+    }
+
+    /// Insert (or overwrite) a value as most-recently-used, evicting the
+    /// least-recently-used entry first if a *new* key would exceed capacity.
+    fn insert(&mut self, key: K, value: V) {
+        self.clock += 1;
+        if self.entries.len() >= self.capacity
+            && !self.entries.contains_key(&key)
+            && let Some(lru) = self
+                .entries
+                .iter()
+                .min_by_key(|(_, (_, stamp))| *stamp)
+                .map(|(k, _)| *k)
+        {
+            self.entries.remove(&lru);
+        }
+        self.entries.insert(key, (value, self.clock));
+    }
+}
+
 impl Font {
     fn new(inner: fontdue::Font) -> Self {
         Self {
             inner,
-            glyphs: RefCell::new(HashMap::new()),
+            glyphs: RefCell::new(LruCache::new(GLYPH_CACHE_CAP)),
             advances: RefCell::new(HashMap::new()),
         }
     }
@@ -109,8 +170,8 @@ impl Font {
     /// iterating the bitmap.
     fn glyph(&self, ch: char, size_phys: f32) -> Rc<Glyph> {
         let key = (ch, size_phys.to_bits());
-        if let Some(g) = self.glyphs.borrow().get(&key) {
-            return g.clone();
+        if let Some(g) = self.glyphs.borrow_mut().get(&key) {
+            return g;
         }
         let (metrics, bitmap) = self.inner.rasterize(ch, size_phys);
         let g = Rc::new(Glyph { metrics, bitmap });
@@ -256,4 +317,52 @@ fn load_family_chain(families: &[&str], monospace_fallback: bool) -> Option<Font
     }
 
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    impl<K: Eq + std::hash::Hash + Copy, V: Clone> LruCache<K, V> {
+        fn len(&self) -> usize {
+            self.entries.len()
+        }
+        fn contains(&self, key: &K) -> bool {
+            self.entries.contains_key(key)
+        }
+    }
+
+    #[test]
+    fn evicts_the_least_recently_used_entry() {
+        let mut cache: LruCache<i32, i32> = LruCache::new(2);
+        cache.insert(1, 10);
+        cache.insert(2, 20);
+        // Touch key 1 so key 2 becomes the least-recently-used.
+        assert_eq!(cache.get(&1), Some(10));
+        // Inserting a third key overflows capacity → evict key 2, keep 1 and 3.
+        cache.insert(3, 30);
+        assert_eq!(cache.len(), 2);
+        assert!(cache.contains(&1));
+        assert!(!cache.contains(&2), "the untouched entry is evicted");
+        assert!(cache.contains(&3));
+    }
+
+    #[test]
+    fn overwriting_an_existing_key_never_evicts() {
+        let mut cache: LruCache<i32, i32> = LruCache::new(2);
+        cache.insert(1, 10);
+        cache.insert(2, 20);
+        // Re-inserting an existing key updates in place — the cache is full but
+        // the key already lives there, so nothing is evicted.
+        cache.insert(1, 11);
+        assert_eq!(cache.len(), 2);
+        assert_eq!(cache.get(&1), Some(11));
+        assert!(cache.contains(&2));
+    }
+
+    #[test]
+    fn a_miss_returns_none() {
+        let mut cache: LruCache<i32, i32> = LruCache::new(4);
+        assert_eq!(cache.get(&99), None);
+    }
 }
