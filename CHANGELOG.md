@@ -10,6 +10,16 @@ While pre-1.0, the minor version is bumped for breaking changes.
 
 ## [Unreleased] - ReleaseDate
 
+### Added
+
+- `Dropdown` popups now scroll: a list longer than 12 rows caps the popup height
+  and grows a vertical scrollbar — mouse wheel, draggable thumb, Page Up/Down,
+  and scroll-the-selection-into-view all work — so a long list (e.g. the full
+  set of keyboard layouts) stays usable instead of opening a popup taller than
+  the screen.
+- `ScrollBar::end_drag()` to abandon an in-progress thumb drag, for hosts that
+  can be torn down mid-drag (such as a dropdown popup that closes on focus loss).
+
 ## [0.2.0] - 2026-06-06
 
 ### Added
