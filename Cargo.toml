@@ -64,7 +64,7 @@ png = "0.17"
 # plain flattened-polygon data, so nothing from that tree is linked into a
 # saudade binary. Path dep for local builds; the version pin lets the crate
 # still be published to crates.io.
-saudade-macros = { path = "macros", version = "0.1.0" }
+saudade-macros = { path = "macros", version = "0.2.0" }
 
 # Linux/BSD only: the SCTK Wayland backend (see src/wayland.rs) plus arboard's
 # wl-data-control clipboard backend. These crates don't build on macOS/Windows,
