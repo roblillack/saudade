@@ -1039,6 +1039,11 @@ power.draw(painter, Rect::new(8, 8, 32, 32));
 // or, equivalently:  painter.draw_svg(&POWER, Rect::new(8, 8, 32, 32));
 ```
 
+`SvgImage` is `Copy`, so it also drops straight into widgets that take an icon:
+`ListItem::with_svg_icon(POWER)` puts a crisp baked mark on a list row (the
+`filer` example and the `FileDialog` use shared `assets/icons/{folder,file,up}.svg`
+this way), the alternative to the raster `ListIcon` for hand-drawn pixels.
+
 The geometry is resolution-independent, so the same constant fills crisply
 at any size or scale factor. The supported SVG subset is the practical one —
 `path` / `rect` / `circle` / `ellipse` / `line`, groups with inherited

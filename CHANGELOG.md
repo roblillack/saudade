@@ -22,7 +22,7 @@ While pre-1.0, the minor version is bumped for breaking changes.
 - Firing a menu item by its keyboard mnemonic no longer leaks the letter into
   whatever the item opens. Picking File → Open with Alt+F, O previously typed an
   "o" into the dialog's freshly focused File name field; the menu now swallows
-  the keystroke through its release.
+  the keystroke through its release. (#30)
 
 ### Added
 
@@ -64,9 +64,18 @@ While pre-1.0, the minor version is bumped for breaking changes.
 - `ScrollBar::end_drag()` to abandon an in-progress thumb drag, for hosts that
   can be torn down mid-drag (such as a dropdown popup that closes on focus
   loss). (#28)
+- `ListItem::with_svg_icon`: list rows can now show a compile-time-baked
+  `SvgImage` (from `include_svg!`), drawn crisply at any DPI, alongside the
+  existing raster `ListIcon`. (#32)
 - `EventCtx::swallow_key_until_release()`: a handler that fully acts on a key
   press can ask the runtime to discard the rest of it — the trailing `Char`,
-  autorepeat, and the release.
+  autorepeat, and the release. (#30)
+
+### Changed
+
+- The folder / file / up-arrow icons in the file dialog and the `filer` example
+  are now real SVG assets (`assets/icons/*.svg`) baked via `include_svg!` and
+  shared between the two, instead of hand-coded pixel buffers. (#32)
 
 ## [0.2.0] - 2026-06-06
 

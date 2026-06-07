@@ -3,13 +3,22 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
 use crate::event::{Event, EventCtx, Key, NamedKey};
-use crate::geometry::{Color, Rect, Size};
+use crate::geometry::{Rect, Size};
+use crate::include_svg;
 use crate::painter::Painter;
+use crate::svg::SvgImage;
 use crate::theme::Theme;
 use crate::widget::{PopupRequest, Widget};
-use crate::widgets::list::{List, ListIcon, ListItem};
+use crate::widgets::list::{List, ListItem};
 use crate::widgets::modal::Modal;
 use crate::widgets::{Button, Container, Dropdown, TextInput};
+
+/// Row icons for the combined folder / file list, baked from SVG at compile
+/// time — no SVG parser in the binary, crisp at any DPI. Shared with the
+/// `filer` example, which bakes the same asset files.
+const FOLDER_ICON: SvgImage = include_svg!("assets/icons/folder.svg");
+const FILE_ICON: SvgImage = include_svg!("assets/icons/file.svg");
+const UP_ICON: SvgImage = include_svg!("assets/icons/up.svg");
 
 // ----------------------------------------------------------------------------
 // Layout constants. The dialog is a fixed-size modal; everything inside is
@@ -330,7 +339,6 @@ struct FileDialogBody {
     /// Entries parallel to the list rows, so an activation or selection change
     /// can tell a folder from a file.
     entries: Vec<Entry>,
-    icons: Icons,
     /// List selection at the previous dispatch, so a genuine change can be
     /// reflected into the File name field without clobbering typed text.
     last_sel: Option<usize>,
@@ -392,7 +400,6 @@ impl FileDialogBody {
             active_patterns,
             save_mode: suggested_name.is_some(),
             entries: Vec::new(),
-            icons: Icons::new(),
             last_sel: None,
         };
 
@@ -416,19 +423,19 @@ impl FileDialogBody {
         let mut items = Vec::new();
         let mut entries = Vec::new();
         if self.dir.parent().is_some() {
-            items.push(ListItem::new("..").with_icon(self.icons.up.clone()));
+            items.push(ListItem::new("..").with_svg_icon(UP_ICON));
             entries.push(Entry {
                 name: "..".to_string(),
                 is_dir: true,
             });
         }
         for name in read_dir_names(&self.dir, true) {
-            items.push(ListItem::new(name.clone()).with_icon(self.icons.folder.clone()));
+            items.push(ListItem::new(name.clone()).with_svg_icon(FOLDER_ICON));
             entries.push(Entry { name, is_dir: true });
         }
         for name in read_dir_names(&self.dir, false) {
             if self.matches_active(&name) {
-                items.push(ListItem::new(name.clone()).with_icon(self.icons.file.clone()));
+                items.push(ListItem::new(name.clone()).with_svg_icon(FILE_ICON));
                 entries.push(Entry {
                     name,
                     is_dir: false,
@@ -932,82 +939,6 @@ fn glob_match(pattern: &str, name: &str) -> bool {
         pi += 1;
     }
     pi == p.len()
-}
-
-// ----------------------------------------------------------------------------
-// Icons — 16x16 procedural glyphs for the list rows. Mirrors the `filer`
-// example's icons so the look matches the file manager.
-// ----------------------------------------------------------------------------
-
-struct Icons {
-    folder: ListIcon,
-    file: ListIcon,
-    up: ListIcon,
-}
-
-impl Icons {
-    fn new() -> Self {
-        Self {
-            folder: folder_icon(),
-            file: file_icon(),
-            up: up_icon(),
-        }
-    }
-}
-
-fn folder_icon() -> ListIcon {
-    let mut icon = ListIcon::new(16, 16);
-    let line = Color::BLACK;
-    let body = Color::YELLOW;
-    icon.fill_rect(Rect::new(1, 3, 6, 1), line);
-    icon.fill_rect(Rect::new(1, 4, 1, 2), line);
-    icon.fill_rect(Rect::new(6, 4, 1, 1), line);
-    icon.fill_rect(Rect::new(7, 5, 7, 1), line);
-    icon.fill_rect(Rect::new(1, 6, 13, 1), line);
-    icon.fill_rect(Rect::new(1, 6, 1, 8), line);
-    icon.fill_rect(Rect::new(13, 6, 1, 8), line);
-    icon.fill_rect(Rect::new(1, 13, 13, 1), line);
-    icon.fill_rect(Rect::new(2, 4, 4, 2), body);
-    icon.fill_rect(Rect::new(2, 7, 11, 6), body);
-    icon
-}
-
-fn file_icon() -> ListIcon {
-    let mut icon = ListIcon::new(16, 16);
-    let line = Color::BLACK;
-    let body = Color::WHITE;
-    icon.fill_rect(Rect::new(3, 1, 7, 1), line);
-    icon.fill_rect(Rect::new(3, 1, 1, 13), line);
-    icon.fill_rect(Rect::new(3, 13, 9, 1), line);
-    icon.fill_rect(Rect::new(11, 5, 1, 9), line);
-    icon.set_pixel(10, 1, line);
-    icon.set_pixel(10, 2, line);
-    icon.set_pixel(11, 2, line);
-    icon.set_pixel(11, 3, line);
-    icon.set_pixel(12, 3, line);
-    icon.set_pixel(12, 4, line);
-    icon.set_pixel(11, 4, line);
-    icon.fill_rect(Rect::new(9, 4, 3, 1), line);
-    icon.fill_rect(Rect::new(4, 2, 6, 3), body);
-    icon.fill_rect(Rect::new(4, 5, 7, 8), body);
-    icon.fill_rect(Rect::new(5, 7, 5, 1), line);
-    icon.fill_rect(Rect::new(5, 9, 5, 1), line);
-    icon.fill_rect(Rect::new(5, 11, 4, 1), line);
-    icon
-}
-
-fn up_icon() -> ListIcon {
-    let mut icon = ListIcon::new(16, 16);
-    let line = Color::BLACK;
-    for y in 0..5 {
-        let half = y + 1;
-        let cx = 7;
-        let xs = cx - half + 1;
-        let xe = cx + half;
-        icon.fill_rect(Rect::new(xs, 3 + y, xe - xs + 1, 1), line);
-    }
-    icon.fill_rect(Rect::new(6, 8, 4, 5), line);
-    icon
 }
 
 #[cfg(test)]
