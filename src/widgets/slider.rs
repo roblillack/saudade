@@ -227,6 +227,16 @@ impl Widget for Slider {
                 self.dragging = false;
                 ctx.request_paint();
             }
+            // The pointer left the window mid-drag — most often because an
+            // outbound drag-and-drop (or a popup teardown) revoked our pointer
+            // focus, so the matching release never arrives. With no OS grab to
+            // keep tracking, end the drag here; otherwise a stale `dragging`
+            // flag would make the thumb jump to the cursor the moment it
+            // returns.
+            Event::PointerLeave if self.dragging => {
+                self.dragging = false;
+                ctx.request_paint();
+            }
             Event::KeyDown { key, modifiers } if self.focused && !modifiers.has_command() => {
                 let page = (self.value_span() / 10).max(self.step);
                 let target = match key {

@@ -193,6 +193,16 @@ impl List {
         self.ensure_selection_visible();
     }
 
+    /// Whether `pos` lands on the built-in scrollbar gutter rather than the row
+    /// field. A wrapper that layers its own press gesture over the list (e.g.
+    /// the filer's drag-out) uses this to yield to the scrollbar — which is
+    /// pinned *inside* the list bounds and owns that strip — so grabbing the
+    /// thumb scrolls instead of triggering the wrapper's gesture.
+    pub fn scrollbar_hit(&self, pos: Point) -> bool {
+        let sb = self.v_scrollbar.rect();
+        sb.w > 0 && sb.contains(pos)
+    }
+
     /// Consume and return the most recent activation (double-click or Enter).
     /// Wrapper widgets that drive a List call this from their `event` handler
     /// after delegating to `List::event` to discover when the user "opened"
