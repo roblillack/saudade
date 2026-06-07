@@ -10,8 +10,25 @@ While pre-1.0, the minor version is bumped for breaking changes.
 
 ## [Unreleased] - ReleaseDate
 
+### Fixed
+
+- `include_svg!` now frames a baked image by the artwork's own bounding box and
+  maps every contour through its `abs_transform` (the full ancestor chain,
+  viewBox→viewport scale included). This fixes SVGs that previously baked
+  mis-scaled or off-frame: a viewBox with a non-zero origin, an `<svg>` whose
+  width/height differ from the viewBox, or a drawing tucked into one corner of a
+  large canvas.
+
 ### Added
 
+- `include_svg!` now honors `clip-path`: clip regions are intersected with the
+  drawn geometry at build time (via `i_overlay`), so clipped artwork bakes
+  correctly instead of being dropped. `i_overlay` is a compile-time-only
+  dependency of `saudade-macros` and never reaches a shipped binary.
+- `include_svg!` now approximates linear and radial gradient paint instead of
+  dropping it: each gradient bakes into a stack of flat-color bands (strips for
+  linear, nested disks for radial) clipped to the painted shape. Gradient fills
+  and strokes are no longer reported as unsupported.
 - `Dropdown` popups now scroll: a list longer than 12 rows caps the popup height
   and grows a vertical scrollbar — mouse wheel, draggable thumb, Page Up/Down,
   and scroll-the-selection-into-view all work — so a long list (e.g. the full
