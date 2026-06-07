@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <!-- Classic Win 3.1 "error" mark: a red rounded square with a white X. -->
+  <rect x="2" y="2" width="28" height="28" rx="5" fill="#cc0000"/>
+  <path d="M11 11 L21 21 M21 11 L11 21"
+        fill="none" stroke="#ffffff" stroke-width="3" stroke-linecap="round"/>
+</svg>

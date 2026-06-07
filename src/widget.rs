@@ -61,6 +61,19 @@ pub trait Widget {
     /// Handle a typed input event. Default: ignore.
     fn event(&mut self, _event: &Event, _ctx: &mut EventCtx) {}
 
+    /// Called when the widget is *cancelled* — closed by Escape or a window's
+    /// close button (which the runtime maps to Escape), with no child consuming
+    /// that Escape first — rather than dismissed by its own request. A hosting
+    /// [`Modal`](crate::widgets::Modal) calls it on its content just before
+    /// tearing it down; the runtime calls it on the *root* widget when the main
+    /// window is closed, so a dialog used directly as the window root gets the
+    /// same hook. It does *not* fire when the content asked to be dismissed
+    /// itself (e.g. an OK / Cancel button calling
+    /// [`EventCtx::request_dismiss`]), since that path already chose what to
+    /// commit or revert. A dialog that previews edits live overrides this to
+    /// roll them back. Default: no-op.
+    fn on_cancel(&mut self, _ctx: &mut EventCtx) {}
+
     /// Internal hook for capture-on-press dispatch. Default: never captured.
     /// Implementations like [`Button`](crate::widgets::Button) override this so
     /// pointer events keep flowing to them while a press is in progress, even

@@ -1,6 +1,8 @@
 use crate::event::{Event, EventCtx, Key, MouseButton, NamedKey};
-use crate::geometry::{Color, Rect};
+use crate::geometry::Rect;
+use crate::include_svg;
 use crate::painter::Painter;
+use crate::svg::SvgImage;
 use crate::theme::Theme;
 use crate::widget::Widget;
 
@@ -10,6 +12,15 @@ const BOX_SIZE: i32 = 13;
 const LABEL_GAP: i32 = 4;
 const FOCUS_PAD_X: i32 = 2;
 const FOCUS_PAD_Y: i32 = 1;
+/// Lift the label a hair above the box's geometric center so it reads as
+/// aligned with the check glyph rather than sitting a touch low.
+const LABEL_NUDGE_Y: i32 = 1;
+
+/// The check glyph, baked from SVG at compile time. Its 13-unit viewBox maps
+/// 1:1 onto the 13×13 box, and `SvgImage::draw_tinted` re-snaps it crisply at
+/// every scale while tinting the placeholder black with the theme's (possibly
+/// disabled) text color.
+const CHECK: SvgImage = include_svg!("assets/checkbox/check.svg");
 
 /// Win 3.1 checkbox: a 13×13 sunken white box with a check glyph when set,
 /// followed by a text label. Click or Space toggles the state; the optional
@@ -114,33 +125,32 @@ impl Widget for Checkbox {
         };
 
         // 1px black outline around a flat field — enough to stay visible on a
-        // white window background without leaning on a sunken bevel. The
-        // outline + check glyph are kept together in one physical-pixel pass
-        // in the crisp range: the inset face fill must snap against the *same*
-        // physical box as the outline, so it can't be pulled out to a plain
-        // logical call without shifting an edge pixel.
+        // white window background without leaning on a sunken bevel. The fill +
+        // outline are kept together in one physical-pixel pass in the crisp
+        // range: the inset face fill must snap against the *same* physical box
+        // as the outline, so it can't be pulled out to a plain logical call
+        // without shifting an edge pixel.
         if painter.wants_1x_crispness() {
             painter.physical(box_rect, |p, r| {
                 p.fill_rect(r.inset(1), box_fill);
                 p.stroke_rect(r, theme.border);
-                if self.checked {
-                    draw_check(p, r, fg);
-                }
             });
         } else {
             painter.fill_rect(box_rect.inset(1), box_fill);
             painter.stroke_rect(box_rect, theme.border);
-            if self.checked {
-                draw_check(painter, box_rect, fg);
-            }
+        }
+        // The check glyph rides on top as a baked SVG; `draw_tinted` runs its
+        // own crisp physical-pixel pass, so it stays out of the box's.
+        if self.checked {
+            CHECK.draw_tinted(painter, box_rect, fg);
         }
 
         // Label sits to the right of the box, vertically centered with the
-        // widget's bounds.
+        // widget's bounds and lifted a hair (see `LABEL_NUDGE_Y`).
         let text_size = theme.font_size;
         let measured = painter.measure_text(&self.label, text_size);
         let text_x = box_rect.right() + LABEL_GAP;
-        let text_y = self.rect.y + ((self.rect.h - measured.h).max(0)) / 2;
+        let text_y = self.rect.y + ((self.rect.h - measured.h).max(0)) / 2 - LABEL_NUDGE_Y;
         painter.text(text_x, text_y, &self.label, text_size, fg);
 
         if self.focused && self.enabled {
@@ -217,38 +227,5 @@ impl Widget for Checkbox {
 
     fn layout(&mut self, bounds: Rect) {
         self.rect = bounds;
-    }
-}
-
-/// Draw the classic Win 3.1 check glyph — two strokes that form a "✓" inside
-/// the box. The pattern was hand-tuned for a 13×13 cell so it never touches
-/// the bevel; the pattern is centered within `box_rect` so it stays roughly
-/// in place when the box happens to be larger (e.g. when the chrome was
-/// drawn in physical-pixel mode at a fractional scale, leaving the box a
-/// couple of pixels wider than the design size).
-fn draw_check(painter: &mut Painter, box_rect: Rect, color: Color) {
-    const PATTERN: &[&[u8]] = &[
-        b"          X  ",
-        b"         XX  ",
-        b"        XXX  ",
-        b"  X    XXX   ",
-        b"  XX  XXX    ",
-        b"   XXXXX     ",
-        b"    XXX      ",
-        b"     X       ",
-    ];
-    const CELL: i32 = 13;
-    // Center the 13-wide pattern in the box horizontally; vertically, the
-    // pattern hugs the bottom of its 13-row cell (rows 3..11), so we
-    // center the *cell* rather than the pattern itself to keep the check
-    // floating in roughly the same spot.
-    let dx = box_rect.x + (box_rect.w - CELL) / 2;
-    let dy = box_rect.y + (box_rect.h - CELL) / 2 + 3;
-    for (row, line) in PATTERN.iter().enumerate() {
-        for (col, byte) in line.iter().enumerate() {
-            if *byte == b'X' {
-                painter.pixel(dx + col as i32, dy + row as i32, color);
-            }
-        }
     }
 }

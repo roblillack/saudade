@@ -1,0 +1,28 @@
+[package]
+name = "saudade-macros"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+description = "Compile-time SVG → drawing-instruction macro (include_svg!) for the saudade GUI library"
+repository = "https://github.com/roblillack/saudade"
+license = "MIT"
+keywords = ["gui", "svg", "proc-macro", "icons"]
+categories = ["gui", "rendering"]
+
+[lib]
+proc-macro = true
+
+[dependencies]
+proc-macro2 = "1"
+quote = "1"
+syn = "2"
+
+# Compile-time only. usvg turns the SVG text into a normalized tree (resolved
+# inheritance, shapes converted to paths, absolute coordinates); kurbo flattens
+# the Bézier paths to polylines and expands strokes into fillable outlines. The
+# macro emits only the resulting polygons, so neither crate is a *runtime*
+# dependency of anything that uses the macro. Pinned to the same versions
+# control-panel already proved out (usvg 0.42 / kurbo 0.11).
+usvg = "0.42"
+kurbo = "0.11"
+i_overlay = "7"

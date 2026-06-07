@@ -288,7 +288,16 @@ impl ApplicationHandler for AppHandler {
 impl AppHandler {
     fn handle_main_event(&mut self, event: WindowEvent, event_loop: &ActiveEventLoop) {
         match event {
-            WindowEvent::CloseRequested => event_loop.exit(),
+            WindowEvent::CloseRequested => {
+                // Give the root a chance to react before we quit: a widget used
+                // directly as the window root (rather than hosted in a `Modal`)
+                // gets its `on_cancel` here, so a dialog-as-window can revert
+                // pending edits on close, just as Escape or a `Modal`'s close
+                // would. Most roots leave this a no-op.
+                let mut ctx = EventCtx::new();
+                self.root.on_cancel(&mut ctx);
+                event_loop.exit();
+            }
             WindowEvent::Moved(_) => {
                 // The main window changed screen position. Override-redirect
                 // popups are unmanaged top-level windows that don't follow

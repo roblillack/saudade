@@ -1,0 +1,26 @@
+# cargo-release configuration (workspace-wide defaults).
+#
+# The two crates are versioned INDEPENDENTLY — note the deliberate absence of
+# `shared-version`. `saudade-macros` is a compile-time-only helper that rarely
+# changes, so it's bumped only when it actually changes instead of riding along
+# with every `saudade` release. The cargo-release defaults already give us what
+# we want for that:
+#
+#   * collision-free, per-crate tags: `v{{version}}` for the root `saudade`
+#     crate and `saudade-macros-v{{version}}` for the macro crate.
+#   * cross-crate publish ordering with an index-wait, so on the rare release
+#     that touches both, `saudade-macros` lands and becomes resolvable before
+#     `saudade` is published.
+#
+# The README install-snippet bump is `saudade`-specific (and the README only
+# lives next to the root crate), so it's configured in that crate's
+# `[package.metadata.release]` in Cargo.toml rather than here.
+
+# Only ever cut a release from `main`.
+allow-branch = ["main"]
+
+# Spelled out even though it's the default: this is the safety net that makes
+# independent versioning sound. Whenever `saudade-macros` is bumped, saudade's
+# `version = "…"` requirement on it is rewritten to match, so the published
+# `saudade` never points at a macro-crate version that doesn't exist yet.
+dependent-version = "upgrade"

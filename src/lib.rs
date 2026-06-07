@@ -1,8 +1,7 @@
-//! saudade — a minimal, retained-mode GUI library for small Win 3.1-styled
-//! utilities (about boxes, simple dialogs, system info viewers).
+//! Saudade — a minimal, retained-mode GUI library for small Win 3.1-styled
+//! programs and utilities. Targets Wayland, X11, Windows, macOS.
 //!
-//! The library follows the architecture sketched in `saudade.md` but stays
-//! intentionally small:
+//! The library stays intentionally small:
 //!
 //! * the runtime drives winit + softbuffer
 //! * widgets are ordinary Rust values implementing [`Widget`]
@@ -27,6 +26,11 @@
 //! App::new(WindowConfig::new("Hello", 200, 80), root).run();
 //! ```
 
+// Let the crate refer to itself as `saudade`, so the `include_svg!` macro —
+// which expands to absolute `::saudade::…` paths for use by *downstream* crates
+// — also works when saudade uses it internally (e.g. the dialog icons).
+extern crate self as saudade;
+
 mod app;
 mod background;
 mod event;
@@ -34,6 +38,7 @@ mod font;
 mod geometry;
 pub mod mock;
 mod painter;
+mod svg;
 mod theme;
 #[cfg(all(unix, not(target_os = "macos")))]
 mod wayland;
@@ -46,6 +51,12 @@ pub use event::{DragData, Event, EventCtx, Key, Modifiers, MouseButton, NamedKey
 pub use font::Font;
 pub use geometry::{Color, Point, Rect, Size};
 pub use painter::Painter;
+// `include_svg!` reads an SVG at compile time and expands to a const
+// `SvgImage`; the runtime side just fills the baked polygons (no SVG parser in
+// the binary). The macro emits paths like `::saudade::SvgImage`, so these
+// re-exports are also the names its output references.
+pub use saudade_macros::include_svg;
+pub use svg::{FillRule, SvgImage, SvgPolygon};
 pub use theme::Theme;
 pub use widget::{PopupKind, PopupRequest, Widget};
 pub use widgets::{

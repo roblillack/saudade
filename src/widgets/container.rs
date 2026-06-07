@@ -1,5 +1,5 @@
 use crate::event::{Event, EventCtx};
-use crate::geometry::{Color, Rect, Size};
+use crate::geometry::{Color, Point, Rect, Size};
 use crate::painter::Painter;
 use crate::theme::Theme;
 use crate::widget::{PopupRequest, Widget};
@@ -20,6 +20,13 @@ use crate::widgets::{TabAction, tab_action};
 ///
 /// An overlay paint pass runs after every child has rendered, so widgets like
 /// menus can draw popups on top of their siblings.
+///
+/// Children are added at positions relative to the container's own top-left.
+/// [`layout`](Widget::layout) shifts them all by the origin it is given, so a
+/// `Container` can be placed anywhere — including as the content of a
+/// [`Modal`](crate::widgets::Modal), which centers it at a non-zero origin.
+/// Laid out at `(0, 0)` (the common app-root case) the shift is zero, so this
+/// is backward compatible with containers used directly as a window root.
 pub struct Container {
     pub size: Size,
     pub background: Option<Color>,
@@ -27,6 +34,10 @@ pub struct Container {
     children: Vec<Box<dyn Widget>>,
     captured: Option<usize>,
     focused: Option<usize>,
+    /// Top-left the children are currently positioned against. Children are
+    /// authored relative to `(0, 0)`; each `layout` translates them by the
+    /// delta to the new origin and records it here.
+    origin: Point,
 }
 
 impl Container {
@@ -43,6 +54,7 @@ impl Container {
             children: Vec::new(),
             captured: None,
             focused: None,
+            origin: Point::new(0, 0),
         }
     }
 
@@ -71,6 +83,28 @@ impl Container {
     /// focused yet. Exposed mainly so tests can verify focus cycling.
     pub fn focused_index(&self) -> Option<usize> {
         self.focused
+    }
+
+    /// Direct keyboard focus to a specific child by index (its position in add
+    /// order), delegating into it via `focus_first` so wrapper widgets pick the
+    /// right nested leaf. Returns `true` if the index named a focusable child.
+    /// Use it to choose a non-default initial focus target — e.g. a confirm
+    /// box opening with its Cancel button focused rather than the first one.
+    pub fn focus_child(&mut self, index: usize) -> bool {
+        if self.children.get(index).map(|c| c.focusable()) != Some(true) {
+            return false;
+        }
+        if let Some(old) = self.focused
+            && old != index
+            && let Some(c) = self.children.get_mut(old)
+        {
+            c.set_focused(false);
+        }
+        let focused = self.children[index].focus_first();
+        if focused {
+            self.focused = Some(index);
+        }
+        focused
     }
 
     fn choose_target(&self, event: &Event) -> Option<usize> {
@@ -166,7 +200,23 @@ fn next_in_cycle(candidates: &[usize], current: Option<usize>, dir: i32) -> usiz
 
 impl Widget for Container {
     fn bounds(&self) -> Rect {
-        Rect::new(0, 0, self.size.w, self.size.h)
+        Rect::new(self.origin.x, self.origin.y, self.size.w, self.size.h)
+    }
+
+    fn layout(&mut self, bounds: Rect) {
+        // Shift every child by the delta from where they currently sit to the
+        // container's new origin. Authored at `(0, 0)` and first laid out at a
+        // non-zero origin, this moves them into place; laid out at `(0, 0)`
+        // (a window root) the delta is zero and nothing moves.
+        let dx = bounds.x - self.origin.x;
+        let dy = bounds.y - self.origin.y;
+        if dx != 0 || dy != 0 {
+            for child in &mut self.children {
+                let b = child.bounds();
+                child.layout(Rect::new(b.x + dx, b.y + dy, b.w, b.h));
+            }
+        }
+        self.origin = Point::new(bounds.x, bounds.y);
     }
 
     fn paint(&mut self, painter: &mut Painter, theme: &Theme) {
@@ -321,5 +371,92 @@ impl Widget for Container {
 
     fn wants_ticks(&self) -> bool {
         self.children.iter().any(|c| c.wants_ticks())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::event::MouseButton;
+    use crate::geometry::Point;
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    /// A focusable leaf that records its laid-out rect and whether a pointer
+    /// press reached it, and asks for focus when pressed.
+    struct Probe {
+        rect: Rect,
+        hit: Rc<Cell<bool>>,
+    }
+
+    impl Widget for Probe {
+        fn bounds(&self) -> Rect {
+            self.rect
+        }
+        fn layout(&mut self, bounds: Rect) {
+            self.rect = bounds;
+        }
+        fn paint(&mut self, _: &mut Painter, _: &Theme) {}
+        fn event(&mut self, event: &Event, ctx: &mut EventCtx) {
+            if let Event::PointerDown { .. } = event {
+                self.hit.set(true);
+                ctx.request_focus();
+            }
+        }
+        fn focusable(&self) -> bool {
+            true
+        }
+    }
+
+    fn press(c: &mut Container, x: i32, y: i32) {
+        let mut ctx = EventCtx::new();
+        c.event(
+            &Event::PointerDown {
+                pos: Point::new(x, y),
+                button: MouseButton::Left,
+            },
+            &mut ctx,
+        );
+    }
+
+    #[test]
+    fn layout_shifts_children_to_the_container_origin() {
+        let hit = Rc::new(Cell::new(false));
+        let mut c = Container::new(100, 50).add(Probe {
+            // Authored at a local (0,0)-relative position.
+            rect: Rect::new(10, 8, 20, 12),
+            hit: hit.clone(),
+        });
+        // Placed at a non-zero origin, as a Modal would center it.
+        c.layout(Rect::new(200, 300, 100, 50));
+        assert_eq!(c.bounds(), Rect::new(200, 300, 100, 50));
+
+        // The child no longer answers at its authored position…
+        press(&mut c, 15, 12);
+        assert!(
+            !hit.get(),
+            "child must have moved off its authored position"
+        );
+
+        // …but does at the position shifted by the container's origin.
+        press(&mut c, 215, 312);
+        assert!(
+            hit.get(),
+            "child should be hit at its origin-shifted position"
+        );
+        assert_eq!(c.focused_index(), Some(0));
+    }
+
+    #[test]
+    fn layout_at_origin_is_a_no_op() {
+        let hit = Rc::new(Cell::new(false));
+        let mut c = Container::new(100, 50).add(Probe {
+            rect: Rect::new(10, 8, 20, 12),
+            hit: hit.clone(),
+        });
+        // A window-root container laid out at (0,0): children stay put.
+        c.layout(Rect::new(0, 0, 100, 50));
+        press(&mut c, 15, 12);
+        assert!(hit.get(), "at the origin the children must not move");
     }
 }
