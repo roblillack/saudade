@@ -25,3 +25,4 @@ syn = "2"
 # control-panel already proved out (usvg 0.42 / kurbo 0.11).
 usvg = "0.42"
 kurbo = "0.11"
+i_overlay = "7"

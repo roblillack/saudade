@@ -106,6 +106,13 @@ impl ScrollBar {
         self.line_step = step.max(1);
     }
 
+    /// Abandon any in-progress thumb drag. A host that can be torn down mid-drag
+    /// (e.g. a dropdown popup that closes on focus loss) calls this so a stale
+    /// `drag_offset` can't grab the thumb on the next pointer move.
+    pub fn end_drag(&mut self) {
+        self.drag_offset = None;
+    }
+
     fn track_rect(&self) -> Rect {
         match self.orientation {
             Orientation::Vertical => Rect::new(

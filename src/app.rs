@@ -1,4 +1,5 @@
 use std::num::NonZeroU32;
+use std::path::PathBuf;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
@@ -21,7 +22,7 @@ use winit::platform::x11::{WindowAttributesExtX11, WindowType as XWindowType};
 
 use crate::background::BackgroundState;
 use crate::event::{
-    Event, EventCtx, Key, Modifiers, MouseButton, NamedKey, SCROLL_PIXELS_PER_LINE,
+    DragData, Event, EventCtx, Key, Modifiers, MouseButton, NamedKey, SCROLL_PIXELS_PER_LINE,
     WHEEL_LINES_PER_DETENT,
 };
 use crate::font::Font;
@@ -150,6 +151,18 @@ struct AppHandler {
     /// fired. The runtime uses this to pace ticks while a widget
     /// reports `wants_ticks()`.
     last_tick: Option<Instant>,
+
+    // File drag-and-drop coalescing. winit reports `HoveredFile` / `DroppedFile`
+    // one path at a time with no "that's all the files" terminal event, so we
+    // accumulate the paths arriving in an event burst and flush a single
+    // `DragEnter` / `Drop` from `about_to_wait`, once the burst has settled.
+    /// Paths gathered from `HoveredFile` events for the in-flight hover.
+    drag_hovered: Vec<PathBuf>,
+    /// Paths gathered from `DroppedFile` events, flushed as one `Drop`.
+    drag_dropped: Vec<PathBuf>,
+    /// `true` once we've emitted `DragEnter` for the current hover, so we don't
+    /// re-announce it every idle iteration while the drag lingers.
+    drag_active: bool,
 }
 
 /// Target interval between [`Event::Tick`](crate::event::Event::Tick)
@@ -178,6 +191,9 @@ impl AppHandler {
             bg: BackgroundState::from_env(),
             popups: Vec::new(),
             last_tick: None,
+            drag_hovered: Vec::new(),
+            drag_dropped: Vec::new(),
+            drag_active: false,
         }
     }
 }
@@ -235,6 +251,7 @@ impl ApplicationHandler for AppHandler {
     }
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        self.flush_file_drag(event_loop);
         self.sync_popup(event_loop);
         self.pump_ticks(event_loop);
 
@@ -345,6 +362,23 @@ impl AppHandler {
                     },
                     event_loop,
                 );
+            }
+            // File drag-and-drop. winit delivers these one path at a time and
+            // without a cursor position, so we only buffer here; the actual
+            // `DragEnter` / `DragLeave` / `Drop` events are synthesized and
+            // coalesced in `flush_file_drag`, called from `about_to_wait`.
+            WindowEvent::HoveredFile(path) => {
+                self.drag_hovered.push(path);
+            }
+            WindowEvent::HoveredFileCancelled => {
+                if self.drag_active {
+                    self.dispatch(&Event::DragLeave, event_loop);
+                }
+                self.drag_hovered.clear();
+                self.drag_active = false;
+            }
+            WindowEvent::DroppedFile(path) => {
+                self.drag_dropped.push(path);
             }
             WindowEvent::ModifiersChanged(new_mods) => {
                 let s = new_mods.state();
@@ -465,6 +499,48 @@ impl AppHandler {
         }
         if let Some(size) = ctx.resize_request {
             self.apply_resize(size);
+        }
+        if ctx.drag_request.is_some() {
+            // A widget asked to start an outbound drag. winit exposes no API to
+            // initiate a drag-and-drop operation on any of its platforms
+            // (macOS, Windows, X11), so we can only drop the request here —
+            // drag *sources* are a Wayland-only capability (see
+            // `EventCtx::start_drag`). Receiving drops still works everywhere.
+        }
+        // A drop target may have called `accept_drop`, but the OS has already
+        // committed to offering the file drag on the winit backends — we can't
+        // refuse it the way Wayland can — so the flag is advisory here and the
+        // `Drop` is delivered regardless.
+        let _ = ctx.accepts_drop;
+    }
+
+    /// Turn the file paths buffered from `HoveredFile` / `DroppedFile` events
+    /// into coalesced [`Event::DragEnter`] / [`Event::Drop`] events. Called once
+    /// per loop iteration from `about_to_wait`, after the event burst that
+    /// delivered the individual paths has settled, so all files from one drag
+    /// arrive in a single event.
+    ///
+    /// winit carries no cursor position with these events, so the drop point is
+    /// the last in-window pointer location (`self.cursor`) — exact on platforms
+    /// that move the cursor during a drag, stale otherwise. Defaults to the
+    /// origin when the pointer has never entered the window.
+    fn flush_file_drag(&mut self, event_loop: &ActiveEventLoop) {
+        if self.drag_hovered.is_empty() && self.drag_dropped.is_empty() {
+            return;
+        }
+        let pos = self.cursor.unwrap_or(Point::new(0, 0));
+
+        if !self.drag_active && !self.drag_hovered.is_empty() {
+            self.drag_active = true;
+            self.drag_hovered.clear();
+            self.dispatch(&Event::DragEnter { pos }, event_loop);
+        }
+
+        if !self.drag_dropped.is_empty() {
+            let data = DragData::from_paths(std::mem::take(&mut self.drag_dropped));
+            self.dispatch(&Event::Drop { pos, data }, event_loop);
+            self.drag_hovered.clear();
+            self.drag_active = false;
         }
     }
 
