@@ -11,6 +11,12 @@ use crate::widget::Widget;
 pub const SCROLLBAR_THICKNESS: i32 = 16;
 const ARROW_BTN: i32 = SCROLLBAR_THICKNESS;
 const MIN_THUMB: i32 = 16;
+/// Logical-pixel margin left around the arrow glyph inside its button, so the
+/// small triangle sits centered on the face rather than filling the button edge
+/// to edge — the classic Win 3.1 proportion. The lighter [`Painter::light_button`]
+/// frame no longer visually recesses the glyph the way the old heavy bevel did,
+/// so the inset restores that breathing room explicitly.
+const ARROW_INSET: i32 = 3;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Orientation {
@@ -280,21 +286,27 @@ impl Widget for ScrollBar {
     }
 
     fn paint(&mut self, painter: &mut Painter, theme: &Theme) {
-        // Track first — the light-gray strip that always shows behind the
-        // thumb. Win 3.1 used a checkered "newsprint" pattern; the flat
-        // light-gray fill we use here reads as the same thing at small
-        // scale and keeps the chrome simpler.
-        painter.fill_rect(self.rect, theme.face);
-
         let up = self.neg_arrow_rect();
         let down = self.pos_arrow_rect();
         let thumb_opt = (self.max > 0).then(|| self.thumb_rect());
 
-        painter.button(up, theme, false, false);
-        painter.button(down, theme, false, false);
+        // Track: the Win 3.1 "newsprint" checkerboard (black on gray) that shows
+        // in the gap between the buttons wherever the thumb isn't.
+        painter.fill_checker(self.track_rect(), theme.face, theme.border);
+
+        // Buttons and thumb in the lighter frame (square outline, single
+        // top/left highlight, 2px bottom/right shadow).
+        painter.light_button(up, theme);
+        painter.light_button(down, theme);
         if let Some(thumb) = thumb_opt {
-            painter.button(thumb, theme, false, false);
+            painter.light_button(thumb, theme);
         }
+
+        // A single black outline around the whole bar. Its long sides are the
+        // track's own outline; they collapse into the button/thumb frames where
+        // they meet, and the button frames supply the dividers between the
+        // buttons and the track.
+        painter.stroke_rect(self.rect, theme.border);
         // The arrow glyphs are baked SVGs; `SvgImage::draw_tinted` already drops
         // to a crisp physical-pixel pass at every scale, so no manual `physical`
         // branch is needed. Tinted with `theme.text` so they track the theme
@@ -386,5 +398,5 @@ fn draw_arrow(painter: &mut Painter, btn: Rect, orient: Orientation, dir: ArrowD
         (Orientation::Horizontal, ArrowDir::Negative) => &ARROW_LEFT,
         (Orientation::Horizontal, ArrowDir::Positive) => &ARROW_RIGHT,
     };
-    arrow.draw_tinted(painter, btn, color);
+    arrow.draw_tinted(painter, btn.inset(ARROW_INSET), color);
 }
