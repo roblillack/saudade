@@ -254,6 +254,9 @@ pub struct EventCtx {
     /// reject the drag offer, so the source app learns whether this is a valid
     /// drop target.
     pub(crate) accepts_drop: bool,
+    /// Set by a widget that has fully handled a key press and wants the runtime
+    /// to drop the rest of it — see [`Self::swallow_key_until_release`].
+    pub(crate) swallow_key: bool,
 }
 
 impl EventCtx {
@@ -268,6 +271,7 @@ impl EventCtx {
             resize_request: None,
             drag_request: None,
             accepts_drop: false,
+            swallow_key: false,
         }
     }
 
@@ -284,6 +288,20 @@ impl EventCtx {
     /// focused list from also reacting to the keypress).
     pub fn consume_event(&mut self) {
         self.consumed = true;
+    }
+
+    /// Ask the runtime to discard the remainder of the current key press: any
+    /// text (`Char`) it still produces *and* every later event for the same
+    /// key — autorepeats and the release — up to and including that release.
+    ///
+    /// Unlike [`Self::consume_event`], which only stops routing *this* event,
+    /// this reaches across the separate `KeyDown` / `Char` / `KeyUp` events a
+    /// single press generates. A menu item fired by its mnemonic uses it: the
+    /// keystroke that picked the item must not also land in whatever the item
+    /// opens on the spot — e.g. the freshly focused field of a dialog — which
+    /// otherwise receives the trailing `Char` and types the letter.
+    pub fn swallow_key_until_release(&mut self) {
+        self.swallow_key = true;
     }
 
     /// Mark the window dirty so the runtime repaints on the next idle tick.
