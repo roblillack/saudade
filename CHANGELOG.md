@@ -17,18 +17,18 @@ While pre-1.0, the minor version is bumped for breaking changes.
   viewBox→viewport scale included). This fixes SVGs that previously baked
   mis-scaled or off-frame: a viewBox with a non-zero origin, an `<svg>` whose
   width/height differ from the viewBox, or a drawing tucked into one corner of a
-  large canvas.
+  large canvas. (#27)
 
 ### Added
 
 - `include_svg!` now honors `clip-path`: clip regions are intersected with the
   drawn geometry at build time (via `i_overlay`), so clipped artwork bakes
   correctly instead of being dropped. `i_overlay` is a compile-time-only
-  dependency of `saudade-macros` and never reaches a shipped binary.
+  dependency of `saudade-macros` and never reaches a shipped binary. (#27)
 - `include_svg!` now approximates linear and radial gradient paint instead of
   dropping it: each gradient bakes into a stack of flat-color bands (strips for
   linear, nested disks for radial) clipped to the painted shape. Gradient fills
-  and strokes are no longer reported as unsupported.
+  and strokes are no longer reported as unsupported. (#27)
 - File drag-and-drop: drop files from the OS onto a window. New `Event::DragEnter`
   / `DragMove` / `DragLeave` / `Drop` events carry a `DragData` of file paths,
   and a drop target opts in by calling `EventCtx::accept_drop()` while handling
