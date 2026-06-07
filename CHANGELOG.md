@@ -20,7 +20,7 @@ While pre-1.0, the minor version is bumped for breaking changes.
   font now caches rasterized glyphs (in a bounded LRU) and per-glyph advances,
   the caret table is built in one O(n) pass over those advances, and
   `Font::draw_phys` stops at the clip's right edge. Output is snapshot-identical;
-  the worst case is ~100× faster.
+  the worst case is ~100× faster. (#34)
 - `include_svg!` now maps every contour through its `abs_transform` (the full
   ancestor chain, viewBox→viewport origin offset and scale included), while still
   framing the baked image by the SVG's declared viewport (the box resvg renders
