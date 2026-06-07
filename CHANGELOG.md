@@ -12,12 +12,13 @@ While pre-1.0, the minor version is bumped for breaking changes.
 
 ### Fixed
 
-- `include_svg!` now frames a baked image by the artwork's own bounding box and
-  maps every contour through its `abs_transform` (the full ancestor chain,
-  viewBox→viewport scale included). This fixes SVGs that previously baked
-  mis-scaled or off-frame: a viewBox with a non-zero origin, an `<svg>` whose
-  width/height differ from the viewBox, or a drawing tucked into one corner of a
-  large canvas. (#27)
+- `include_svg!` now maps every contour through its `abs_transform` (the full
+  ancestor chain, viewBox→viewport origin offset and scale included), while still
+  framing the baked image by the SVG's declared viewport (the box resvg renders
+  into). This fixes SVGs that previously baked mis-scaled or off-frame — a viewBox
+  with a non-zero origin or an `<svg>` whose width/height differ from the viewBox
+  — without disturbing artwork that is deliberately padded inside its viewBox
+  (the scrollbar, dropdown, dialog, and checkbox marks). (#27, #31)
 
 ### Added
 
@@ -25,6 +26,11 @@ While pre-1.0, the minor version is bumped for breaking changes.
   drawn geometry at build time (via `i_overlay`), so clipped artwork bakes
   correctly instead of being dropped. `i_overlay` is a compile-time-only
   dependency of `saudade-macros` and never reaches a shipped binary. (#27)
+- `include_svg!` takes an optional `crop` argument —
+  `include_svg!("logo.svg", crop)` — that frames the baked image by the tight
+  bounding box of the drawn geometry instead of the SVG's declared viewport,
+  dropping any padding so the mark fills its target rect. The default is still
+  viewport framing (matching resvg). (#31)
 - `include_svg!` now approximates linear and radial gradient paint instead of
   dropping it: each gradient bakes into a stack of flat-color bands (strips for
   linear, nested disks for radial) clipped to the painted shape. Gradient fills

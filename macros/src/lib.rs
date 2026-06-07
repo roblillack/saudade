@@ -7,9 +7,10 @@
 //! expansion, and `clip-path` intersection) all happens here, at build time,
 //! using [`usvg`] + [`kurbo`] + `i_overlay`. What the macro *emits* is plain
 //! geometry: a [`saudade::SvgImage`] holding `&'static` slices of polygon rings
-//! and their fill colors, framed to the artwork's own bounding box. The runtime
-//! side only has to fill polygons — see `saudade::svg` — so none of those crates
-//! ever reach a shipped program.
+//! and their fill colors, framed to the SVG's declared viewport (so any padding
+//! the artwork carries inside its viewBox is preserved). The runtime side only
+//! has to fill polygons — see `saudade::svg` — so none of those crates ever
+//! reach a shipped program.
 //!
 //! ```ignore
 //! use saudade::include_svg;
@@ -24,7 +25,8 @@ use std::path::PathBuf;
 
 use proc_macro::TokenStream;
 use quote::quote;
-use syn::{LitStr, parse_macro_input};
+use syn::parse::{Parse, ParseStream};
+use syn::{Ident, LitStr, Token, parse_macro_input};
 
 use i_overlay::core::fill_rule::FillRule as ClipFill;
 use i_overlay::core::overlay_rule::OverlayRule;
@@ -81,11 +83,60 @@ struct Baked {
     dropped: BTreeSet<&'static str>,
 }
 
+/// Parsed `include_svg!` invocation: the SVG path plus an optional `crop` flag.
+///
+/// The grammar is `"path" [, crop]`. The path's [`LitStr`] is kept (not just its
+/// value) so diagnostics anchor to the literal's span, and an unknown trailing
+/// option errors at *its* span instead of the whole call.
+struct Args {
+    path: LitStr,
+    crop: bool,
+}
+
+impl Parse for Args {
+    fn parse(input: ParseStream) -> syn::Result<Self> {
+        let path: LitStr = input.parse()?;
+        let mut crop = false;
+        if input.peek(Token![,]) {
+            input.parse::<Token![,]>()?;
+            // Allow (but don't require) a trailing comma: `include_svg!("x",)`.
+            if !input.is_empty() {
+                let kw: Ident = input.parse()?;
+                match kw.to_string().as_str() {
+                    "crop" => crop = true,
+                    other => {
+                        return Err(syn::Error::new(
+                            kw.span(),
+                            format!("include_svg!: unknown option `{other}`; expected `crop`"),
+                        ));
+                    }
+                }
+            }
+        }
+        Ok(Self { path, crop })
+    }
+}
+
 /// Embed an SVG file as a `saudade::SvgImage` constant.
 ///
 /// `include_svg!("path/to/icon.svg")` — the path is resolved relative to the
 /// invoking crate's `CARGO_MANIFEST_DIR`. The expansion is a `const`-friendly
 /// expression, so it can initialize a `const` / `static` or be used inline.
+///
+/// By default the baked image keeps the SVG's declared viewport (the box resvg
+/// renders into), so any padding the artwork carries inside its viewBox is
+/// preserved — the runtime aspect-fit frames the whole viewport. Pass the `crop`
+/// option to instead frame the image by the tight bounding box of the drawn
+/// geometry, dropping that padding so the mark fills its target rect:
+///
+/// ```ignore
+/// const ICON: saudade::SvgImage = include_svg!("assets/icon.svg");        // viewport
+/// const LOGO: saudade::SvgImage = include_svg!("assets/logo.svg", crop);  // content box
+/// ```
+///
+/// `crop` makes the bake diverge from how resvg renders the same file (which
+/// always honors the viewport), so reach for it only when a mark's own canvas is
+/// padded or oversized and you want it to fill the rect anyway.
 ///
 /// Element transforms (including the viewBox→viewport mapping), `clip-path`, and
 /// gradient paint (approximated by flat-color bands) are honored. Any feature
@@ -95,7 +146,8 @@ struct Baked {
 /// unexpected SVG fails loudly instead of silently rendering blank.
 #[proc_macro]
 pub fn include_svg(input: TokenStream) -> TokenStream {
-    let lit = parse_macro_input!(input as LitStr);
+    let args = parse_macro_input!(input as Args);
+    let lit = args.path;
     let rel = lit.value();
 
     let manifest = std::env::var("CARGO_MANIFEST_DIR").unwrap_or_default();
@@ -108,7 +160,7 @@ pub fn include_svg(input: TokenStream) -> TokenStream {
         }
     };
 
-    let image = match tessellate(&svg) {
+    let image = match tessellate(&svg, args.crop) {
         Ok(image) => image,
         Err(e) => return err(&lit, e),
     };
@@ -129,35 +181,36 @@ fn err(lit: &LitStr, msg: impl std::fmt::Display) -> TokenStream {
 }
 
 /// Parse + normalize the SVG and flatten every path into solid-color polygons,
-/// recording any features that couldn't be baked.
-fn tessellate(svg: &str) -> Result<OutImage, String> {
+/// recording any features that couldn't be baked. `crop` selects how the result
+/// is framed (see below).
+fn tessellate(svg: &str, crop: bool) -> Result<OutImage, String> {
     let options = usvg::Options::default();
     let tree = usvg::Tree::from_str(svg, &options).map_err(|e| e.to_string())?;
 
     let mut baked = Baked::default();
     walk(tree.root(), &mut baked, None);
 
-    // Frame the baked geometry by its own tight bounding box rather than the
-    // SVG's declared canvas (`tree.size()`). `emit_path` maps every contour into
-    // canvas coordinates via `abs_transform` first, so this single step corrects
-    // the three independent ways the declared size can disagree with the artwork:
+    // `emit_path` already maps every contour through `abs_transform`, which folds
+    // in the viewBox→viewport mapping (origin offset + scale), so the baked
+    // geometry lives in viewport pixel coordinates regardless of framing.
     //
-    //   * a viewBox whose origin isn't (0,0) — the drawing is centered on zero;
-    //   * a viewBox→viewport scale (the `<svg>` width/height differ from the
-    //     viewBox), so the geometry lives in viewBox units, not canvas pixels;
-    //   * a canvas far larger than the drawing, with the mark off in one corner.
+    // Default (`crop == false`): frame the image by the SVG's declared viewport
+    // (`tree.size()`), the same box resvg renders into. This preserves whatever
+    // padding the artwork carries inside its viewBox — the scrollbar / dropdown /
+    // dialog / checkbox marks are deliberately drawn small inside a larger
+    // viewBox so the runtime aspect-fit reproduces the classic glyph footprint.
     //
-    // Measuring the geometry sidesteps all of them: the content is translated to
-    // the origin and its real extent reported as the image size, so the runtime
-    // aspect-fit always frames the mark itself instead of an arbitrary canvas.
-    let (width, height) = match content_bounds(&baked.polygons) {
+    // `crop == true`: frame by the tight bounding box of the drawn geometry and
+    // translate it to the origin, dropping that padding so the mark fills its
+    // target rect. Useful for a logo whose own canvas is padded or oversized.
+    let (width, height) = match crop.then(|| content_bounds(&baked.polygons)).flatten() {
         Some(((min_x, min_y), (max_x, max_y))) => {
             translate(&mut baked.polygons, -min_x, -min_y);
             (max_x - min_x, max_y - min_y)
         }
-        // Nothing bakeable: fall back to the declared size. The runtime draws
-        // nothing either way (it skips an empty polygon list), so this only
-        // keeps the emitted dimensions sane.
+        // Either viewport framing was requested, or nothing bakeable was found to
+        // measure (an empty image draws nothing, so the declared size just keeps
+        // the emitted dimensions sane).
         None => {
             let size = tree.size();
             (size.width(), size.height())
@@ -866,10 +919,20 @@ mod tests {
     fn clean_svg_bakes_with_no_dropped_features() {
         let svg = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10">
             <rect x="1" y="1" width="8" height="8" fill="#102030"/></svg>"##;
-        let img = tessellate(svg).unwrap();
-        // The image is framed to the drawn content (the 8×8 rect), not the 10×10
-        // canvas — the 1-unit margin around the rect is cropped away.
-        assert_eq!((img.width, img.height), (8.0, 8.0));
+        let img = tessellate(svg, false).unwrap();
+        // The image is framed to the declared viewport (the 10×10 canvas), not
+        // the 8×8 rect — the 1-unit margin around the rect is part of the image,
+        // so the runtime aspect-fit preserves it.
+        assert_eq!((img.width, img.height), (10.0, 10.0));
+        // The rect itself bakes at its viewBox position (1,1)–(9,9).
+        let (nx, ny, xx, xy) = bounds(&img);
+        assert!(
+            (nx - 1.0).abs() < 0.1
+                && (ny - 1.0).abs() < 0.1
+                && (xx - 9.0).abs() < 0.1
+                && (xy - 9.0).abs() < 0.1,
+            "rect should keep its 1-unit margin, got ({nx},{ny})–({xx},{xy})",
+        );
         assert!(
             !img.polygons.is_empty(),
             "the rect should bake to a polygon"
@@ -883,54 +946,101 @@ mod tests {
         assert_eq!(img.polygons[0].argb, 0xFF10_2030);
     }
 
-    /// A viewBox that doesn't start at (0,0) centers its coordinates on zero;
-    /// the bake must translate the content back to the origin so nothing lands
-    /// in negative space (the bug that pushed Ubuntu's mark off-frame).
+    /// A viewBox that doesn't start at (0,0) is mapped into the viewport by
+    /// `abs_transform`, so the geometry lands in 0..viewport space — nothing in
+    /// negative coordinates (the bug that pushed Ubuntu's mark off-frame), and no
+    /// re-framing needed.
     #[test]
-    fn shifted_viewbox_origin_is_normalized_to_zero() {
+    fn shifted_viewbox_origin_maps_into_the_viewport() {
         let svg = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="-5 -5 10 10">
             <rect x="-4" y="-4" width="8" height="8" fill="#102030"/></svg>"##;
-        let img = tessellate(svg).unwrap();
+        let img = tessellate(svg, false).unwrap();
+        // No width/height, so the viewport is the viewBox's 10×10.
+        assert!((img.width - 10.0).abs() < 0.1 && (img.height - 10.0).abs() < 0.1);
+        // The viewBox→viewport translation puts the -4..4 rect at 1..9 — inside
+        // the viewport, never negative.
         let (nx, ny, xx, xy) = bounds(&img);
         assert!(
             nx >= -0.01 && ny >= -0.01,
-            "content must be translated out of negative space, got min ({nx}, {ny})",
+            "content must map out of negative space, got min ({nx}, {ny})",
         );
-        // The 8×8 rect frames an 8×8 image regardless of the centered viewBox.
-        assert!((img.width - 8.0).abs() < 0.1 && (img.height - 8.0).abs() < 0.1);
-        assert!((xx - 8.0).abs() < 0.1 && (xy - 8.0).abs() < 0.1);
+        assert!(
+            (nx - 1.0).abs() < 0.1
+                && (ny - 1.0).abs() < 0.1
+                && (xx - 9.0).abs() < 0.1
+                && (xy - 9.0).abs() < 0.1,
+            "rect should map to (1,1)–(9,9), got ({nx},{ny})–({xx},{xy})",
+        );
     }
 
-    /// A canvas far larger than the drawing (the NetBSD case: artwork tucked
-    /// into one corner of a big `width`/`height`) is framed to the drawing, not
-    /// the canvas.
+    /// A canvas far larger than the drawing (artwork tucked into one corner of a
+    /// big `width`/`height`) keeps the declared viewport — the drawing stays in
+    /// its corner, exactly as resvg renders it. Honoring the viewport, not the
+    /// content box, is what preserves intentional padding.
     #[test]
-    fn oversized_canvas_is_cropped_to_the_drawing() {
+    fn oversized_canvas_keeps_the_declared_viewport() {
         let svg = r##"<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
             <rect x="10" y="10" width="20" height="30" fill="#102030"/></svg>"##;
-        let img = tessellate(svg).unwrap();
+        let img = tessellate(svg, false).unwrap();
+        assert_eq!(
+            (img.width, img.height),
+            (100.0, 100.0),
+            "image should be the declared 100×100 canvas, not the 20×30 drawing",
+        );
+        // The drawing keeps its position in the corner: (10,10)–(30,40).
+        let (nx, ny, xx, xy) = bounds(&img);
+        assert!(
+            (nx - 10.0).abs() < 0.1
+                && (ny - 10.0).abs() < 0.1
+                && (xx - 30.0).abs() < 0.1
+                && (xy - 40.0).abs() < 0.1,
+            "drawing should stay in its corner, got ({nx},{ny})–({xx},{xy})",
+        );
+    }
+
+    /// The opt-in `crop` flag frames the image by the tight content box instead
+    /// of the declared viewport and translates the drawing to the origin — the
+    /// same oversized canvas as above, but cropped down to its 20×30 mark.
+    #[test]
+    fn crop_frames_by_the_content_box() {
+        let svg = r##"<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
+            <rect x="10" y="10" width="20" height="30" fill="#102030"/></svg>"##;
+        let img = tessellate(svg, true).unwrap();
         assert_eq!(
             (img.width, img.height),
             (20.0, 30.0),
-            "image should be the 20×30 drawing, not the 100×100 canvas",
+            "crop should frame the 20×30 drawing, not the 100×100 canvas",
+        );
+        // The drawing is shifted to the origin: (0,0)–(20,30).
+        let (nx, ny, xx, xy) = bounds(&img);
+        assert!(
+            nx.abs() < 0.1 && ny.abs() < 0.1 && (xx - 20.0).abs() < 0.1 && (xy - 30.0).abs() < 0.1,
+            "cropped drawing should sit at the origin, got ({nx},{ny})–({xx},{xy})",
         );
     }
 
     /// When the `<svg>` width/height differ from the viewBox, the geometry lives
-    /// in viewBox units but must be baked in canvas units — i.e. the
-    /// viewBox→viewport scale is applied (the bug that shrank Fedora's mark).
+    /// in viewBox units but is baked in viewport units — i.e. the viewBox→viewport
+    /// scale is applied to the geometry (the bug that shrank Fedora's mark), while
+    /// the image keeps the declared viewport size.
     #[test]
     fn viewbox_to_viewport_scale_is_applied() {
         // viewBox is 10 wide but the viewport is 100, a 10× scale. A 5-unit rect
-        // in viewBox space is 50 canvas units; without the scale it would be 5.
+        // in viewBox space bakes to 50 viewport units; without the scale it would
+        // be 5. The image itself is the full 100×100 viewport.
         let svg = r##"<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100" viewBox="0 0 10 10">
             <rect x="0" y="0" width="5" height="5" fill="#102030"/></svg>"##;
-        let img = tessellate(svg).unwrap();
+        let img = tessellate(svg, false).unwrap();
         assert!(
-            (img.width - 50.0).abs() < 0.5 && (img.height - 50.0).abs() < 0.5,
-            "expected the 10× viewBox→viewport scale to be applied, got {}×{}",
+            (img.width - 100.0).abs() < 0.5 && (img.height - 100.0).abs() < 0.5,
+            "image should be the 100×100 viewport, got {}×{}",
             img.width,
             img.height,
+        );
+        let (_, _, xx, xy) = bounds(&img);
+        assert!(
+            (xx - 50.0).abs() < 0.5 && (xy - 50.0).abs() < 0.5,
+            "expected the 10× viewBox→viewport scale on the geometry, got max ({xx}, {xy})",
         );
     }
 
@@ -938,7 +1048,7 @@ mod tests {
     fn a_stroke_only_path_expands_into_a_fillable_outline() {
         let svg = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10">
             <line x1="1" y1="1" x2="9" y2="9" stroke="#000000" stroke-width="2"/></svg>"##;
-        let img = tessellate(svg).unwrap();
+        let img = tessellate(svg, false).unwrap();
         assert!(img.dropped.is_empty());
         assert!(
             !img.polygons.is_empty(),
@@ -958,19 +1068,28 @@ mod tests {
             <g clip-path="url(#c)">
                 <rect x="0" y="4" width="10" height="2" fill="#102030"/>
             </g></svg>"##;
-        let img = tessellate(svg).unwrap();
+        let img = tessellate(svg, false).unwrap();
         assert!(
             img.dropped.is_empty(),
             "clipPath must not be reported as dropped: {:?}",
             img.dropped,
         );
         assert!(!img.polygons.is_empty(), "the clipped bar should bake");
-        // The overlap is 2×2, so the framed image is square, not the 10×2 bar.
+        // The image keeps the 10×10 viewport; only the baked geometry is the 2×2
+        // overlap, sitting at (4,4)–(6,6) where the bar and clip cross.
         assert!(
-            (img.width - 2.0).abs() < 0.1 && (img.height - 2.0).abs() < 0.1,
-            "expected the 2×2 intersection, got {}×{}",
+            (img.width - 10.0).abs() < 0.1 && (img.height - 10.0).abs() < 0.1,
+            "image should keep the 10×10 viewport, got {}×{}",
             img.width,
             img.height,
+        );
+        let (nx, ny, xx, xy) = bounds(&img);
+        assert!(
+            (nx - 4.0).abs() < 0.1
+                && (ny - 4.0).abs() < 0.1
+                && (xx - 6.0).abs() < 0.1
+                && (xy - 6.0).abs() < 0.1,
+            "expected the 2×2 intersection at (4,4)–(6,6), got ({nx},{ny})–({xx},{xy})",
         );
     }
 
@@ -982,7 +1101,7 @@ mod tests {
             <g clip-path="url(#c)">
                 <rect x="6" y="6" width="3" height="3" fill="#102030"/>
             </g></svg>"##;
-        let img = tessellate(svg).unwrap();
+        let img = tessellate(svg, false).unwrap();
         assert!(
             img.polygons.is_empty(),
             "a shape outside its clip should bake to nothing",
@@ -1000,7 +1119,7 @@ mod tests {
                 <stop offset="1" stop-color="#0000ff"/>
             </linearGradient></defs>
             <rect x="1" y="1" width="8" height="8" fill="url(#g)"/></svg>"##;
-        let img = tessellate(svg).unwrap();
+        let img = tessellate(svg, false).unwrap();
         assert!(
             img.dropped.is_empty(),
             "a gradient should be approximated, not dropped: {:?}",
@@ -1029,7 +1148,7 @@ mod tests {
                 <stop offset="1" stop-color="#102030"/>
             </radialGradient></defs>
             <rect x="0" y="0" width="10" height="10" fill="url(#g)"/></svg>"##;
-        let img = tessellate(svg).unwrap();
+        let img = tessellate(svg, false).unwrap();
         assert!(img.dropped.is_empty(), "got {:?}", img.dropped);
         assert!(img.polygons.len() > 1, "expected nested disks");
     }
@@ -1042,7 +1161,7 @@ mod tests {
                 <rect width="1" height="1" fill="#000000"/>
             </pattern></defs>
             <rect x="1" y="1" width="8" height="8" fill="url(#p)"/></svg>"##;
-        let img = tessellate(svg).unwrap();
+        let img = tessellate(svg, false).unwrap();
         assert!(
             img.dropped.iter().any(|d| d.contains("pattern")),
             "expected a pattern drop, got {:?}",
