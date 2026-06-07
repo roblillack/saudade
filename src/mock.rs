@@ -22,6 +22,7 @@
 //! able to feed [`Event`](crate::event::Event)s into the same backend to
 //! drive widgets between renders.
 
+use crate::chrome::{self, WindowChrome};
 use crate::event::{Event, EventCtx};
 use crate::font::Font;
 use crate::geometry::{Rect, Size};
@@ -162,6 +163,60 @@ impl MockBackend {
         Snapshot {
             width: physical.w,
             height: physical.h,
+            pixels,
+        }
+    }
+
+    /// Render `root` at the backend's logical size, then compose Canoe-style
+    /// window chrome around it — a desktop backdrop, a soft drop shadow, a
+    /// title bar with window controls, and a frame — returning a [`Snapshot`]
+    /// of the whole framed window. This is the screenshot path for capturing a
+    /// window the way a user sees it on the desktop, rather than just its
+    /// client area (which is what [`Self::render`] produces).
+    ///
+    /// The window is always drawn *active* (focused). [`WindowChrome`] picks
+    /// the title and the frame style — [`WindowFrame::Resizable`],
+    /// [`WindowFrame::Fixed`], or [`WindowFrame::Dialog`] — which differ in
+    /// their window controls and border, matching Canoe's three window paints.
+    ///
+    /// [`WindowFrame::Resizable`]: crate::WindowFrame::Resizable
+    /// [`WindowFrame::Fixed`]: crate::WindowFrame::Fixed
+    /// [`WindowFrame::Dialog`]: crate::WindowFrame::Dialog
+    pub fn render_framed(&self, root: &mut dyn Widget, chrome: &WindowChrome) -> Snapshot {
+        let content = self.render(root);
+        let content_size = Size::new(content.width, content.height);
+        let m = chrome::metrics(content_size, self.scale, chrome);
+
+        let mut pixels = vec![0u32; (m.buffer.w * m.buffer.h) as usize];
+        {
+            let mut painter = Painter::new(
+                &mut pixels,
+                m.buffer.w,
+                m.buffer.h,
+                // The chrome metrics are already in physical pixels, so the
+                // painter draws 1:1 — no second scale pass over the frame.
+                1.0,
+                0,
+                0,
+                self.font.as_ref(),
+                self.mono_font.as_ref(),
+            );
+            chrome::paint(&mut painter, &m, chrome);
+        }
+
+        // Blit the rendered client area into the frame's content slot. Both
+        // buffers are physical ARGB32 and the slot fits by construction, so a
+        // straight per-row copy suffices.
+        let cw = content.width as usize;
+        for row in 0..content.height {
+            let src = (row * content.width) as usize;
+            let dst = ((m.content.y + row) * m.buffer.w + m.content.x) as usize;
+            pixels[dst..dst + cw].copy_from_slice(&content.pixels[src..src + cw]);
+        }
+
+        Snapshot {
+            width: m.buffer.w,
+            height: m.buffer.h,
             pixels,
         }
     }

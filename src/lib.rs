@@ -33,6 +33,7 @@ extern crate self as saudade;
 
 mod app;
 mod background;
+pub mod chrome;
 mod event;
 mod font;
 mod geometry;
@@ -47,6 +48,7 @@ mod widgets;
 
 pub use app::{App, WindowConfig};
 pub use background::{BackgroundPattern, PATTERN_COLORS};
+pub use chrome::{WindowChrome, WindowFrame};
 pub use event::{DragData, Event, EventCtx, Key, Modifiers, MouseButton, NamedKey};
 pub use font::Font;
 pub use geometry::{Color, Point, Rect, Size};

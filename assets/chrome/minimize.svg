@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<!-- Minimize glyph: a downward-pointing filled triangle, from Canoe's
+     title-bar minimize icon. -->
+<svg viewBox="0 0 16 16" version="1.1" xmlns="http://www.w3.org/2000/svg">
+  <path fill="#1a1a1a" d="m 4,6 v 0.5 l 4,4 4,-4 V 6 Z" />
+</svg>

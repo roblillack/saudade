@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<!-- Maximize glyph: an upward-pointing filled triangle, from Canoe's
+     title-bar maximize icon. -->
+<svg viewBox="0 0 16 16" version="1.1" xmlns="http://www.w3.org/2000/svg">
+  <path fill="#1a1a1a" d="M 4,10 V 9.5 l 4,-4 4,4 V 10 Z" />
+</svg>
