@@ -5,6 +5,7 @@ use crate::painter::Painter;
 use crate::svg::SvgImage;
 use crate::theme::Theme;
 use crate::widget::{PopupKind, PopupRequest, Widget};
+use crate::widgets::scrollbar::{SCROLLBAR_THICKNESS, ScrollBar};
 
 type ChangeHandler = Box<dyn FnMut(&mut EventCtx, usize)>;
 
@@ -19,6 +20,10 @@ const SHADOW_SIZE: i32 = 2;
 /// L-shape drop shadow color: a dark gray that renders crisply on every
 /// backend (same value the menu popups use).
 const SHADOW_COLOR: Color = Color::DARK_GRAY;
+/// Most rows the open popup shows before it scrolls. Beyond this the list caps
+/// its height and grows a vertical scrollbar instead of a popup taller than the
+/// screen — so a 100-layout list stays usable.
+const MAX_POPUP_ITEMS: usize = 12;
 
 /// The drop-arrow glyph, baked from SVG at compile time: the classic combobox
 /// down-triangle sitting above a short horizontal bar. Its 16-unit viewBox maps
@@ -51,6 +56,10 @@ pub struct Dropdown {
     focused: bool,
     enabled: bool,
     on_change: Option<ChangeHandler>,
+    /// Vertical scrollbar for the open popup. Only shown (and only consulted)
+    /// once the list is longer than [`MAX_POPUP_ITEMS`]; its `value` is the
+    /// index of the first visible row.
+    scrollbar: ScrollBar,
 }
 
 impl Dropdown {
@@ -64,6 +73,7 @@ impl Dropdown {
             focused: false,
             enabled: true,
             on_change: None,
+            scrollbar: ScrollBar::vertical(Rect::new(0, 0, 0, 0)),
         }
     }
 
@@ -91,6 +101,7 @@ impl Dropdown {
         };
         self.highlighted = None;
         self.open = false;
+        self.scrollbar.set_value(0);
     }
 
     pub fn with_selected(mut self, idx: usize) -> Self {
@@ -197,28 +208,102 @@ impl Dropdown {
         Rect::new(inner.x, inner.y, w, inner.h)
     }
 
+    /// Rows the open popup shows at once — every item, capped at
+    /// [`MAX_POPUP_ITEMS`].
+    fn visible_items(&self) -> usize {
+        self.items.len().min(MAX_POPUP_ITEMS)
+    }
+
+    /// `true` once the list is too long to show all at once, so the popup grows
+    /// a scrollbar.
+    fn scrollable(&self) -> bool {
+        self.items.len() > MAX_POPUP_ITEMS
+    }
+
+    /// Index of the first visible row (0 unless scrolled).
+    fn scroll_top(&self) -> usize {
+        self.scrollbar.value().max(0) as usize
+    }
+
     /// Logical-coordinate rect of the open popup list (without its shadow), in
-    /// the root widget's coordinate space — flush below the field.
+    /// the root widget's coordinate space — flush below the field. Capped to
+    /// [`MAX_POPUP_ITEMS`] rows tall.
     fn popup_rect(&self) -> Rect {
-        let h = POPUP_PAD_Y * 2 + self.items.len() as i32 * ITEM_HEIGHT;
+        let h = POPUP_PAD_Y * 2 + self.visible_items() as i32 * ITEM_HEIGHT;
         Rect::new(self.rect.x, self.rect.bottom(), self.rect.w, h)
     }
 
+    /// The popup area that holds the item rows — the whole popup minus the
+    /// scrollbar gutter when one is shown.
+    fn popup_rows_rect(&self) -> Rect {
+        let p = self.popup_rect();
+        let gutter = if self.scrollable() {
+            SCROLLBAR_THICKNESS
+        } else {
+            0
+        };
+        Rect::new(p.x, p.y, (p.w - gutter).max(0), p.h)
+    }
+
+    /// The scrollbar's gutter rect inside the popup's right edge (inside the
+    /// 1-px border).
+    fn popup_scrollbar_rect(&self) -> Rect {
+        let p = self.popup_rect();
+        Rect::new(
+            p.right() - 1 - SCROLLBAR_THICKNESS,
+            p.y + 1,
+            SCROLLBAR_THICKNESS,
+            (p.h - 2).max(0),
+        )
+    }
+
+    /// Tell the scrollbar how big its window and travel are. The popup has no
+    /// layout pass of its own, so this is called lazily before painting /
+    /// handling events while open.
+    fn sync_scrollbar(&mut self) {
+        let visible = self.visible_items() as i32;
+        let max = (self.items.len() as i32 - visible).max(0);
+        self.scrollbar.set_range(visible, max);
+    }
+
+    /// Position the scrollbar and refresh its range for the current popup.
+    fn layout_popup(&mut self) {
+        self.scrollbar.set_rect(self.popup_scrollbar_rect());
+        self.sync_scrollbar();
+    }
+
+    /// Scroll so row `idx` is within the visible window.
+    fn ensure_visible(&mut self, idx: usize) {
+        self.sync_scrollbar();
+        let visible = self.visible_items();
+        let mut top = self.scroll_top();
+        if idx < top {
+            top = idx;
+        } else if idx >= top + visible {
+            top = idx + 1 - visible;
+        }
+        self.scrollbar.set_value(top as i32);
+    }
+
     /// Map a pointer position to the popup row under it, if the list is open
-    /// and the point lands on an actual item.
+    /// and the point lands on an actual item (not the scrollbar gutter).
     fn hit_item(&self, pos: Point) -> Option<usize> {
         if !self.open {
             return None;
         }
-        let popup = self.popup_rect();
-        if !popup.contains(pos) {
+        let rows = self.popup_rows_rect();
+        if !rows.contains(pos) {
             return None;
         }
-        let local = pos.y - (popup.y + POPUP_PAD_Y);
+        let local = pos.y - (rows.y + POPUP_PAD_Y);
         if local < 0 {
             return None;
         }
-        let idx = (local / ITEM_HEIGHT) as usize;
+        let row_offset = (local / ITEM_HEIGHT) as usize;
+        if row_offset >= self.visible_items() {
+            return None;
+        }
+        let idx = self.scroll_top() + row_offset;
         (idx < self.items.len()).then_some(idx)
     }
 
@@ -228,13 +313,17 @@ impl Dropdown {
         }
         self.open = true;
         // Pre-highlight the current selection so Enter / arrows have a starting
-        // point and the user sees what's picked.
-        self.highlighted = self.selected.or(Some(0));
+        // point and the user sees what's picked — scrolled into view.
+        let start = self.selected.unwrap_or(0);
+        self.highlighted = Some(start);
+        self.ensure_visible(start);
     }
 
     fn close(&mut self) {
         self.open = false;
         self.highlighted = None;
+        // Drop any thumb-drag state so reopening doesn't grab the thumb.
+        self.scrollbar.end_drag();
     }
 
     /// Commit `idx` as the new selection, firing `on_change` only when the
@@ -251,24 +340,36 @@ impl Dropdown {
     }
 
     /// Step the open-list highlight by `delta`, clamped to the ends (Win 3.1
-    /// combos don't wrap).
+    /// combos don't wrap), scrolling the new highlight into view.
     fn move_highlight(&mut self, delta: i32) {
         if self.items.is_empty() {
             return;
         }
         let n = self.items.len() as i32;
         let cur = self.highlighted.or(self.selected).unwrap_or(0) as i32;
-        self.highlighted = Some((cur + delta).clamp(0, n - 1) as usize);
+        let next = (cur + delta).clamp(0, n - 1) as usize;
+        self.highlighted = Some(next);
+        self.ensure_visible(next);
     }
 
     fn handle_key(&mut self, key: &Key, ctx: &mut EventCtx) {
         if self.open {
+            // One keyboard page steps a near-full window (mirrors List).
+            let page = (self.visible_items() as i32 - 1).max(1);
             match key {
                 Key::Named(NamedKey::Up) => self.move_highlight(-1),
                 Key::Named(NamedKey::Down) => self.move_highlight(1),
-                Key::Named(NamedKey::Home) => self.highlighted = Some(0),
+                Key::Named(NamedKey::PageUp) => self.move_highlight(-page),
+                Key::Named(NamedKey::PageDown) => self.move_highlight(page),
+                Key::Named(NamedKey::Home) => {
+                    self.highlighted = Some(0);
+                    self.ensure_visible(0);
+                }
                 Key::Named(NamedKey::End) => {
-                    self.highlighted = self.items.len().checked_sub(1);
+                    if let Some(last) = self.items.len().checked_sub(1) {
+                        self.highlighted = Some(last);
+                        self.ensure_visible(last);
+                    }
                 }
                 Key::Named(NamedKey::Enter) | Key::Named(NamedKey::Space) => {
                     if let Some(idx) = self.highlighted {
@@ -371,6 +472,7 @@ impl Widget for Dropdown {
         if painter.popup_anchor() != Some(req.rect) {
             return;
         }
+        self.layout_popup();
         let popup = self.popup_rect();
 
         // L-shape drop shadow first, then the white panel overlays its top /
@@ -387,9 +489,14 @@ impl Widget for Dropdown {
         painter.fill_rect(popup, theme.background);
         painter.stroke_rect(popup, theme.border);
 
+        // Only the visible window of rows, offset by the scroll position.
+        let row_w = (self.popup_rows_rect().w - 2).max(0);
+        let top = self.scroll_top();
         let mut y = popup.y + POPUP_PAD_Y;
-        for (i, item) in self.items.iter().enumerate() {
-            let row = Rect::new(popup.x + 1, y, (popup.w - 2).max(0), ITEM_HEIGHT);
+        for row_offset in 0..self.visible_items() {
+            let i = top + row_offset;
+            let Some(item) = self.items.get(i) else { break };
+            let row = Rect::new(popup.x + 1, y, row_w, ITEM_HEIGHT);
             let (bg, fg) = if self.highlighted == Some(i) {
                 (theme.highlight_bg, theme.highlight_text)
             } else {
@@ -401,11 +508,41 @@ impl Widget for Dropdown {
             painter.text(row.x + TEXT_PAD_X, ty, item, theme.font_size, fg);
             y += ITEM_HEIGHT;
         }
+
+        if self.scrollable() {
+            self.scrollbar.paint(painter, theme);
+        }
     }
 
     fn event(&mut self, event: &Event, ctx: &mut EventCtx) {
         if !self.enabled {
             return;
+        }
+        // While the popup is open its scrollbar gets first refusal on drags,
+        // the wheel, and gutter clicks — before the click-to-pick / dismiss
+        // logic below would otherwise fold the list shut.
+        if self.open {
+            self.layout_popup();
+            if self.scrollbar.captures_pointer() {
+                // A thumb drag is in progress: feed it everything until release.
+                self.scrollbar.event(event, ctx);
+                return;
+            }
+            match event {
+                Event::Scroll { pos, .. } if self.popup_rect().contains(*pos) => {
+                    self.scrollbar.event(event, ctx);
+                    return;
+                }
+                Event::PointerDown {
+                    pos,
+                    button: MouseButton::Left,
+                } if self.scrollable() && self.popup_scrollbar_rect().contains(*pos) => {
+                    self.scrollbar.event(event, ctx);
+                    ctx.request_paint();
+                    return;
+                }
+                _ => {}
+            }
         }
         match event {
             Event::PointerDown {
@@ -485,5 +622,112 @@ impl Widget for Dropdown {
             kind: PopupKind::Popup,
             title: None,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::event::Modifiers;
+    use crate::mock::MockBackend;
+
+    fn dropdown_with(n: usize) -> Dropdown {
+        let items: Vec<String> = (0..n).map(|i| format!("item {i}")).collect();
+        Dropdown::new(Rect::new(0, 0, 120, 20)).with_items(items)
+    }
+
+    fn key(named: NamedKey) -> Event {
+        Event::KeyDown {
+            key: Key::Named(named),
+            modifiers: Modifiers::default(),
+        }
+    }
+
+    #[test]
+    fn a_short_list_shows_every_row_with_no_scrollbar() {
+        let d = dropdown_with(5);
+        assert!(!d.scrollable());
+        assert_eq!(d.visible_items(), 5);
+        // No gutter: the rows span the full popup width.
+        assert_eq!(d.popup_rows_rect().w, d.popup_rect().w);
+        // Popup is exactly five rows tall.
+        assert_eq!(d.popup_rect().h, POPUP_PAD_Y * 2 + 5 * ITEM_HEIGHT);
+    }
+
+    #[test]
+    fn a_long_list_caps_its_height_and_grows_a_scrollbar() {
+        let d = dropdown_with(40);
+        assert!(d.scrollable());
+        assert_eq!(d.visible_items(), MAX_POPUP_ITEMS);
+        // Height is capped no matter how many items there are.
+        assert_eq!(
+            d.popup_rect().h,
+            POPUP_PAD_Y * 2 + MAX_POPUP_ITEMS as i32 * ITEM_HEIGHT
+        );
+        // The rows give up a scrollbar gutter on the right.
+        assert_eq!(
+            d.popup_rows_rect().w,
+            d.popup_rect().w - SCROLLBAR_THICKNESS
+        );
+    }
+
+    #[test]
+    fn keyboard_navigation_scrolls_the_window() {
+        let mut d = dropdown_with(40);
+        d.set_focused(true);
+        d.open();
+        assert_eq!(d.scroll_top(), 0, "opens at the top");
+
+        let backend = MockBackend::new(200, 200);
+        // Step down past the visible window; the top must follow the highlight.
+        for _ in 0..MAX_POPUP_ITEMS + 3 {
+            backend.dispatch(&mut d, &key(NamedKey::Down));
+        }
+        assert_eq!(d.highlighted, Some(MAX_POPUP_ITEMS + 3));
+        assert!(d.scroll_top() > 0, "the window scrolled to follow");
+        assert!(d.scroll_top() <= MAX_POPUP_ITEMS + 3);
+
+        // End jumps to the last row and pins the window to the bottom.
+        backend.dispatch(&mut d, &key(NamedKey::End));
+        assert_eq!(d.highlighted, Some(39));
+        assert_eq!(d.scroll_top(), 40 - MAX_POPUP_ITEMS);
+
+        // Home returns to the very top.
+        backend.dispatch(&mut d, &key(NamedKey::Home));
+        assert_eq!(d.highlighted, Some(0));
+        assert_eq!(d.scroll_top(), 0);
+    }
+
+    #[test]
+    fn hit_item_accounts_for_the_scroll_offset() {
+        let mut d = dropdown_with(40);
+        d.open();
+        d.layout_popup();
+        d.scrollbar.set_value(5);
+
+        let popup = d.popup_rect();
+        // A click on the first visible row now lands on item 5.
+        let first_row = Point::new(popup.x + 4, popup.y + POPUP_PAD_Y + 1);
+        assert_eq!(d.hit_item(first_row), Some(5));
+        // A click in the scrollbar gutter is not a row hit.
+        let gutter = d.popup_scrollbar_rect();
+        assert_eq!(
+            d.hit_item(Point::new(gutter.x + 2, gutter.y + 4)),
+            None,
+            "the scrollbar gutter is not an item"
+        );
+    }
+
+    #[test]
+    fn opening_scrolls_the_selection_into_view() {
+        let mut d = dropdown_with(40);
+        d.set_selected(Some(35));
+        d.open();
+        d.layout_popup();
+        let top = d.scroll_top();
+        assert!(
+            top <= 35 && 35 < top + d.visible_items(),
+            "selection visible"
+        );
     }
 }
