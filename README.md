@@ -92,7 +92,7 @@ or list it directly in your `Cargo.toml`:
 ```toml
 # Cargo.toml
 [dependencies]
-saudade = "0.2.0"
+saudade = "0.3.0"
 ```
 
 The reference apps under `examples/` are plain Cargo examples built against

@@ -10,6 +10,8 @@ While pre-1.0, the minor version is bumped for breaking changes.
 
 ## [Unreleased] - ReleaseDate
 
+## [0.3.0] - 2026-06-07
+
 ### Fixed
 
 - The `filer` example no longer confuses scrolling with dragging a file out.
@@ -150,6 +152,7 @@ While pre-1.0, the minor version is bumped for breaking changes.
 Initial release.
 
 <!-- next-url -->
-[Unreleased]: https://github.com/roblillack/saudade/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/roblillack/saudade/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/roblillack/saudade/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/roblillack/saudade/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/roblillack/saudade/releases/tag/v0.1.0
