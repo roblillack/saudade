@@ -293,7 +293,34 @@ impl Widget for ScrollBar {
         painter.light_button(up, theme);
         painter.light_button(down, theme);
         if let Some(thumb) = thumb_opt {
-            painter.light_button(thumb, theme);
+            // Where the thumb sits flush against an arrow button, overlap that
+            // button's frame by 1px so the thumb's black outline lands on the
+            // *same* row/column as the button's, collapsing the divider to a
+            // single 1px line instead of stacking the two 1px frames into a 2px
+            // band.
+            let track = self.track_rect();
+            let mut t = thumb;
+            match self.orientation {
+                Orientation::Vertical => {
+                    if thumb.y <= track.y {
+                        t.y -= 1;
+                        t.h += 1;
+                    }
+                    if thumb.bottom() >= track.bottom() {
+                        t.h += 1;
+                    }
+                }
+                Orientation::Horizontal => {
+                    if thumb.x <= track.x {
+                        t.x -= 1;
+                        t.w += 1;
+                    }
+                    if thumb.right() >= track.right() {
+                        t.w += 1;
+                    }
+                }
+            }
+            painter.light_button(t, theme);
         }
 
         // A single black outline around the whole bar. Its long sides are the
