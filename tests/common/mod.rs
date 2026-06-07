@@ -23,8 +23,8 @@
 
 use std::path::{Path, PathBuf};
 
-use saudade::mock::MockBackend;
-use saudade::{Font, Widget};
+use saudade::mock::{MockBackend, Snapshot};
+use saudade::{Font, Widget, WindowChrome};
 
 pub fn sans_font() -> Font {
     Font::from_bytes(include_bytes!("../fonts/DejaVuSans.ttf").to_vec())
@@ -60,13 +60,41 @@ where
     }
 }
 
+/// Like [`snapshot_at_all_scales`], but wraps each render in Canoe-style window
+/// chrome via [`MockBackend::render_framed`], so the baseline captures the
+/// desktop, drop shadow, title bar, and frame around the widget tree.
+pub fn snapshot_framed_at_all_scales<F>(
+    name: &str,
+    width: i32,
+    height: i32,
+    chrome: &WindowChrome,
+    mut build: F,
+) where
+    F: FnMut() -> Box<dyn Widget>,
+{
+    for &scale in SCALES {
+        let backend = MockBackend::new(width, height)
+            .with_scale(scale)
+            .with_font(sans_font())
+            .with_mono_font(mono_font());
+        let snap = backend.render_framed(build().as_mut(), chrome);
+        compare_snapshot(name, scale, &snap);
+    }
+}
+
 fn snapshot_one(name: &str, width: i32, height: i32, scale: f32, mut widget: Box<dyn Widget>) {
     let backend = MockBackend::new(width, height)
         .with_scale(scale)
         .with_font(sans_font())
         .with_mono_font(mono_font());
     let snap = backend.render(widget.as_mut());
+    compare_snapshot(name, scale, &snap);
+}
 
+/// Compare a freshly rendered frame against its checked-in baseline (or, under
+/// `UPDATE_SNAPSHOTS`, overwrite the baseline). Shared by the plain and framed
+/// snapshot paths.
+fn compare_snapshot(name: &str, scale: f32, snap: &Snapshot) {
     let path = snapshot_path(&format!("{}_{}.snap.png", name, scale_tag(scale)));
 
     // Regeneration mode: overwrite the baseline with the freshly rendered
@@ -86,7 +114,7 @@ fn snapshot_one(name: &str, width: i32, height: i32, scale: f32, mut widget: Box
     let (bw, bh, base) = decode_rgba(&baseline, &path);
 
     if bw as i32 != snap.width() || bh as i32 != snap.height() {
-        let actual = write_actual_render(&snap, name, scale);
+        let actual = write_actual_render(snap, name, scale);
         panic!(
             "snapshot `{name}` @ {scale}x: size changed (baseline {bw}x{bh}, rendered {}x{}). \
              Rendered frame written to {}. Run `UPDATE_SNAPSHOTS=1 cargo test -p saudade` if \
@@ -129,7 +157,7 @@ fn snapshot_one(name: &str, width: i32, height: i32, scale: f32, mut widget: Box
     }
 
     if offenders > 0 {
-        let actual = write_actual_render(&snap, name, scale);
+        let actual = write_actual_render(snap, name, scale);
         panic!(
             "snapshot `{name}` @ {scale}x differs from baseline: {offenders} pixel(s) off by more \
              than {MAX_CHANNEL_DELTA}/255 (largest channel delta {max_delta}, first at \

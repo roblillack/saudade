@@ -8,12 +8,12 @@
 
 mod common;
 
-use common::snapshot_at_all_scales;
+use common::{snapshot_at_all_scales, snapshot_framed_at_all_scales};
 
 use saudade::{
     Bevel, Button, Checkbox, Color, Column, Container, Dialog, Dropdown, Event, Image, Key, Label,
     List, ListIcon, ListItem, Menu, MenuBar, MenuItem, Modifiers, NamedKey, Orientation,
-    ProgressBar, Rect, Row, ScrollBar, Slider, TextEditor, TextInput, Widget,
+    ProgressBar, Rect, Row, ScrollBar, Slider, TextEditor, TextInput, Widget, WindowChrome,
 };
 
 // ---------------------------------------------------------------- Bevel
@@ -1478,4 +1478,52 @@ fn row_two_fills() {
                 .add_fill(b),
         )
     });
+}
+
+// ------------------------------------------------------ Window chrome
+//
+// `render_framed` wraps a client area in Canoe-style window chrome — a teal
+// desktop, a soft drop shadow, a title bar, and a frame. The three styles
+// differ in their window controls and border; all are drawn active.
+
+/// A simple client area shared by the chrome tests: a label and an OK button on
+/// a white background, so the framed window has recognizable content.
+fn chrome_content() -> Box<dyn Widget> {
+    Box::new(
+        Container::new(200, 96)
+            .with_background(Color::WHITE)
+            .add(Label::new(Rect::new(16, 16, 168, 16), "Document ready."))
+            .add(Button::new(Rect::new(60, 56, 80, 24), "OK").default(true)),
+    )
+}
+
+/// Resizable window: minimize + maximize buttons and the full multi-layer
+/// resize border.
+#[test]
+fn chrome_resizable() {
+    let chrome = WindowChrome::resizable("Untitled — Notepad");
+    snapshot_framed_at_all_scales("chrome_resizable", 200, 96, &chrome, chrome_content);
+}
+
+/// Fixed-size window: a minimize button only, collapsed to a 1px outline border.
+#[test]
+fn chrome_fixed() {
+    let chrome = WindowChrome::fixed("System Monitor");
+    snapshot_framed_at_all_scales("chrome_fixed", 200, 96, &chrome, chrome_content);
+}
+
+/// Dialog window: no minimize / maximize buttons, dialog-style frame.
+#[test]
+fn chrome_dialog() {
+    let chrome = WindowChrome::dialog("Confirm");
+    snapshot_framed_at_all_scales("chrome_dialog", 200, 96, &chrome, chrome_content);
+}
+
+/// The desktop color and margin are overridable; everything else stays Canoe's.
+#[test]
+fn chrome_custom_desktop() {
+    let chrome = WindowChrome::resizable("Preferences")
+        .with_desktop_background(Color::rgb(0x5A, 0x5A, 0x80))
+        .with_margin(20);
+    snapshot_framed_at_all_scales("chrome_custom_desktop", 200, 96, &chrome, chrome_content);
 }

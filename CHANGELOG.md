@@ -28,6 +28,13 @@ While pre-1.0, the minor version is bumped for breaking changes.
   modern KDE / Windows pickers use. Section labels carry Alt+L / Alt+N / Alt+T
   accelerators. Glob-based `FileFilter`s drive the filter. The `notepad` example
   now uses it for File → Open and File → Save As. (#26)
+- Window-chrome screenshots: `MockBackend::render_framed` wraps a rendered
+  client area in Canoe's default desktop style — a teal background, a soft drop
+  shadow, a navy active title bar, and a window frame. Choose the frame via
+  `WindowChrome::resizable` / `fixed` / `dialog` (`WindowFrame`), which mirror
+  Canoe's three window paints and differ in their window controls and border;
+  `with_desktop_background` / `with_margin` tweak the backdrop. Windows are
+  always drawn active. See the new `chrome` example.
 - `include_svg!` now honors `clip-path`: clip regions are intersected with the
   drawn geometry at build time (via `i_overlay`), so clipped artwork bakes
   correctly instead of being dropped. `i_overlay` is a compile-time-only

@@ -45,6 +45,7 @@ Reference apps live under `examples/`. Run any of them with
 | `patterns`      | Previews the window background patterns (`none`, `solid`, `dots`, `lines`, `diagonal`, `cross-stitch`): press `p` to cycle the pattern and `c` to cycle the color. Every app draws one behind its widgets — default `superlight` `diagonal`, overridable with `SAUDADE_WINDOW_PATTERN` / `SAUDADE_WINDOW_PATTERN_COLOR` (e.g. `SAUDADE_WINDOW_PATTERN=dots SAUDADE_WINDOW_PATTERN_COLOR=light`). |
 | `scaling`       | Previews widgets at an arbitrary logical→physical scale via `Painter::draw_scaled`: a `Slider` and preset `Button`s (1.0x / 1.25x / … / 3.0x) drive a "preview scale" — starting at the display's OS scale — that a small panel of real widgets (`TextInput`, `Dropdown`, `Checkbox`, `Button`s, `ProgressBar`) redraws at, plus a "zoom in 2x" `Checkbox` that magnifies the result. The window resizes itself (via `EventCtx::request_window_size`) to fit the preview at the chosen scale. The window's own (OS-owned) scale is never touched.                                  |
 | `svg`           | Compares `include_svg!` (SVG baked to polygons at compile time, filled at runtime — no SVG crate in the binary) against `include_str!` + `resvg` (parse + rasterize at runtime). Draws six icons both ways for a side-by-side fidelity check and prints a micro-benchmark to the console (run with `--release`). Needs `resvg` only as a dev-dependency, for the comparison.                                                                                                                                                |
+| `chrome`        | Renders an "about box" offscreen and wraps it in Canoe-style window chrome (title bar, frame, drop shadow on a teal desktop) via `MockBackend::render_framed`, writing one PNG per frame style (`Resizable` / `Fixed` / `Dialog`). Opens no window — it generates screenshots.                                                                                                                    |
 
 ```console
 $ cargo run --example notepad        # or: filer, dnd, picker, counter, temperature,
@@ -124,6 +125,8 @@ to an object-oriented UI framework.
 | widget   | `Widget` trait (paint / event / focus / overlay hooks)                                                                                                                                                   |
 | widgets  | `Container`, `Column`, `Row`, `Label`, `Button`, `Checkbox`, `Bevel`, `Image`, `MenuBar`, `Menu`, `MenuItem`, `ScrollBar`, `Slider`, `ProgressBar`, `List`, `Modal`, `Dialog`, `FileDialog`, `TextInput`, `TextEditor` |
 | app      | `App`, `WindowConfig` — runtime entry point                                                                                                                                                              |
+| mock     | `MockBackend`, `Snapshot` — offscreen rendering to a pixel buffer / PNG                                                                                                                                   |
+| chrome   | `WindowChrome`, `WindowFrame` — Canoe-style title bar + frame for screenshots                                                                                                                             |
 
 Everything user-facing is re-exported from the crate root; you generally
 just `use saudade::*;`.
@@ -1125,6 +1128,59 @@ Saudade picks the windowing backend at startup based on the session:
 The widget tree, painter, fonts, clipboard, theme, and every public
 API are identical across both paths — only `app.rs` + `wayland.rs`
 differ.
+
+## Offscreen rendering and screenshots
+
+`MockBackend` (in the `mock` module) renders a widget tree into an owned
+ARGB32 pixel buffer instead of an on-screen surface — the same pipeline the
+live runtime uses, minus winit/softbuffer. It is the basis for the snapshot
+tests and is also handy for generating screenshots in a build script or CI.
+
+```rust
+use saudade::*;
+use saudade::mock::MockBackend;
+
+let mut root = Container::new(220, 64)
+    .with_background(Color::WHITE)
+    .add(Label::new(Rect::new(16, 24, 200, 16), "Ready."));
+
+// Just the client area, at 2× DPI.
+let snap = MockBackend::new(220, 64).with_scale(2.0).render(&mut root);
+std::fs::write("client.png", snap.to_png()).unwrap();
+```
+
+`render` captures only the client area — the OS owns the title bar and frame,
+so saudade never draws them. For documentation or store screenshots, though,
+`render_framed` wraps the render in window chrome, reproducing the default
+rendering style of Canoe (the Win 3.1-styled window manager saudade pairs
+with): a teal desktop, a soft drop shadow, a navy active title bar, and a black
+frame. The window is always drawn **active** (focused).
+
+```rust
+use saudade::*;
+use saudade::mock::MockBackend;
+
+let mut root = Container::new(220, 64)
+    .with_background(Color::WHITE)
+    .add(Label::new(Rect::new(16, 24, 200, 16), "Ready."));
+
+let snap = MockBackend::new(220, 64)
+    .render_framed(&mut root, &WindowChrome::resizable("My App"));
+std::fs::write("window.png", snap.to_png()).unwrap();
+```
+
+Pick the frame style with `WindowChrome`; the three mirror Canoe's window
+paints and differ in their window controls and border:
+
+| `WindowFrame`         | Constructor               | Controls            | Border                          |
+| --------------------- | ------------------------- | ------------------- | ------------------------------- |
+| `Resizable`           | `WindowChrome::resizable` | minimize + maximize | full multi-layer resize border  |
+| `Fixed`               | `WindowChrome::fixed`     | minimize only       | single 1px outline              |
+| `Dialog`              | `WindowChrome::dialog`    | none                | bulk layer takes the title color |
+
+`with_desktop_background` and `with_margin` override the teal backdrop and the
+desktop padding around the window; everything else stays Canoe's default. See
+the `chrome` example, which writes one PNG per frame style.
 
 ## DPI and resizing
 
