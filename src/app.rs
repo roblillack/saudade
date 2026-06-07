@@ -163,6 +163,49 @@ struct AppHandler {
     /// `true` once we've emitted `DragEnter` for the current hover, so we don't
     /// re-announce it every idle iteration while the drag lingers.
     drag_active: bool,
+    /// Tracks a key press a widget asked to swallow until release (via
+    /// [`EventCtx::swallow_key_until_release`]).
+    swallow: KeySwallow,
+}
+
+/// Bookkeeping for a key press a widget asked to swallow until its release.
+///
+/// A single physical press surfaces as separate `KeyDown` / `Char` / `KeyUp`
+/// events (and OS autorepeat re-fires the first two). When a handler signals
+/// [`EventCtx::swallow_key_until_release`], the runtime must drop every one of
+/// those for the same key until the release — otherwise the trailing text leaks
+/// past the handler (e.g. into a dialog the handler just opened).
+///
+/// Shared by both runtime backends — the winit `AppHandler` here and the
+/// Wayland `State` — which run identical `KeyDown` / `Char` / `KeyUp` paths.
+#[derive(Default)]
+pub(crate) struct KeySwallow {
+    /// The key currently being swallowed, or `None` when nothing is.
+    key: Option<Key>,
+}
+
+impl KeySwallow {
+    /// True if a fresh press of `mapped` should be dropped wholesale — it's an
+    /// autorepeat of the key being swallowed.
+    pub(crate) fn drops_press(&self, mapped: Option<Key>) -> bool {
+        mapped.is_some() && mapped == self.key
+    }
+
+    /// Record that the press of `mapped` is now swallowed until release.
+    pub(crate) fn begin(&mut self, mapped: Option<Key>) {
+        self.key = mapped;
+    }
+
+    /// True if the release of `mapped` ends the swallowed press (also clearing
+    /// it, so the key is handled normally again afterwards).
+    pub(crate) fn ends_on_release(&mut self, mapped: Option<Key>) -> bool {
+        if mapped.is_some() && mapped == self.key {
+            self.key = None;
+            true
+        } else {
+            false
+        }
+    }
 }
 
 /// Target interval between [`Event::Tick`](crate::event::Event::Tick)
@@ -194,6 +237,7 @@ impl AppHandler {
             drag_hovered: Vec::new(),
             drag_dropped: Vec::new(),
             drag_active: false,
+            swallow: KeySwallow::default(),
         }
     }
 }
@@ -487,7 +531,7 @@ impl AppHandler {
         }
     }
 
-    fn dispatch(&mut self, event: &Event, event_loop: &ActiveEventLoop) {
+    fn dispatch(&mut self, event: &Event, event_loop: &ActiveEventLoop) -> EventCtx {
         let mut ctx = EventCtx::new();
         self.root.event(event, &mut ctx);
         if ctx.paint_requested {
@@ -512,6 +556,7 @@ impl AppHandler {
         // refuse it the way Wayland can — so the flag is advisory here and the
         // `Drop` is delivered regardless.
         let _ = ctx.accepts_drop;
+        ctx
     }
 
     /// Turn the file paths buffered from `HoveredFile` / `DroppedFile` events
@@ -591,14 +636,27 @@ impl AppHandler {
         let mapped = map_base_key(key);
         match key.state {
             ElementState::Pressed => {
-                if let Some(mapped) = mapped {
-                    self.dispatch(
+                // A key whose press a widget asked to swallow (e.g. the letter
+                // that fired a menu item) is dropped wholesale — including OS
+                // autorepeat — until its release, so neither the `KeyDown` nor
+                // the text it produces reaches the tree.
+                if self.swallow.drops_press(mapped) {
+                    return;
+                }
+                if let Some(m) = mapped {
+                    let ctx = self.dispatch(
                         &Event::KeyDown {
-                            key: mapped,
+                            key: m,
                             modifiers: self.modifiers,
                         },
                         event_loop,
                     );
+                    if ctx.swallow_key {
+                        // The handler fully owns this press; drop its trailing
+                        // text now and everything up to the release.
+                        self.swallow.begin(mapped);
+                        return;
+                    }
                 }
                 if !self.modifiers.has_command()
                     && let Some(text) = key.text.as_deref()
@@ -607,21 +665,33 @@ impl AppHandler {
                         if (ch.is_control() && ch != '\t' && ch != '\n') || ch == '\r' {
                             continue;
                         }
-                        self.dispatch(
+                        let ctx = self.dispatch(
                             &Event::Char {
                                 ch,
                                 modifiers: self.modifiers,
                             },
                             event_loop,
                         );
+                        if ctx.swallow_key {
+                            // A handler fired on the text itself (a mnemonic
+                            // routed through `Char` on this platform); swallow
+                            // the rest of the press too.
+                            self.swallow.begin(mapped);
+                            return;
+                        }
                     }
                 }
             }
             ElementState::Released => {
-                if let Some(mapped) = mapped {
+                // The release that ends a swallowed press: consume it and arm
+                // the key for normal handling again.
+                if self.swallow.ends_on_release(mapped) {
+                    return;
+                }
+                if let Some(m) = mapped {
                     self.dispatch(
                         &Event::KeyUp {
-                            key: mapped,
+                            key: m,
                             modifiers: self.modifiers,
                         },
                         event_loop,
@@ -1044,5 +1114,57 @@ fn physical_to_logical(
 impl From<Rect> for Size {
     fn from(r: Rect) -> Size {
         Size::new(r.w, r.h)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const O: Option<Key> = Some(Key::Char('o'));
+    const F: Option<Key> = Some(Key::Char('f'));
+
+    #[test]
+    fn nothing_is_swallowed_by_default() {
+        let s = KeySwallow::default();
+        assert!(!s.drops_press(O));
+        assert!(!s.drops_press(None));
+    }
+
+    #[test]
+    fn a_swallowed_press_drops_text_autorepeat_and_release() {
+        let mut s = KeySwallow::default();
+        // A handler fired on the press of 'o' and asked to swallow it.
+        s.begin(O);
+        // Its trailing text and any autorepeat of the same key are dropped …
+        assert!(
+            s.drops_press(O),
+            "autorepeat of the swallowed key is dropped"
+        );
+        // … and so is the release, which then re-arms the key.
+        assert!(s.ends_on_release(O));
+        assert!(!s.drops_press(O), "after release the key is live again");
+        assert!(!s.ends_on_release(O));
+    }
+
+    #[test]
+    fn other_keys_pass_through_a_swallow() {
+        let mut s = KeySwallow::default();
+        s.begin(O);
+        // A different key pressed/released meanwhile is untouched …
+        assert!(!s.drops_press(F));
+        assert!(!s.ends_on_release(F), "an unrelated release isn't consumed");
+        // … and doesn't disturb the key still being swallowed.
+        assert!(s.ends_on_release(O));
+    }
+
+    #[test]
+    fn an_unmapped_key_never_matches() {
+        let mut s = KeySwallow::default();
+        s.begin(None);
+        // `None` (a key that didn't map) must not collapse into a match — that
+        // would swallow every other unmapped event.
+        assert!(!s.drops_press(None));
+        assert!(!s.ends_on_release(None));
     }
 }

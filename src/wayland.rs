@@ -64,7 +64,7 @@ use wayland_protocols::xdg::dialog::v1::client::xdg_wm_dialog_v1::XdgWmDialogV1;
 use wayland_protocols::xdg::shell::client::xdg_positioner::{Anchor, Gravity, XdgPositioner};
 use wayland_protocols::xdg::shell::client::xdg_surface::XdgSurface as XdgSurfaceObj;
 
-use crate::app::App;
+use crate::app::{App, KeySwallow};
 use crate::background::BackgroundState;
 use crate::event::{
     DragData, Event, EventCtx, Key, Modifiers, MouseButton, NamedKey, SCROLL_PIXELS_PER_LINE,
@@ -196,6 +196,7 @@ pub(crate) fn run(app: App) {
         popups: Vec::new(),
         qh: qh.clone(),
         loop_handle: event_loop.handle(),
+        swallow: KeySwallow::default(),
     };
     drop(conn);
 
@@ -302,6 +303,9 @@ struct State {
     /// — that's what arms the timer that turns held keys into repeated
     /// `KeyDown` / `Char` events.
     loop_handle: LoopHandle<'static, State>,
+    /// Tracks a key press a widget asked to swallow until release (via
+    /// [`EventCtx::swallow_key_until_release`]).
+    swallow: KeySwallow,
 }
 
 /// Wayland-side state for the subordinate window that hosts a widget
@@ -470,11 +474,11 @@ impl State {
     }
 
     /// Dispatch `event` into the widget tree and apply the requests it left on
-    /// the [`EventCtx`]. Returns whether a widget called
-    /// [`EventCtx::accept_drop`] — meaningful only for the incoming-drag events,
-    /// where the caller turns it into accept/reject on the drag offer; every
-    /// other caller ignores it.
-    fn dispatch(&mut self, event: Event) -> bool {
+    /// the [`EventCtx`], returning that context so the caller can read the
+    /// requests it didn't act on: `accepts_drop` for the incoming-drag events
+    /// (turned into accept/reject on the drag offer) and `swallow_key` for the
+    /// keyboard path. Most callers ignore the result.
+    fn dispatch(&mut self, event: Event) -> EventCtx {
         let mut ctx = EventCtx::new();
         self.root.event(&event, &mut ctx);
         if ctx.paint_requested {
@@ -490,7 +494,7 @@ impl State {
         if let Some(data) = ctx.drag_request.take() {
             self.begin_drag(data);
         }
-        ctx.accepts_drop
+        ctx
     }
 
     /// Start an outbound drag carrying `data`'s file paths, in response to a
@@ -1335,11 +1339,19 @@ impl State {
         let modifiers = self.modifiers;
         let mapped = map_keysym(event.keysym);
         if pressed {
-            if let Some(mapped) = mapped {
-                self.dispatch(Event::KeyDown {
-                    key: mapped,
-                    modifiers,
-                });
+            // A key whose press a widget asked to swallow (e.g. the letter that
+            // fired a menu item) is dropped wholesale — including the repeat
+            // timer's re-presses — until release, so neither the `KeyDown` nor
+            // its text reaches the tree.
+            if self.swallow.drops_press(mapped) {
+                return;
+            }
+            if let Some(m) = mapped {
+                let ctx = self.dispatch(Event::KeyDown { key: m, modifiers });
+                if ctx.swallow_key {
+                    self.swallow.begin(mapped);
+                    return;
+                }
             }
             if !modifiers.has_command()
                 && let Some(utf8) = event.utf8.as_deref()
@@ -1348,14 +1360,18 @@ impl State {
                     if (ch.is_control() && ch != '\t' && ch != '\n') || ch == '\r' {
                         continue;
                     }
-                    self.dispatch(Event::Char { ch, modifiers });
+                    let ctx = self.dispatch(Event::Char { ch, modifiers });
+                    if ctx.swallow_key {
+                        self.swallow.begin(mapped);
+                        return;
+                    }
                 }
             }
-        } else if let Some(mapped) = mapped {
-            self.dispatch(Event::KeyUp {
-                key: mapped,
-                modifiers,
-            });
+        } else if self.swallow.ends_on_release(mapped) {
+            // The release that ends a swallowed press: consume it and arm the
+            // key for normal handling again.
+        } else if let Some(m) = mapped {
+            self.dispatch(Event::KeyUp { key: m, modifiers });
         }
     }
 }
@@ -1492,7 +1508,7 @@ impl DataDeviceHandler for State {
         // opts in via `EventCtx::accept_drop`. Accepting unconditionally would
         // tell the source every window is a drop target, even ones with no drop
         // zone — so the source's cursor would wrongly read "copy" over us.
-        let accepted = self.dispatch(Event::DragEnter { pos });
+        let accepted = self.dispatch(Event::DragEnter { pos }).accepts_drop;
         if let Some(d) = self.drag.as_mut() {
             d.accepted = accepted;
         }
@@ -1525,7 +1541,7 @@ impl DataDeviceHandler for State {
         // Re-evaluate acceptance for the new position — a drag can cross from a
         // drop zone to plain content within one window — and only re-tell the
         // offer when the answer flipped.
-        let accepted = self.dispatch(Event::DragMove { pos });
+        let accepted = self.dispatch(Event::DragMove { pos }).accepts_drop;
         let changed = self.drag.as_ref().is_some_and(|d| d.accepted != accepted);
         if let Some(drag) = self.drag.as_mut() {
             drag.accepted = accepted;

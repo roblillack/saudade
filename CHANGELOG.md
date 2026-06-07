@@ -19,6 +19,10 @@ While pre-1.0, the minor version is bumped for breaking changes.
   with a non-zero origin or an `<svg>` whose width/height differ from the viewBox
   — without disturbing artwork that is deliberately padded inside its viewBox
   (the scrollbar, dropdown, dialog, and checkbox marks). (#27, #31)
+- Firing a menu item by its keyboard mnemonic no longer leaks the letter into
+  whatever the item opens. Picking File → Open with Alt+F, O previously typed an
+  "o" into the dialog's freshly focused File name field; the menu now swallows
+  the keystroke through its release.
 
 ### Added
 
@@ -60,6 +64,9 @@ While pre-1.0, the minor version is bumped for breaking changes.
 - `ScrollBar::end_drag()` to abandon an in-progress thumb drag, for hosts that
   can be torn down mid-drag (such as a dropdown popup that closes on focus
   loss). (#28)
+- `EventCtx::swallow_key_until_release()`: a handler that fully acts on a key
+  press can ask the runtime to discard the rest of it — the trailing `Char`,
+  autorepeat, and the release.
 
 ## [0.2.0] - 2026-06-06
 

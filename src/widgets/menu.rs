@@ -585,6 +585,9 @@ impl Widget for MenuBar {
                             self.fire(item, ctx);
                             self.open = None;
                             self.hovered_item = None;
+                            // Don't let the Enter that fired the item leak into
+                            // whatever it opened (its release / trailing text).
+                            ctx.swallow_key_until_release();
                             ctx.request_paint();
                         }
                     }
@@ -736,6 +739,9 @@ impl MenuBar {
                 self.fire(item, ctx);
                 self.open = None;
                 self.hovered_item = None;
+                // The letter that fired the item must not also reach whatever
+                // the item just opened (e.g. a dialog's focused field).
+                ctx.swallow_key_until_release();
                 ctx.request_paint();
                 return true;
             }
@@ -814,6 +820,62 @@ mod tests {
         assert!(
             !ctx.is_consumed(),
             "a plain key against a closed bar must reach the focused widget"
+        );
+    }
+
+    #[test]
+    fn firing_an_item_by_mnemonic_swallows_the_key_until_release() {
+        let fired = Rc::new(Cell::new(false));
+        let mut bar = bar_with_help(fired.clone());
+        bar.open(0);
+        // While the menu is open, the item's letter fires it.
+        let mut ctx = EventCtx::new();
+        bar.event(&keydown(Key::Char('a')), &mut ctx); // &About
+        assert!(fired.get(), "the mnemonic fires the item");
+        assert!(
+            ctx.swallow_key,
+            "the firing keystroke is swallowed through its release so it can't \
+             leak into whatever the item opens (e.g. a dialog's focused field)"
+        );
+    }
+
+    #[test]
+    fn firing_an_item_by_enter_swallows_the_key_until_release() {
+        let fired = Rc::new(Cell::new(false));
+        let mut bar = bar_with_help(fired.clone());
+        bar.open(0);
+        let mut ctx = EventCtx::new();
+        bar.event(&keydown(Key::Named(NamedKey::Down)), &mut ctx); // highlight About
+        let mut ctx = EventCtx::new();
+        bar.event(&keydown(Key::Named(NamedKey::Enter)), &mut ctx);
+        assert!(fired.get());
+        assert!(
+            ctx.swallow_key,
+            "Enter that fires an item is swallowed until release"
+        );
+    }
+
+    #[test]
+    fn merely_opening_a_menu_does_not_swallow_until_release() {
+        // Opening (vs. firing) must not swallow: otherwise a held key's
+        // autorepeat couldn't drive arrow-key menu navigation.
+        let mut bar = bar_with_help(Rc::new(Cell::new(false)));
+        let alt = Modifiers {
+            alt: true,
+            ..Modifiers::default()
+        };
+        let mut ctx = EventCtx::new();
+        bar.event(
+            &Event::KeyDown {
+                key: Key::Char('h'),
+                modifiers: alt,
+            },
+            &mut ctx,
+        );
+        assert!(bar.open.is_some(), "Alt+H opens the Help menu");
+        assert!(
+            !ctx.swallow_key,
+            "opening a menu must not swallow the key press"
         );
     }
 
