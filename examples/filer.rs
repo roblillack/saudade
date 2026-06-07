@@ -113,10 +113,14 @@ impl FileBrowser {
 
     /// Arm a possible drag-out after a left press the list has already turned
     /// into a selection. We only arm over a real entry inside the list — never
-    /// `..` (dragging "go up" makes no sense) or the header strip.
+    /// `..` (dragging "go up" makes no sense), the header strip, or the
+    /// scrollbar gutter. That last exclusion matters: the scrollbar sits
+    /// *inside* the list bounds, so without it grabbing the thumb would both
+    /// scroll and arm a drag — and the drag wins on the next move, yanking a
+    /// file out instead of scrolling.
     fn arm_drag(&mut self, pos: Point) {
         self.drag_armed = None;
-        if !self.list.bounds().contains(pos) {
+        if !self.list.bounds().contains(pos) || self.list.scrollbar_hit(pos) {
             return;
         }
         if let Some(idx) = self.list.selected_index()

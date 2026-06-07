@@ -370,6 +370,15 @@ impl Widget for ScrollBar {
                 self.drag_offset = None;
                 ctx.request_paint();
             }
+            // The pointer left the window mid-drag — most often because an
+            // outbound drag-and-drop (or a popup teardown) revoked our pointer
+            // focus, so the matching release never arrives. With no OS grab to
+            // keep tracking, end the drag here; otherwise a stale `drag_offset`
+            // would make the thumb chase the cursor the moment it returns.
+            Event::PointerLeave if self.drag_offset.is_some() => {
+                self.drag_offset = None;
+                ctx.request_paint();
+            }
             Event::Scroll {
                 delta_x, delta_y, ..
             } => {

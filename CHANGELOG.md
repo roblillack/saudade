@@ -12,6 +12,16 @@ While pre-1.0, the minor version is bumped for breaking changes.
 
 ### Fixed
 
+- The `filer` example no longer confuses scrolling with dragging a file out.
+  The drag-out gesture armed on a press anywhere inside the list bounds — which
+  include the scrollbar pinned to the right edge — so grabbing the thumb both
+  scrolled and armed a drag, and the drag won on the next move (yanking a file
+  out instead of scrolling). It now yields the scrollbar strip via the new
+  `List::scrollbar_hit`. Relatedly, `ScrollBar` and `Slider` now end an
+  in-progress thumb drag on `PointerLeave`: with no OS pointer grab, a drag
+  interrupted by the pointer leaving the window (as an outbound drag-and-drop
+  does by revoking pointer focus) left a stale drag flag set, so the thumb
+  chased the cursor when it returned. (#35)
 - `TextEditor` is no longer pathologically slow to repaint with large or
   long-lined documents. Each frame rebuilt every visible row's caret-offset
   table by re-measuring every prefix of the line (O(n²)) and re-rasterized every
