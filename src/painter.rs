@@ -172,6 +172,17 @@ impl<'a> Painter<'a> {
         }
     }
 
+    /// Horizontal extent of the active clip in glyph-pen space — physical
+    /// pixels relative to the logical origin, the coordinate space
+    /// [`Font::draw_phys`](crate::font::Font::draw_phys) lays glyphs out in.
+    /// The font renderer uses this to skip glyphs that fall entirely outside
+    /// the visible span instead of blending every character of a long,
+    /// mostly-off-screen line.
+    pub(crate) fn glyph_clip_x(&self) -> (i32, i32) {
+        let (x0, _, x1, _) = self.clip_bounds();
+        (x0 - self.origin_x, x1 - self.origin_x)
+    }
+
     pub fn size(&self) -> Size {
         Size::new(self.width, self.height)
     }
@@ -833,6 +844,19 @@ impl<'a> Painter<'a> {
         };
         let (w, h) = font.measure(text, size);
         Size::new(w.ceil() as i32, h.ceil() as i32)
+    }
+
+    /// Cumulative caret x-offsets for `text` in the monospace font at `size`
+    /// logical pixels — `out[i]` is the x where the caret sits before the i-th
+    /// character, `out[len]` the end of the string. One O(n) pass over the
+    /// font's per-glyph advance cache, so a text editor can rebuild its
+    /// per-row caret table every frame without the O(n²) cost of remeasuring
+    /// each prefix. Returns `[0]` when no monospace font is available.
+    pub fn mono_cumulative_widths(&self, text: &str, size: f32) -> Vec<i32> {
+        match self.mono_font {
+            Some(font) => font.cumulative_widths(text, size),
+            None => vec![0],
+        }
     }
 }
 

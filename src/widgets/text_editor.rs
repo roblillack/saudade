@@ -571,21 +571,17 @@ impl Widget for TextEditor {
         let visible = self.visible_rows() as usize;
         let scroll_top = self.scroll_top();
 
-        // Rebuild cumulative widths only for visible rows.
+        // Rebuild cumulative caret offsets only for visible rows. Each row is a
+        // single O(n) pass over the font's cached per-glyph advances — not the
+        // old O(n²) "remeasure every prefix" loop, which made a 500-column line
+        // cost ~125k glyph lookups *per frame* and dominated scroll/resize.
         self.cumulative_widths.clear();
         for row_offset in 0..visible {
             let row = scroll_top + row_offset;
             if row >= self.lines.len() {
                 break;
             }
-            let line = &self.lines[row];
-            let n = line.chars().count();
-            let mut widths = Vec::with_capacity(n + 1);
-            widths.push(0);
-            for col in 1..=n {
-                let prefix: String = line.chars().take(col).collect();
-                widths.push(painter.measure_mono_text(&prefix, self.font_size).w);
-            }
+            let widths = painter.mono_cumulative_widths(&self.lines[row], self.font_size);
             self.cumulative_widths.insert(row, widths);
         }
 
