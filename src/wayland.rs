@@ -136,7 +136,14 @@ pub(crate) fn run(app: App) {
     let initial_h = window_cfg.size.h.max(1) as u32;
 
     if window_cfg.resizable {
-        window.set_min_size(Some((100, 60)));
+        // Honor the configured minimum (relayed to the WM as the surface's
+        // min-size hint), falling back to a small default so a resizable
+        // window can't be collapsed to nothing.
+        let min = window_cfg
+            .min_size
+            .map(|m| (m.w.max(1) as u32, m.h.max(1) as u32))
+            .unwrap_or((100, 60));
+        window.set_min_size(Some(min));
     } else {
         // Fixed-size window: min == max tells the compositor the surface
         // is unresizable. Without the max hint, wlroots-based compositors
