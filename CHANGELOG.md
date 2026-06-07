@@ -60,6 +60,15 @@ While pre-1.0, the minor version is bumped for breaking changes.
 - `ScrollBar::end_drag()` to abandon an in-progress thumb drag, for hosts that
   can be torn down mid-drag (such as a dropdown popup that closes on focus
   loss). (#28)
+- `ListItem::with_svg_icon`: list rows can now show a compile-time-baked
+  `SvgImage` (from `include_svg!`), drawn crisply at any DPI, alongside the
+  existing raster `ListIcon`.
+
+### Changed
+
+- The folder / file / up-arrow icons in the file dialog and the `filer` example
+  are now real SVG assets (`assets/icons/*.svg`) baked via `include_svg!` and
+  shared between the two, instead of hand-coded pixel buffers.
 
 ## [0.2.0] - 2026-06-06
 
