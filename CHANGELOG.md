@@ -22,6 +22,12 @@ While pre-1.0, the minor version is bumped for breaking changes.
 
 ### Added
 
+- `FileDialog`: a modern, single-pane Open / Save file picker (built on `Modal`)
+  with the current path along the top, one combined list of folders and files,
+  a "File name" field, and a "File types" filter dropdown — the flat layout
+  modern KDE / Windows pickers use. Section labels carry Alt+L / Alt+N / Alt+T
+  accelerators. Glob-based `FileFilter`s drive the filter. The `notepad` example
+  now uses it for File → Open and File → Save As. (#26)
 - `include_svg!` now honors `clip-path`: clip regions are intersected with the
   drawn geometry at build time (via `i_overlay`), so clipped artwork bakes
   correctly instead of being dropped. `i_overlay` is a compile-time-only

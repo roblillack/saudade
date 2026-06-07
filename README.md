@@ -31,7 +31,7 @@ Reference apps live under `examples/`. Run any of them with
 
 | Example         | What it shows                                                                                                                                                                                                                                                                                                                                                                                    |
 | --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `notepad`       | Editor window with menu bar (`MenuBar`, `TextEditor`).                                                                                                                                                                                                                                                                                                                                           |
+| `notepad`       | Editor window with menu bar (`MenuBar`, `TextEditor`); File → Open / Save As drive a `FileDialog`.                                                                                                                                                                                                                                                                                                |
 | `filer`         | Filesystem browser using `List` with folder/file icons. Drag an entry out of the window to drop it onto another app (drag *source* via `EventCtx::start_drag`; Wayland only).                                                                                                                                                                                                                       |
 | `dnd`           | A drop zone that highlights while a file drag hovers and lists the paths dropped onto it. Demonstrates OS file drag-and-drop (`DragEnter` / `DragMove` / `DragLeave` / `Drop`) across macOS, Windows, X11, and Wayland.                                                                                                                                                                            |
 | `picker`        | Pick-an-item dialog: `List` + buttons + `Dialog`, with Tab/Shift+Tab focus cycling.                                                                                                                                                                                                                                                                                                              |
@@ -122,7 +122,7 @@ to an object-oriented UI framework.
 | svg      | `SvgImage`, `SvgPolygon`, `FillRule` + the `include_svg!` macro — compile-time vector icons                                                                                                              |
 | font     | `Font` — system font lookup + glyph rasterization                                                                                                                                                        |
 | widget   | `Widget` trait (paint / event / focus / overlay hooks)                                                                                                                                                   |
-| widgets  | `Container`, `Column`, `Row`, `Label`, `Button`, `Checkbox`, `Bevel`, `Image`, `MenuBar`, `Menu`, `MenuItem`, `ScrollBar`, `Slider`, `ProgressBar`, `List`, `Modal`, `Dialog`, `TextInput`, `TextEditor` |
+| widgets  | `Container`, `Column`, `Row`, `Label`, `Button`, `Checkbox`, `Bevel`, `Image`, `MenuBar`, `Menu`, `MenuItem`, `ScrollBar`, `Slider`, `ProgressBar`, `List`, `Modal`, `Dialog`, `FileDialog`, `TextInput`, `TextEditor` |
 | app      | `App`, `WindowConfig` — runtime entry point                                                                                                                                                              |
 
 Everything user-facing is re-exported from the crate root; you generally
@@ -828,6 +828,68 @@ accelerator pass while the focused child is capturing, so a sibling **default
 instead. Once the list closes, Enter fires the default button again. The flight
 booker relies on this: its Book button is the default action _and_ lives next to
 the flight-type dropdown.
+
+### `FileDialog`
+
+A modern, single-pane **Open / Save** file picker, built on `Modal`. In its own
+top-level window it shows the current path along the top, one combined list of
+folders (shown first) and files below it, a "File name" field and a "File types"
+filter dropdown along the bottom, and OK / Cancel to their right — the flat
+layout modern KDE / Windows pickers use, rather than the Win 3.1 two-column
+"Directories" / "Drives" arrangement. Each label carries an accelerator that
+focuses its control: **Alt+L** ("Location") the list, **Alt+N** the File name
+field, **Alt+T** the File types filter.
+
+Own it as an overlay (`Rc<RefCell<FileDialog>>` added with
+`Column::add_overlay`, exactly like `Dialog`) and open it with `show_open` or
+`show_save`, passing a callback that receives the chosen `Path` on confirm.
+Cancel / Escape / the window's close button just close it.
+
+```rust
+let dialog = Rc::new(RefCell::new(
+    FileDialog::new()
+        .with_directory(std::env::current_dir().unwrap())
+        .with_filters(vec![
+            FileFilter::new("Text Files (*.txt)", ["*.txt"]),
+            FileFilter::all_files(),
+        ]),
+));
+
+// From a menu / button handler:
+dialog.borrow_mut().show_open(|cx, path| {
+    // load `path` …
+    cx.request_paint();
+});
+
+// Saving suggests a name and need not point at an existing file:
+dialog.borrow_mut().show_save("Untitled.txt", |cx, path| {
+    // write to `path` …
+    cx.request_paint();
+});
+```
+
+A `FileFilter` pairs a label with one or more glob patterns (`*` / `?`, matched
+case-insensitively); the list shows folders plus only the files matching the
+selected filter, and switching the "File types" dropdown re-filters in place.
+`FileFilter::all_files()` is the catch-all `*.*`. `with_directory` /
+`set_directory` choose where the next open starts.
+
+Interaction:
+
+| Input                                 | Effect                                       |
+| ------------------------------------- | -------------------------------------------- |
+| click a file                          | put its name in the **File name** field      |
+| double-click a file / Enter / OK      | open it (resolve the field to a path)        |
+| double-click a folder or `..`         | descend / ascend                             |
+| Enter (a folder selected in the list) | descend into the selected folder             |
+| type a directory name + Enter         | descend into it                              |
+| type a wildcard (e.g. `*.rs`) + Enter | re-filter the list rather than open          |
+| Alt+L / Alt+N / Alt+T                 | focus the list / File name / File types      |
+
+The picker lives in its own window with server-side decorations, so its title
+("Open" / "Save As") rides along on the `PopupRequest`; its "File types" dropdown
+opens as a nested popup inside it. `examples/notepad.rs` wires it to File → Open
+and File → Save As.
 
 ### Disabled controls
 
