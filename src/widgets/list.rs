@@ -14,6 +14,11 @@ const ICON_PAD: i32 = 4;
 const TEXT_PAD_X: i32 = 4;
 const TEXT_PAD_Y: i32 = 2;
 const DOUBLE_CLICK_MS: u64 = 400;
+/// How far (logical px) a press may wander before a pending deferred-collapse is
+/// treated as the start of a drag and abandoned, leaving the whole
+/// multi-selection intact. Kept below a typical wrapper's drag dead zone so the
+/// group survives long enough to be dragged out.
+const COLLAPSE_SLOP: i64 = 4;
 
 /// A small ARGB32 pixel buffer drawn next to a list item's label. Pixels with
 /// `alpha == 0` are skipped (transparent), so icons keep their outline crisp
@@ -144,6 +149,13 @@ pub struct List {
     v_scrollbar: ScrollBar,
     activated: Option<usize>,
     last_click: Option<(usize, Instant)>,
+    /// A plain press on a row that is already part of a multi-selection: the
+    /// selection is kept intact for a possible group drag, and `(row, press
+    /// position)` is parked here. A release without travelling past
+    /// [`COLLAPSE_SLOP`] collapses the selection down to `row`; enough motion
+    /// (or the pointer leaving) abandons it, keeping the group. While it is set
+    /// the list captures the pointer so the follow-up move/release reach it.
+    pending_collapse: Option<(usize, Point)>,
 }
 
 impl List {
@@ -160,6 +172,7 @@ impl List {
             v_scrollbar: ScrollBar::vertical(Rect::new(0, 0, 0, 0)),
             activated: None,
             last_click: None,
+            pending_collapse: None,
         }
     }
 
@@ -189,12 +202,19 @@ impl List {
     /// click or arrow still selects a single row. Off (the default) the list is
     /// single-selection and click modifiers are ignored.
     ///
+    /// A plain press on a row that is *already* part of a multi-selection does
+    /// not collapse the selection immediately: the whole group stays selected
+    /// until the button is released (collapsing to that one row) so a wrapper
+    /// can start a drag of the entire group from the press instead. See
+    /// [`selected_indices`](Self::selected_indices).
+    ///
     /// Turning it off collapses any current multi-selection down to the single
     /// lead row (or the first selected row) so a single-selection list never
     /// shows more than one highlighted row.
     pub fn set_multi_select(&mut self, enabled: bool) {
         self.multi_select = enabled;
         if !enabled {
+            self.pending_collapse = None;
             let keep = self.lead.or_else(|| self.selection.first().copied());
             self.set_selected(keep);
         }
@@ -226,6 +246,7 @@ impl List {
         }
         self.activated = None;
         self.last_click = None;
+        self.pending_collapse = None;
         self.v_scrollbar.set_value(0);
     }
 
@@ -450,19 +471,21 @@ impl List {
         }
     }
 
-    fn handle_click(&mut self, idx: usize, modifiers: Modifiers) {
+    fn handle_click(&mut self, idx: usize, pos: Point, modifiers: Modifiers) {
         // Ctrl/Cmd toggles a row; Shift range-selects. Both only apply with
         // multi-selection on, and neither counts as an activation gesture — only
         // a plain click feeds the double-click detector below.
         if self.multi_select && modifiers.shift {
             self.extend_and_show(idx);
             self.last_click = None;
+            self.pending_collapse = None;
             return;
         }
         if self.multi_select && (modifiers.control || modifiers.logo) {
             self.toggle_at(idx);
             self.ensure_selection_visible();
             self.last_click = None;
+            self.pending_collapse = None;
             return;
         }
 
@@ -474,11 +497,26 @@ impl List {
                 prev_idx == idx && now.duration_since(prev_time) <= threshold
             })
             .unwrap_or(false);
-        self.select_and_show(idx);
+
         if double {
+            // A double-click always lands on a single row and activates it,
+            // even when it began inside a multi-selection.
+            self.select_and_show(idx);
             self.activated = Some(idx);
             self.last_click = None;
+            self.pending_collapse = None;
+        } else if self.multi_select && self.is_selected(idx) && self.selection.len() > 1 {
+            // Plain press on a member of a multi-selection: hold the whole group
+            // so it can be dragged, and only collapse to this row on release if
+            // the press doesn't turn into a drag (see the pending-collapse arm
+            // in `event`). The cursor still moves to the pressed row.
+            self.lead = Some(idx);
+            self.ensure_selection_visible();
+            self.pending_collapse = Some((idx, pos));
+            self.last_click = Some((idx, now));
         } else {
+            self.select_and_show(idx);
+            self.pending_collapse = None;
             self.last_click = Some((idx, now));
         }
     }
@@ -581,6 +619,40 @@ impl Widget for List {
             self.v_scrollbar.event(event, ctx);
             return;
         }
+        // Deferred-collapse lifecycle. While a press on a member of a
+        // multi-selection is pending the list captures the pointer, so the
+        // follow-up move/release land here. Resolve them up front — before the
+        // scrollbar routing below — so a pending collapse can never be stranded
+        // (a stuck one would keep the list capturing the pointer for good).
+        if self.pending_collapse.is_some() {
+            match event {
+                Event::PointerMove { pos } => {
+                    if let Some((_, start)) = self.pending_collapse {
+                        let (dx, dy) = ((pos.x - start.x) as i64, (pos.y - start.y) as i64);
+                        if dx * dx + dy * dy > COLLAPSE_SLOP * COLLAPSE_SLOP {
+                            // Travelled far enough to read as a drag: keep the
+                            // whole group selected and stop awaiting a collapse.
+                            self.pending_collapse = None;
+                        }
+                    }
+                }
+                Event::PointerUp {
+                    button: MouseButton::Left,
+                    ..
+                } => {
+                    if let Some((row, _)) = self.pending_collapse.take() {
+                        self.select_and_show(row);
+                        ctx.request_paint();
+                    }
+                    return;
+                }
+                Event::PointerLeave => {
+                    self.pending_collapse = None;
+                    return;
+                }
+                _ => {}
+            }
+        }
         // The wheel scrolls the field whenever the pointer is anywhere over
         // it — not just over the scrollbar gutter — without disturbing the
         // selection, matching native list boxes.
@@ -605,7 +677,7 @@ impl Widget for List {
             } => {
                 ctx.request_focus();
                 if let Some(row) = self.row_at(*pos) {
-                    self.handle_click(row, *modifiers);
+                    self.handle_click(row, *pos, *modifiers);
                 }
                 ctx.request_paint();
             }
@@ -639,7 +711,10 @@ impl Widget for List {
     }
 
     fn captures_pointer(&self) -> bool {
-        self.v_scrollbar.captures_pointer()
+        // Hold the pointer while a deferred collapse is pending so the move /
+        // release that resolve it are routed here even when the list lives
+        // inside a container that hit-tests by position.
+        self.v_scrollbar.captures_pointer() || self.pending_collapse.is_some()
     }
 
     fn focusable(&self) -> bool {
@@ -736,6 +811,30 @@ mod tests {
             control: true,
             ..Default::default()
         }
+    }
+
+    fn release(l: &mut List, row: usize) {
+        let mut ctx = EventCtx::new();
+        l.event(
+            &Event::PointerUp {
+                pos: row_point(row),
+                button: MouseButton::Left,
+                modifiers: Modifiers::default(),
+            },
+            &mut ctx,
+        );
+    }
+
+    fn pointer_move(l: &mut List, pos: Point) {
+        let mut ctx = EventCtx::new();
+        l.event(&Event::PointerMove { pos }, &mut ctx);
+    }
+
+    /// Select rows 1..=3 as a multi-selection (anchor 1, lead 3).
+    fn group_123(l: &mut List) {
+        click(l, 1, plain());
+        click(l, 3, shift());
+        assert_eq!(l.selected_indices(), &[1, 2, 3]);
     }
 
     #[test]
@@ -835,5 +934,55 @@ mod tests {
         assert!(!l.is_multi_select());
         assert_eq!(l.selected_indices(), &[1]);
         assert_eq!(l.selected_index(), Some(1));
+    }
+
+    #[test]
+    fn plain_click_on_group_member_defers_collapse_until_release() {
+        let mut l = list_with(8).with_multi_select(true);
+        group_123(&mut l);
+        // Pressing a member keeps the whole group — and captures the pointer so
+        // the release lands back here — instead of collapsing on the press.
+        click(&mut l, 2, plain());
+        assert_eq!(l.selected_indices(), &[1, 2, 3]);
+        assert!(l.captures_pointer());
+        assert_eq!(l.selected_index(), Some(2)); // cursor moved to the press
+        // Releasing without a drag collapses to just that row and frees capture.
+        release(&mut l, 2);
+        assert_eq!(l.selected_indices(), &[2]);
+        assert!(!l.captures_pointer());
+    }
+
+    #[test]
+    fn drag_motion_keeps_the_whole_group() {
+        let mut l = list_with(8).with_multi_select(true);
+        group_123(&mut l);
+        click(&mut l, 2, plain());
+        // Travel past the slop → read as a drag: the group survives the release.
+        let start = row_point(2);
+        pointer_move(&mut l, Point::new(start.x + 10, start.y + 10));
+        assert!(!l.captures_pointer()); // pending abandoned
+        release(&mut l, 2);
+        assert_eq!(l.selected_indices(), &[1, 2, 3]);
+    }
+
+    #[test]
+    fn plain_click_on_unselected_row_collapses_immediately() {
+        let mut l = list_with(8).with_multi_select(true);
+        group_123(&mut l);
+        // A row outside the selection is not deferred — it replaces it on press.
+        click(&mut l, 5, plain());
+        assert_eq!(l.selected_indices(), &[5]);
+        assert!(!l.captures_pointer());
+    }
+
+    #[test]
+    fn double_click_on_group_member_still_activates() {
+        let mut l = list_with(8).with_multi_select(true);
+        group_123(&mut l);
+        click(&mut l, 2, plain()); // deferred
+        release(&mut l, 2); // collapses to [2]
+        click(&mut l, 2, plain()); // second click of the pair → activation
+        assert_eq!(l.selected_indices(), &[2]);
+        assert_eq!(l.take_activated(), Some(2));
     }
 }
