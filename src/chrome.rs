@@ -195,6 +195,15 @@ impl WindowChrome {
         self.margin = margin.max(0);
         self
     }
+
+    /// Whether a window in this frame style paints the desktop background
+    /// pattern behind its content. Mirrors the live backend: a regular
+    /// top-level window (resizable / fixed) honors the pattern, while a dialog
+    /// — rendered in the live runtime's separate popup/dialog pass — stays
+    /// plain.
+    pub(crate) fn paints_background_pattern(&self) -> bool {
+        self.frame != WindowFrame::Dialog
+    }
 }
 
 /// Physical-pixel geometry of a framed render, derived from the content size,
