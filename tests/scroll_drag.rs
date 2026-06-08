@@ -12,6 +12,7 @@ fn down(x: i32, y: i32) -> Event {
     Event::PointerDown {
         pos: Point::new(x, y),
         button: MouseButton::Left,
+        modifiers: Default::default(),
     }
 }
 

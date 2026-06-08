@@ -660,6 +660,7 @@ impl Widget for TextEditor {
             Event::PointerDown {
                 pos,
                 button: MouseButton::Left,
+                ..
             } => {
                 ctx.request_focus();
                 let clicks = self.register_click(*pos);

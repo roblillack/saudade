@@ -1,8 +1,8 @@
 //! filer — a tiny saudade demo that walks the local filesystem inside a
 //! list widget. Double-click (or Enter) on a directory descends into it;
-//! double-click on `..` ascends to the parent. Drag an entry out of the window
-//! to drop it onto another application (Wayland only — see
-//! `EventCtx::start_drag`).
+//! double-click on `..` ascends to the parent. Ctrl/Shift+click selects
+//! several entries at once; drag the selection out of the window to drop the
+//! files onto another application (Wayland only — see `EventCtx::start_drag`).
 
 use std::path::{Path, PathBuf};
 
@@ -53,16 +53,17 @@ struct FileBrowser {
     list: List,
     path: PathBuf,
     bounds: Rect,
-    /// A press is "armed" for a possible drag-out: the index pressed and where.
-    /// Set on a left press over a real entry, cleared on release/leave or once
-    /// the pointer moves far enough to actually start the drag.
-    drag_armed: Option<(usize, Point)>,
+    /// Where a press that may turn into a drag-out started. Set on a left press
+    /// over a real entry, cleared on release/leave or once the pointer moves far
+    /// enough to actually start the drag. The drag carries the whole selection,
+    /// so only the start point is remembered — not a single index.
+    drag_armed: Option<Point>,
 }
 
 impl FileBrowser {
     fn new(path: PathBuf) -> Self {
         let mut me = Self {
-            list: List::new(Rect::new(0, 0, 0, 0)),
+            list: List::new(Rect::new(0, 0, 0, 0)).with_multi_select(true),
             path,
             bounds: Rect::new(0, 0, 0, 0),
             drag_armed: None,
@@ -126,14 +127,15 @@ impl FileBrowser {
         if let Some(idx) = self.list.selected_index()
             && self.list.items().get(idx).is_some_and(|i| i.label != "..")
         {
-            self.drag_armed = Some((idx, pos));
+            self.drag_armed = Some(pos);
         }
     }
 
-    /// If an armed press has dragged past the dead zone, hand the entry's
-    /// absolute path to the runtime as a drag-and-drop payload and disarm.
+    /// If an armed press has dragged past the dead zone, hand the absolute paths
+    /// of every selected entry (skipping `..`) to the runtime as a drag-and-drop
+    /// payload and disarm.
     fn maybe_start_drag(&mut self, pos: Point, ctx: &mut EventCtx) {
-        let Some((idx, start)) = self.drag_armed else {
+        let Some(start) = self.drag_armed else {
             return;
         };
         let (dx, dy) = ((pos.x - start.x) as i64, (pos.y - start.y) as i64);
@@ -141,8 +143,16 @@ impl FileBrowser {
             return;
         }
         self.drag_armed = None;
-        if let Some(name) = self.list.items().get(idx).map(|i| i.label.clone()) {
-            ctx.start_drag(DragData::from_paths([self.path.join(name)]));
+        let paths: Vec<PathBuf> = self
+            .list
+            .selected_indices()
+            .iter()
+            .filter_map(|&i| self.list.items().get(i))
+            .filter(|item| item.label != "..")
+            .map(|item| self.path.join(&item.label))
+            .collect();
+        if !paths.is_empty() {
+            ctx.start_drag(DragData::from_paths(paths));
         }
     }
 }
@@ -178,6 +188,7 @@ impl Widget for FileBrowser {
             Event::PointerDown {
                 pos,
                 button: MouseButton::Left,
+                ..
             } => self.arm_drag(*pos),
             Event::PointerUp { .. } | Event::PointerLeave => self.drag_armed = None,
             _ => {}

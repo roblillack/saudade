@@ -403,9 +403,18 @@ impl AppHandler {
                 let Some(button) = map_button(winit_button) else {
                     return;
                 };
+                let modifiers = self.modifiers;
                 let event = match state {
-                    ElementState::Pressed => Event::PointerDown { pos, button },
-                    ElementState::Released => Event::PointerUp { pos, button },
+                    ElementState::Pressed => Event::PointerDown {
+                        pos,
+                        button,
+                        modifiers,
+                    },
+                    ElementState::Released => Event::PointerUp {
+                        pos,
+                        button,
+                        modifiers,
+                    },
                 };
                 self.dispatch(&event, event_loop);
             }
@@ -507,9 +516,18 @@ impl AppHandler {
                 let Some(button) = map_button(winit_button) else {
                     return;
                 };
+                let modifiers = self.modifiers;
                 let event = match state {
-                    ElementState::Pressed => Event::PointerDown { pos, button },
-                    ElementState::Released => Event::PointerUp { pos, button },
+                    ElementState::Pressed => Event::PointerDown {
+                        pos,
+                        button,
+                        modifiers,
+                    },
+                    ElementState::Released => Event::PointerUp {
+                        pos,
+                        button,
+                        modifiers,
+                    },
                 };
                 self.dispatch(&event, event_loop);
                 self.mark_popups_dirty();

@@ -355,6 +355,7 @@ impl Widget for ScrollBar {
             Event::PointerDown {
                 pos,
                 button: MouseButton::Left,
+                ..
             } => {
                 self.handle_press(*pos);
                 ctx.request_paint();

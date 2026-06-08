@@ -1293,6 +1293,7 @@ fn dropdown_open_select_and_keyboard() {
     let down = |x, y| Event::PointerDown {
         pos: saudade::Point::new(x, y),
         button: saudade::MouseButton::Left,
+        modifiers: Modifiers::default(),
     };
     let key = |k| Event::KeyDown {
         key: Key::Named(k),
@@ -1350,6 +1351,7 @@ fn dropdown_disabled_is_inert() {
         &Event::PointerDown {
             pos: saudade::Point::new(50, 12),
             button: saudade::MouseButton::Left,
+            modifiers: Modifiers::default(),
         },
     );
     assert!(!dd.is_open(), "a disabled dropdown does not open on click");
@@ -1389,6 +1391,7 @@ fn open_dropdown_blocks_default_button_enter() {
     let down = |x, y| Event::PointerDown {
         pos: saudade::Point::new(x, y),
         button: saudade::MouseButton::Left,
+        modifiers: Modifiers::default(),
     };
     let key = |k| Event::KeyDown {
         key: Key::Named(k),

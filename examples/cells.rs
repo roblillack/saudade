@@ -688,6 +688,7 @@ impl Grid {
             Event::PointerDown {
                 pos,
                 button: MouseButton::Left,
+                ..
             } => {
                 if self.input.bounds().contains(*pos) {
                     self.input.event(event, ctx);
@@ -710,6 +711,7 @@ impl Grid {
             Event::PointerDown {
                 pos,
                 button: MouseButton::Left,
+                ..
             } => {
                 ctx.request_focus();
                 if let Some(cell) = self.cell_at(*pos) {
@@ -1065,6 +1067,7 @@ mod tests {
         let click = Event::PointerDown {
             pos: Point::new(366, 120),
             button: MouseButton::Left,
+            modifiers: Modifiers::default(),
         };
         backend.dispatch(&mut grid, &click);
         backend.dispatch(&mut grid, &click);
@@ -1097,6 +1100,7 @@ mod tests {
             &Event::PointerDown {
                 pos: Point::new(744, 30),
                 button: MouseButton::Left,
+                modifiers: Modifiers::default(),
             },
         );
         backend.dispatch(
@@ -1110,6 +1114,7 @@ mod tests {
             &Event::PointerUp {
                 pos: Point::new(744, 430),
                 button: MouseButton::Left,
+                modifiers: Modifiers::default(),
             },
         );
         backend.render(&mut grid);

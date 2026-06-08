@@ -1,6 +1,6 @@
 use std::time::{Duration, Instant};
 
-use crate::event::{Event, EventCtx, Key, MouseButton, NamedKey};
+use crate::event::{Event, EventCtx, Key, Modifiers, MouseButton, NamedKey};
 use crate::geometry::{Color, Point, Rect};
 use crate::painter::Painter;
 use crate::svg::SvgImage;
@@ -14,6 +14,11 @@ const ICON_PAD: i32 = 4;
 const TEXT_PAD_X: i32 = 4;
 const TEXT_PAD_Y: i32 = 2;
 const DOUBLE_CLICK_MS: u64 = 400;
+/// How far (logical px) a press may wander before a pending deferred-collapse is
+/// treated as the start of a drag and abandoned, leaving the whole
+/// multi-selection intact. Kept below a typical wrapper's drag dead zone so the
+/// group survives long enough to be dragged out.
+const COLLAPSE_SLOP: i64 = 4;
 
 /// A small ARGB32 pixel buffer drawn next to a list item's label. Pixels with
 /// `alpha == 0` are skipped (transparent), so icons keep their outline crisp
@@ -116,18 +121,41 @@ impl ListItem {
 /// Keyboard navigation mirrors the mouse: Up/Down/Home/End/PageUp/PageDown
 /// move the selection, Enter activates the current row.
 ///
+/// With [`multi_select`](List::set_multi_select) enabled the list also accepts
+/// Ctrl/Cmd+click to toggle a row and Shift+click (or Shift+Arrow) to select a
+/// contiguous range; off — the default — it is single-selection and behaves
+/// exactly as it always has.
+///
 /// The list paints a sunken white field with a 1-px black border and a
 /// built-in vertical scrollbar pinned to the right edge — identical chrome to
 /// [`TextEditor`](crate::widgets::TextEditor).
 pub struct List {
     rect: Rect,
     items: Vec<ListItem>,
-    selected: Option<usize>,
+    /// Opt-in: when `false` (the default) the list is single-selection and
+    /// ignores click modifiers, exactly as it behaved before multi-selection.
+    multi_select: bool,
+    /// Every selected row, kept sorted ascending and deduplicated. Holds 0 or 1
+    /// entries while `multi_select` is off.
+    selection: Vec<usize>,
+    /// The cursor row: where keyboard navigation moves from and where the focus
+    /// rectangle is drawn. Usually a member of `selection`.
+    lead: Option<usize>,
+    /// The fixed end of a Shift range-selection. Plain clicks/arrows reset it to
+    /// the lead; Shift extends from it without moving it.
+    anchor: Option<usize>,
     focused: bool,
     enabled: bool,
     v_scrollbar: ScrollBar,
     activated: Option<usize>,
     last_click: Option<(usize, Instant)>,
+    /// A plain press on a row that is already part of a multi-selection: the
+    /// selection is kept intact for a possible group drag, and `(row, press
+    /// position)` is parked here. A release without travelling past
+    /// [`COLLAPSE_SLOP`] collapses the selection down to `row`; enough motion
+    /// (or the pointer leaving) abandons it, keeping the group. While it is set
+    /// the list captures the pointer so the follow-up move/release reach it.
+    pending_collapse: Option<(usize, Point)>,
 }
 
 impl List {
@@ -135,12 +163,16 @@ impl List {
         Self {
             rect,
             items: Vec::new(),
-            selected: None,
+            multi_select: false,
+            selection: Vec::new(),
+            lead: None,
+            anchor: None,
             focused: false,
             enabled: true,
             v_scrollbar: ScrollBar::vertical(Rect::new(0, 0, 0, 0)),
             activated: None,
             last_click: None,
+            pending_collapse: None,
         }
     }
 
@@ -152,6 +184,40 @@ impl List {
     pub fn with_enabled(mut self, enabled: bool) -> Self {
         self.set_enabled(enabled);
         self
+    }
+
+    /// Enable optional multi-selection at construction time. See
+    /// [`set_multi_select`](Self::set_multi_select).
+    pub fn with_multi_select(mut self, enabled: bool) -> Self {
+        self.set_multi_select(enabled);
+        self
+    }
+
+    pub fn is_multi_select(&self) -> bool {
+        self.multi_select
+    }
+
+    /// Enable or disable multi-selection. With it on, Ctrl/Cmd+click toggles a
+    /// row, Shift+click and Shift+Arrow select a contiguous range, and a plain
+    /// click or arrow still selects a single row. Off (the default) the list is
+    /// single-selection and click modifiers are ignored.
+    ///
+    /// A plain press on a row that is *already* part of a multi-selection does
+    /// not collapse the selection immediately: the whole group stays selected
+    /// until the button is released (collapsing to that one row) so a wrapper
+    /// can start a drag of the entire group from the press instead. See
+    /// [`selected_indices`](Self::selected_indices).
+    ///
+    /// Turning it off collapses any current multi-selection down to the single
+    /// lead row (or the first selected row) so a single-selection list never
+    /// shows more than one highlighted row.
+    pub fn set_multi_select(&mut self, enabled: bool) {
+        self.multi_select = enabled;
+        if !enabled {
+            self.pending_collapse = None;
+            let keep = self.lead.or_else(|| self.selection.first().copied());
+            self.set_selected(keep);
+        }
     }
 
     pub fn is_enabled(&self) -> bool {
@@ -170,13 +236,17 @@ impl List {
     /// it is cleared (otherwise it is preserved by index).
     pub fn set_items(&mut self, items: Vec<ListItem>) {
         self.items = items;
-        if let Some(idx) = self.selected
-            && idx >= self.items.len()
-        {
-            self.selected = None;
+        let len = self.items.len();
+        self.selection.retain(|&i| i < len);
+        if self.lead.is_some_and(|i| i >= len) {
+            self.lead = None;
+        }
+        if self.anchor.is_some_and(|i| i >= len) {
+            self.anchor = None;
         }
         self.activated = None;
         self.last_click = None;
+        self.pending_collapse = None;
         self.v_scrollbar.set_value(0);
     }
 
@@ -184,13 +254,52 @@ impl List {
         &self.items
     }
 
+    /// The lead (cursor) row — the one keyboard navigation moves from and that
+    /// draws the focus rectangle. For a single-selection list this is simply
+    /// "the selected row"; for a multi-selection list it is the most recently
+    /// touched row. Use [`selected_indices`](Self::selected_indices) for the
+    /// full set.
     pub fn selected_index(&self) -> Option<usize> {
-        self.selected
+        self.lead
     }
 
+    /// Every selected row, sorted ascending and deduplicated. Empty when nothing
+    /// is selected; at most one entry for a single-selection list.
+    pub fn selected_indices(&self) -> &[usize] {
+        &self.selection
+    }
+
+    /// Select a single row, replacing any existing (multi-)selection, or clear
+    /// the selection with `None`. The lead and range anchor both move to `idx`.
+    /// Out-of-range indices clear the selection.
     pub fn set_selected(&mut self, idx: Option<usize>) {
-        self.selected = idx.filter(|&i| i < self.items.len());
+        match idx.filter(|&i| i < self.items.len()) {
+            Some(i) => self.select_single(i),
+            None => self.clear_selection(),
+        }
         self.ensure_selection_visible();
+    }
+
+    /// Replace the entire selection with `indices`: out-of-range entries are
+    /// dropped, the rest sorted and deduplicated. The lead and anchor move to
+    /// the first selected row. This is the programmatic way to select several
+    /// rows at once and is honored regardless of the multi-selection flag.
+    pub fn set_selected_indices(&mut self, indices: impl IntoIterator<Item = usize>) {
+        let len = self.items.len();
+        let mut sel: Vec<usize> = indices.into_iter().filter(|&i| i < len).collect();
+        sel.sort_unstable();
+        sel.dedup();
+        self.lead = sel.first().copied();
+        self.anchor = self.lead;
+        self.selection = sel;
+        self.ensure_selection_visible();
+    }
+
+    /// Clear the selection entirely: no selected rows, no lead, no anchor.
+    pub fn clear_selection(&mut self) {
+        self.selection.clear();
+        self.lead = None;
+        self.anchor = None;
     }
 
     /// Whether `pos` lands on the built-in scrollbar gutter rather than the row
@@ -250,7 +359,7 @@ impl List {
 
     fn ensure_selection_visible(&mut self) {
         self.sync_scrollbar();
-        let Some(idx) = self.selected else { return };
+        let Some(idx) = self.lead else { return };
         let visible = self.visible_rows() as usize;
         let mut top = self.scroll_top();
         if idx < top {
@@ -281,36 +390,105 @@ impl List {
         }
     }
 
+    fn is_selected(&self, row: usize) -> bool {
+        self.selection.binary_search(&row).is_ok()
+    }
+
+    /// Select exactly `idx`, dropping any other selection, and pin both the lead
+    /// and the range anchor to it.
+    fn select_single(&mut self, idx: usize) {
+        self.selection.clear();
+        self.selection.push(idx);
+        self.lead = Some(idx);
+        self.anchor = Some(idx);
+    }
+
+    /// Add `idx` to the selection if absent, remove it if present (keeping the
+    /// vector sorted). The lead and anchor move to `idx` either way, so the
+    /// cursor stays on the row the user just clicked even when it is deselected.
+    fn toggle_at(&mut self, idx: usize) {
+        match self.selection.binary_search(&idx) {
+            Ok(pos) => {
+                self.selection.remove(pos);
+            }
+            Err(pos) => self.selection.insert(pos, idx),
+        }
+        self.lead = Some(idx);
+        self.anchor = Some(idx);
+    }
+
+    /// Replace the selection with the inclusive range between the anchor and
+    /// `idx`, leaving the anchor fixed so a subsequent Shift gesture re-extends
+    /// from the same end. Falls back to the lead, then `idx`, when no anchor is
+    /// set yet.
+    fn extend_to(&mut self, idx: usize) {
+        let anchor = self.anchor.or(self.lead).unwrap_or(idx);
+        let (lo, hi) = (anchor.min(idx), anchor.max(idx));
+        self.selection = (lo..=hi).collect();
+        self.anchor = Some(anchor);
+        self.lead = Some(idx);
+    }
+
     fn select_and_show(&mut self, idx: usize) {
-        self.selected = Some(idx);
+        self.select_single(idx);
         self.ensure_selection_visible();
     }
 
-    fn move_selection(&mut self, delta: i32) {
-        if self.items.is_empty() {
-            return;
-        }
-        let cur = self.selected.unwrap_or(0) as i32;
-        let next = (cur + delta).clamp(0, self.items.len() as i32 - 1);
-        self.select_and_show(next as usize);
+    fn extend_and_show(&mut self, idx: usize) {
+        self.extend_to(idx);
+        self.ensure_selection_visible();
     }
 
-    fn move_page(&mut self, delta_pages: i32) {
+    /// The row a navigation key would land on, clamped to the item range.
+    /// `None` only when the list is empty.
+    fn nav_target(&self, delta: i32) -> Option<usize> {
         if self.items.is_empty() {
-            return;
+            return None;
         }
-        let visible = self.visible_rows();
-        let step = (visible - 1).max(1);
-        self.move_selection(delta_pages * step);
+        let cur = self.lead.unwrap_or(0) as i32;
+        Some((cur + delta).clamp(0, self.items.len() as i32 - 1) as usize)
+    }
+
+    /// How many rows PageUp/PageDown moves — one screenful minus a row of
+    /// overlap, at least one.
+    fn page_step(&self) -> i32 {
+        (self.visible_rows() - 1).max(1)
+    }
+
+    /// Move to `target`, either extending the Shift range (multi-select only) or
+    /// replacing the selection with that single row.
+    fn apply_nav(&mut self, target: usize, extend: bool) {
+        if extend && self.multi_select {
+            self.extend_and_show(target);
+        } else {
+            self.select_and_show(target);
+        }
     }
 
     fn activate_selected(&mut self) {
-        if let Some(idx) = self.selected {
+        if let Some(idx) = self.lead {
             self.activated = Some(idx);
         }
     }
 
-    fn handle_click(&mut self, idx: usize) {
+    fn handle_click(&mut self, idx: usize, pos: Point, modifiers: Modifiers) {
+        // Ctrl/Cmd toggles a row; Shift range-selects. Both only apply with
+        // multi-selection on, and neither counts as an activation gesture — only
+        // a plain click feeds the double-click detector below.
+        if self.multi_select && modifiers.shift {
+            self.extend_and_show(idx);
+            self.last_click = None;
+            self.pending_collapse = None;
+            return;
+        }
+        if self.multi_select && (modifiers.control || modifiers.logo) {
+            self.toggle_at(idx);
+            self.ensure_selection_visible();
+            self.last_click = None;
+            self.pending_collapse = None;
+            return;
+        }
+
         let now = Instant::now();
         let threshold = Duration::from_millis(DOUBLE_CLICK_MS);
         let double = self
@@ -319,11 +497,26 @@ impl List {
                 prev_idx == idx && now.duration_since(prev_time) <= threshold
             })
             .unwrap_or(false);
-        self.select_and_show(idx);
+
         if double {
+            // A double-click always lands on a single row and activates it,
+            // even when it began inside a multi-selection.
+            self.select_and_show(idx);
             self.activated = Some(idx);
             self.last_click = None;
+            self.pending_collapse = None;
+        } else if self.multi_select && self.is_selected(idx) && self.selection.len() > 1 {
+            // Plain press on a member of a multi-selection: hold the whole group
+            // so it can be dragged, and only collapse to this row on release if
+            // the press doesn't turn into a drag (see the pending-collapse arm
+            // in `event`). The cursor still moves to the pressed row.
+            self.lead = Some(idx);
+            self.ensure_selection_visible();
+            self.pending_collapse = Some((idx, pos));
+            self.last_click = Some((idx, now));
         } else {
+            self.select_and_show(idx);
+            self.pending_collapse = None;
             self.last_click = Some((idx, now));
         }
     }
@@ -364,7 +557,7 @@ impl Widget for List {
                 break;
             }
             let y = text_y0 + row_offset as i32 * ROW_HEIGHT;
-            let selected = self.selected == Some(row);
+            let selected = self.is_selected(row);
             // Active focus → navy/white; inactive (focus elsewhere) → muted
             // gray/black, matching the CUA convention so the user can still
             // see what's picked without the row competing for attention.
@@ -405,7 +598,7 @@ impl Widget for List {
 
         if self.focused
             && self.enabled
-            && let Some(idx) = self.selected
+            && let Some(idx) = self.lead
             && idx >= scroll_top
             && idx < scroll_top + visible
         {
@@ -425,6 +618,40 @@ impl Widget for List {
         if self.v_scrollbar.captures_pointer() {
             self.v_scrollbar.event(event, ctx);
             return;
+        }
+        // Deferred-collapse lifecycle. While a press on a member of a
+        // multi-selection is pending the list captures the pointer, so the
+        // follow-up move/release land here. Resolve them up front — before the
+        // scrollbar routing below — so a pending collapse can never be stranded
+        // (a stuck one would keep the list capturing the pointer for good).
+        if self.pending_collapse.is_some() {
+            match event {
+                Event::PointerMove { pos } => {
+                    if let Some((_, start)) = self.pending_collapse {
+                        let (dx, dy) = ((pos.x - start.x) as i64, (pos.y - start.y) as i64);
+                        if dx * dx + dy * dy > COLLAPSE_SLOP * COLLAPSE_SLOP {
+                            // Travelled far enough to read as a drag: keep the
+                            // whole group selected and stop awaiting a collapse.
+                            self.pending_collapse = None;
+                        }
+                    }
+                }
+                Event::PointerUp {
+                    button: MouseButton::Left,
+                    ..
+                } => {
+                    if let Some((row, _)) = self.pending_collapse.take() {
+                        self.select_and_show(row);
+                        ctx.request_paint();
+                    }
+                    return;
+                }
+                Event::PointerLeave => {
+                    self.pending_collapse = None;
+                    return;
+                }
+                _ => {}
+            }
         }
         // The wheel scrolls the field whenever the pointer is anywhere over
         // it — not just over the scrollbar gutter — without disturbing the
@@ -446,59 +673,48 @@ impl Widget for List {
             Event::PointerDown {
                 pos,
                 button: MouseButton::Left,
+                modifiers,
             } => {
                 ctx.request_focus();
                 if let Some(row) = self.row_at(*pos) {
-                    self.handle_click(row);
+                    self.handle_click(row, *pos, *modifiers);
                 }
                 ctx.request_paint();
             }
             Event::KeyDown { key, modifiers } if self.focused && !modifiers.has_command() => {
-                let consumed = match key {
-                    Key::Named(NamedKey::Up) => {
-                        self.move_selection(-1);
-                        true
-                    }
-                    Key::Named(NamedKey::Down) => {
-                        self.move_selection(1);
-                        true
-                    }
-                    Key::Named(NamedKey::Home) => {
-                        if !self.items.is_empty() {
-                            self.select_and_show(0);
-                        }
-                        true
-                    }
-                    Key::Named(NamedKey::End) => {
-                        if let Some(last) = self.items.len().checked_sub(1) {
-                            self.select_and_show(last);
-                        }
-                        true
-                    }
-                    Key::Named(NamedKey::PageUp) => {
-                        self.move_page(-1);
-                        true
-                    }
-                    Key::Named(NamedKey::PageDown) => {
-                        self.move_page(1);
-                        true
-                    }
+                // Shift extends the range (multi-select only); a bare arrow
+                // collapses back to a single row. The `!has_command()` guard
+                // lets Shift through (it isn't a command modifier) while still
+                // passing Ctrl/Alt/Logo shortcuts up to the app.
+                let extend = modifiers.shift;
+                let target = match key {
+                    Key::Named(NamedKey::Up) => self.nav_target(-1),
+                    Key::Named(NamedKey::Down) => self.nav_target(1),
+                    Key::Named(NamedKey::Home) => (!self.items.is_empty()).then_some(0),
+                    Key::Named(NamedKey::End) => self.items.len().checked_sub(1),
+                    Key::Named(NamedKey::PageUp) => self.nav_target(-self.page_step()),
+                    Key::Named(NamedKey::PageDown) => self.nav_target(self.page_step()),
                     Key::Named(NamedKey::Enter) => {
                         self.activate_selected();
-                        true
+                        ctx.request_paint();
+                        return;
                     }
-                    _ => false,
+                    _ => return,
                 };
-                if consumed {
-                    ctx.request_paint();
+                if let Some(t) = target {
+                    self.apply_nav(t, extend);
                 }
+                ctx.request_paint();
             }
             _ => {}
         }
     }
 
     fn captures_pointer(&self) -> bool {
-        self.v_scrollbar.captures_pointer()
+        // Hold the pointer while a deferred collapse is pending so the move /
+        // release that resolve it are routed here even when the list lives
+        // inside a container that hit-tests by position.
+        self.v_scrollbar.captures_pointer() || self.pending_collapse.is_some()
     }
 
     fn focusable(&self) -> bool {
@@ -534,5 +750,239 @@ fn draw_icon(painter: &mut Painter, icon: &ListIcon, x: i32, y: i32) {
             }
             painter.pixel(x + px, y + py, color);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A focused, laid-out list of `n` rows whose 200×200 field shows every row
+    /// without scrolling (10 visible rows for 8 items).
+    fn list_with(n: usize) -> List {
+        let items = (0..n).map(|i| ListItem::new(format!("item {i}"))).collect();
+        let mut l = List::new(Rect::new(0, 0, 200, 200)).with_items(items);
+        l.set_focused(true);
+        l.layout(Rect::new(0, 0, 200, 200));
+        l
+    }
+
+    /// A point inside row `row`'s band (no scroll), left of the scrollbar.
+    fn row_point(row: usize) -> Point {
+        Point::new(5, TEXT_PAD_Y + row as i32 * ROW_HEIGHT + ROW_HEIGHT / 2)
+    }
+
+    fn click(l: &mut List, row: usize, modifiers: Modifiers) {
+        let mut ctx = EventCtx::new();
+        l.event(
+            &Event::PointerDown {
+                pos: row_point(row),
+                button: MouseButton::Left,
+                modifiers,
+            },
+            &mut ctx,
+        );
+    }
+
+    fn key(l: &mut List, k: NamedKey, modifiers: Modifiers) {
+        let mut ctx = EventCtx::new();
+        l.event(
+            &Event::KeyDown {
+                key: Key::Named(k),
+                modifiers,
+            },
+            &mut ctx,
+        );
+    }
+
+    fn plain() -> Modifiers {
+        Modifiers::default()
+    }
+
+    fn shift() -> Modifiers {
+        Modifiers {
+            shift: true,
+            ..Default::default()
+        }
+    }
+
+    fn ctrl() -> Modifiers {
+        Modifiers {
+            control: true,
+            ..Default::default()
+        }
+    }
+
+    fn release(l: &mut List, row: usize) {
+        let mut ctx = EventCtx::new();
+        l.event(
+            &Event::PointerUp {
+                pos: row_point(row),
+                button: MouseButton::Left,
+                modifiers: Modifiers::default(),
+            },
+            &mut ctx,
+        );
+    }
+
+    fn pointer_move(l: &mut List, pos: Point) {
+        let mut ctx = EventCtx::new();
+        l.event(&Event::PointerMove { pos }, &mut ctx);
+    }
+
+    /// Select rows 1..=3 as a multi-selection (anchor 1, lead 3).
+    fn group_123(l: &mut List) {
+        click(l, 1, plain());
+        click(l, 3, shift());
+        assert_eq!(l.selected_indices(), &[1, 2, 3]);
+    }
+
+    #[test]
+    fn single_select_ignores_click_modifiers() {
+        let mut l = list_with(8);
+        // Ctrl/Shift on a single-select list behave like a plain click: the
+        // selection is replaced, never accumulated.
+        click(&mut l, 1, ctrl());
+        assert_eq!(l.selected_indices(), &[1]);
+        click(&mut l, 3, ctrl());
+        assert_eq!(l.selected_indices(), &[3]);
+        click(&mut l, 5, shift());
+        assert_eq!(l.selected_indices(), &[5]);
+        assert_eq!(l.selected_index(), Some(5));
+    }
+
+    #[test]
+    fn ctrl_click_toggles_in_multi() {
+        let mut l = list_with(8).with_multi_select(true);
+        click(&mut l, 1, plain());
+        assert_eq!(l.selected_indices(), &[1]);
+        click(&mut l, 3, ctrl());
+        assert_eq!(l.selected_indices(), &[1, 3]);
+        click(&mut l, 1, ctrl()); // toggle row 1 back off
+        assert_eq!(l.selected_indices(), &[3]);
+        // The cursor (lead) stays on the row last clicked, even deselected.
+        assert_eq!(l.selected_index(), Some(1));
+    }
+
+    #[test]
+    fn shift_click_selects_range_from_anchor() {
+        let mut l = list_with(8).with_multi_select(true);
+        click(&mut l, 2, plain());
+        click(&mut l, 5, shift());
+        assert_eq!(l.selected_indices(), &[2, 3, 4, 5]);
+        assert_eq!(l.selected_index(), Some(5));
+        // The anchor stays at 2, so extending the other way re-ranges from it.
+        click(&mut l, 0, shift());
+        assert_eq!(l.selected_indices(), &[0, 1, 2]);
+    }
+
+    #[test]
+    fn shift_arrow_extends_plain_arrow_collapses() {
+        let mut l = list_with(8).with_multi_select(true);
+        click(&mut l, 2, plain());
+        key(&mut l, NamedKey::Down, shift());
+        key(&mut l, NamedKey::Down, shift());
+        assert_eq!(l.selected_indices(), &[2, 3, 4]);
+        assert_eq!(l.selected_index(), Some(4));
+        // A bare arrow drops the range and selects a single row again.
+        key(&mut l, NamedKey::Down, plain());
+        assert_eq!(l.selected_indices(), &[5]);
+    }
+
+    #[test]
+    fn set_selected_round_trips() {
+        let mut l = list_with(8);
+        l.set_selected(Some(4));
+        assert_eq!(l.selected_index(), Some(4));
+        assert_eq!(l.selected_indices(), &[4]);
+        l.set_selected(None);
+        assert_eq!(l.selected_index(), None);
+        assert!(l.selected_indices().is_empty());
+    }
+
+    #[test]
+    fn set_selected_indices_is_sorted_and_deduped() {
+        let mut l = list_with(8).with_multi_select(true);
+        l.set_selected_indices([5, 1, 3, 1, 99]); // 99 is out of range
+        assert_eq!(l.selected_indices(), &[1, 3, 5]);
+        assert_eq!(l.selected_index(), Some(1));
+    }
+
+    #[test]
+    fn set_items_drops_now_invalid_selection() {
+        let mut l = list_with(8).with_multi_select(true);
+        l.set_selected_indices([1, 3, 5]);
+        let items = (0..3).map(|i| ListItem::new(format!("x{i}"))).collect();
+        l.set_items(items);
+        // Only index 1 still points at a row.
+        assert_eq!(l.selected_indices(), &[1]);
+
+        // A lead/anchor past the new end is cleared entirely.
+        let mut l = list_with(8);
+        l.set_selected(Some(7));
+        let items = (0..3).map(|i| ListItem::new(format!("y{i}"))).collect();
+        l.set_items(items);
+        assert!(l.selected_indices().is_empty());
+        assert_eq!(l.selected_index(), None);
+    }
+
+    #[test]
+    fn disabling_multi_select_collapses_to_one_row() {
+        let mut l = list_with(8).with_multi_select(true);
+        l.set_selected_indices([1, 3, 5]); // lead becomes the first, 1
+        l.set_multi_select(false);
+        assert!(!l.is_multi_select());
+        assert_eq!(l.selected_indices(), &[1]);
+        assert_eq!(l.selected_index(), Some(1));
+    }
+
+    #[test]
+    fn plain_click_on_group_member_defers_collapse_until_release() {
+        let mut l = list_with(8).with_multi_select(true);
+        group_123(&mut l);
+        // Pressing a member keeps the whole group — and captures the pointer so
+        // the release lands back here — instead of collapsing on the press.
+        click(&mut l, 2, plain());
+        assert_eq!(l.selected_indices(), &[1, 2, 3]);
+        assert!(l.captures_pointer());
+        assert_eq!(l.selected_index(), Some(2)); // cursor moved to the press
+        // Releasing without a drag collapses to just that row and frees capture.
+        release(&mut l, 2);
+        assert_eq!(l.selected_indices(), &[2]);
+        assert!(!l.captures_pointer());
+    }
+
+    #[test]
+    fn drag_motion_keeps_the_whole_group() {
+        let mut l = list_with(8).with_multi_select(true);
+        group_123(&mut l);
+        click(&mut l, 2, plain());
+        // Travel past the slop → read as a drag: the group survives the release.
+        let start = row_point(2);
+        pointer_move(&mut l, Point::new(start.x + 10, start.y + 10));
+        assert!(!l.captures_pointer()); // pending abandoned
+        release(&mut l, 2);
+        assert_eq!(l.selected_indices(), &[1, 2, 3]);
+    }
+
+    #[test]
+    fn plain_click_on_unselected_row_collapses_immediately() {
+        let mut l = list_with(8).with_multi_select(true);
+        group_123(&mut l);
+        // A row outside the selection is not deferred — it replaces it on press.
+        click(&mut l, 5, plain());
+        assert_eq!(l.selected_indices(), &[5]);
+        assert!(!l.captures_pointer());
+    }
+
+    #[test]
+    fn double_click_on_group_member_still_activates() {
+        let mut l = list_with(8).with_multi_select(true);
+        group_123(&mut l);
+        click(&mut l, 2, plain()); // deferred
+        release(&mut l, 2); // collapses to [2]
+        click(&mut l, 2, plain()); // second click of the pair → activation
+        assert_eq!(l.selected_indices(), &[2]);
+        assert_eq!(l.take_activated(), Some(2));
     }
 }

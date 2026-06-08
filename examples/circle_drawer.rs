@@ -375,6 +375,7 @@ impl Canvas {
             Event::PointerDown {
                 pos,
                 button: MouseButton::Left,
+                ..
             } => {
                 if self.menu_item_rect().contains(pos) {
                     let target = self.menu.take().unwrap().target;
@@ -421,6 +422,7 @@ impl Canvas {
             Event::PointerDown {
                 pos,
                 button: MouseButton::Left,
+                ..
             } => {
                 self.pointer = Some(pos);
                 self.doc.borrow_mut().add_circle(pos.x, pos.y);
@@ -429,6 +431,7 @@ impl Canvas {
             Event::PointerDown {
                 pos,
                 button: MouseButton::Right,
+                ..
             } => {
                 self.pointer = Some(pos);
                 let target = {
@@ -728,6 +731,7 @@ mod tests {
             Event::PointerDown {
                 pos: Point::new(x, y),
                 button,
+                modifiers: Default::default(),
             }
         }
 
@@ -768,6 +772,7 @@ mod tests {
             &Event::PointerUp {
                 pos: Point::new(250, 189),
                 button: MouseButton::Left,
+                modifiers: Default::default(),
             },
         );
         backend.render(&mut root);
@@ -798,6 +803,7 @@ mod tests {
             &Event::PointerUp {
                 pos: Point::new(54, 25),
                 button: MouseButton::Left,
+                modifiers: Default::default(),
             },
         );
         backend.render(&mut root);

@@ -210,6 +210,7 @@ impl Widget for Slider {
             Event::PointerDown {
                 pos,
                 button: MouseButton::Left,
+                ..
             } if self.rect.contains(*pos) => {
                 ctx.request_focus();
                 self.dragging = true;

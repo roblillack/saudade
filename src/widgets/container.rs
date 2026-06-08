@@ -377,7 +377,7 @@ impl Widget for Container {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::event::MouseButton;
+    use crate::event::{Modifiers, MouseButton};
     use crate::geometry::Point;
     use std::cell::Cell;
     use std::rc::Rc;
@@ -414,6 +414,7 @@ mod tests {
             &Event::PointerDown {
                 pos: Point::new(x, y),
                 button: MouseButton::Left,
+                modifiers: Modifiers::default(),
             },
             &mut ctx,
         );
