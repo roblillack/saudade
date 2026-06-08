@@ -19,7 +19,7 @@ While pre-1.0, the minor version is bumped for breaking changes.
   classic "buddy label" convention. The accelerator reaches the label even while
   a sibling holds focus, via a new `EventCtx::request_focus_next` request that
   `Container`, `Column`, and `Row` resolve. See the new `focus_form` example.
-  (#38)
+  (#39)
 - `List` gained optional multi-selection, off by default so existing
   single-selection lists are unchanged. Enable it with `List::with_multi_select`
   / `set_multi_select`: Ctrl/Cmd+click toggles a row, Shift+click and Shift+Arrow
