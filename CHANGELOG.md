@@ -12,12 +12,20 @@ While pre-1.0, the minor version is bumped for breaking changes.
 
 ### Added
 
-- Widgets can request the mouse-pointer shape while handling a pointer event
-  via `EventCtx::set_cursor`, choosing from the new `Cursor` enum (arrow, hand,
-  I-beam, resize handles, …). The runtime applies it after each move on both
-  backends (`wp_cursor_shape` on Wayland, `CursorIcon` on X11/Windows/macOS) and
-  falls back to the arrow when no widget asks. `TextInput` / `TextEditor` show
-  the I-beam over their text; every other widget keeps the default arrow. (#42)
+- `ScrollBar` arrow buttons now behave like real push buttons. Clicking one
+  sinks it — a single dark top/left shadow line, no highlight, the arrow glyph
+  nudged 1px down-right — and *holding* it auto-repeats the line-step scroll at
+  a keyboard-style cadence (a ~300ms initial delay, then every 50ms) for as long
+  as the button stays pressed with the pointer over it; sliding off pauses the
+  repeat and pops the button back out, sliding back resumes it. (#41)
+- `EventCtx::request_tick` asks the runtime to deliver another `Event::Tick`
+  without any ancestor having to forward the request — the *push* counterpart to
+  `Widget::wants_ticks`. Like `request_paint`, it rides the shared `EventCtx`
+  straight back to the runtime, so a widget buried under custom wrapper widgets
+  can drive a transient animation on its own. It is one-shot: a widget that
+  needs a stream re-requests on each tick. The scrollbar's hold-to-repeat uses
+  it, which is why it works even inside a wrapper that doesn't forward
+  `wants_ticks` (such as the `filer` example's `FileBrowser`). (#41)
 - `FocusLabel` is a caption that carries a keyboard mnemonic and moves focus to
   the field beside it. Mark the accelerator with `&` exactly like a menu label
   (`"Last &name:"` underlines the **n** and binds **Alt+N**); pressing it
@@ -40,6 +48,12 @@ While pre-1.0, the minor version is bumped for breaking changes.
   out — the `picker` and `filer` examples now do. To carry the click modifiers,
   `Event::PointerDown` and `Event::PointerUp` now include a `modifiers` field.
   (#37)
+- Widgets can request the mouse-pointer shape while handling a pointer event
+  via `EventCtx::set_cursor`, choosing from the new `Cursor` enum (arrow, hand,
+  I-beam, resize handles, …). The runtime applies it after each move on both
+  backends (`wp_cursor_shape` on Wayland, `CursorIcon` on X11/Windows/macOS) and
+  falls back to the arrow when no widget asks. `TextInput` / `TextEditor` show
+  the I-beam over their text; every other widget keeps the default arrow. (#42)
 - `WindowConfig::min_size` sets the smallest inner size a resizable window may
   be dragged to (in logical pixels). The window manager enforces the bound, so
   layouts never see sizes below it. (#36)

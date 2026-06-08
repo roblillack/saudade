@@ -172,6 +172,11 @@ struct AppHandler {
     /// fired. The runtime uses this to pace ticks while a widget
     /// reports `wants_ticks()`.
     last_tick: Option<Instant>,
+    /// Latch set whenever a dispatch called [`EventCtx::request_tick`] — the
+    /// *push* path to keep ticks flowing without any `wants_ticks()` forwarding.
+    /// Cleared just before each tick we fire, so the tick handler re-arms it
+    /// only while it still needs more (see [`Self::pump_ticks`]).
+    tick_requested: bool,
 
     // File drag-and-drop coalescing. winit reports `HoveredFile` / `DroppedFile`
     // one path at a time with no "that's all the files" terminal event, so we
@@ -291,6 +296,7 @@ impl AppHandler {
             bg: BackgroundState::from_env(),
             popups: Vec::new(),
             last_tick: None,
+            tick_requested: false,
             drag_hovered: Vec::new(),
             drag_dropped: Vec::new(),
             drag_active: false,
@@ -677,6 +683,12 @@ impl AppHandler {
             self.needs_redraw = true;
             self.mark_popups_dirty();
         }
+        // Push-based tick keep-alive: any widget that asked for another tick
+        // (e.g. a scrollbar auto-repeating while held) latches it here, no
+        // matter how deeply it's nested — no `wants_ticks()` forwarding needed.
+        if ctx.tick_requested {
+            self.tick_requested = true;
+        }
         if ctx.close_requested {
             event_loop.exit();
         }
@@ -753,7 +765,11 @@ impl AppHandler {
     /// Otherwise revert to a plain `Wait` so the process stays idle
     /// when nothing is animating.
     fn pump_ticks(&mut self, event_loop: &ActiveEventLoop) {
-        if !self.root.wants_ticks() {
+        // Two independent reasons to keep the clock running: a widget that
+        // *pulls* ticks via `wants_ticks()` (steady-state, e.g. a blinking
+        // caret), or one that *pushed* a one-shot request via
+        // `EventCtx::request_tick` (transient, e.g. a held scrollbar arrow).
+        if !self.root.wants_ticks() && !self.tick_requested {
             self.last_tick = None;
             event_loop.set_control_flow(ControlFlow::Wait);
             return;
@@ -765,6 +781,10 @@ impl AppHandler {
         };
         if due {
             self.last_tick = Some(now);
+            // Clear the push latch *before* dispatching: the tick handler
+            // re-arms it (via `request_tick`) only if it still wants more, so a
+            // widget that's done lets the ticks stop on their own.
+            self.tick_requested = false;
             self.dispatch(&Event::Tick, event_loop);
         }
         let next = self.last_tick.unwrap_or(now) + TICK_INTERVAL;

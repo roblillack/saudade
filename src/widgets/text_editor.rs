@@ -880,6 +880,9 @@ impl Widget for TextEditor {
     }
 
     fn wants_ticks(&self) -> bool {
+        // Steady-state ticks for the caret blink. The embedded scrollbar's
+        // own auto-repeat doesn't need forwarding here — it pushes a tick
+        // request through the `EventCtx` itself (see `EventCtx::request_tick`).
         self.focused && self.enabled
     }
 
