@@ -8,7 +8,7 @@ use winit::dpi::{LogicalSize, PhysicalPosition, PhysicalSize};
 use winit::event::{ElementState, MouseButton as WinitMouseButton, MouseScrollDelta, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{Key as WKey, ModifiersKeyState, NamedKey as WNamedKey};
-use winit::window::{Window, WindowAttributes, WindowButtons, WindowId};
+use winit::window::{CursorIcon, Window, WindowAttributes, WindowButtons, WindowId};
 
 // X11 platform extensions. winit 0.30's generic `with_parent_window` is
 // not enough on X11 (it reparents into the main window, which then clips
@@ -22,8 +22,8 @@ use winit::platform::x11::{WindowAttributesExtX11, WindowType as XWindowType};
 
 use crate::background::BackgroundState;
 use crate::event::{
-    DragData, Event, EventCtx, Key, Modifiers, MouseButton, NamedKey, SCROLL_PIXELS_PER_LINE,
-    WHEEL_LINES_PER_DETENT,
+    Cursor, DragData, Event, EventCtx, Key, Modifiers, MouseButton, NamedKey,
+    SCROLL_PIXELS_PER_LINE, WHEEL_LINES_PER_DETENT,
 };
 use crate::font::Font;
 use crate::geometry::{Point, Rect, Size};
@@ -150,6 +150,11 @@ struct AppHandler {
 
     // Per-frame state:
     cursor: Option<Point>,
+    /// Pointer shape currently applied to the main window. Tracked so we only
+    /// call into winit (whose cursor is a sticky window attribute) when a move
+    /// actually changes the shape. Reset toward [`Cursor::Default`] when no
+    /// widget under the pointer asks for one.
+    cursor_icon: Cursor,
     /// Mouse buttons currently held. While any is down an OS pointer grab is in
     /// effect, which on X11 keeps motion flowing past the window edge — see
     /// [`PointerButtons`] and the `CursorLeft` handling.
@@ -279,6 +284,7 @@ impl AppHandler {
             physical: PhysicalSize::new(0, 0),
             scale: 1.0,
             cursor: None,
+            cursor_icon: Cursor::Default,
             buttons: PointerButtons::default(),
             modifiers: Modifiers::default(),
             needs_redraw: true,
@@ -427,7 +433,12 @@ impl AppHandler {
                 let (origin_x, origin_y) = origin(content, self.scale, self.physical);
                 let pos = physical_to_logical(position, self.scale, origin_x, origin_y);
                 self.cursor = Some(pos);
-                self.dispatch(&Event::PointerMove { pos }, event_loop);
+                let ctx = self.dispatch(&Event::PointerMove { pos }, event_loop);
+                // The widget the pointer now rests over picks the shape; an
+                // unanswered move falls back to the arrow.
+                if let Some(win) = self.main_win.clone() {
+                    reconcile_cursor(&win, &mut self.cursor_icon, ctx.cursor_request);
+                }
             }
             WindowEvent::CursorLeft { .. } => {
                 // Ignore the leave while a button-held drag owns the pointer:
@@ -440,6 +451,11 @@ impl AppHandler {
                 }
                 self.cursor = None;
                 self.dispatch(&Event::PointerLeave, event_loop);
+                // Back to the arrow so a stale hand / I-beam doesn't linger if
+                // the pointer re-enters over empty space.
+                if let Some(win) = self.main_win.clone() {
+                    reconcile_cursor(&win, &mut self.cursor_icon, Some(Cursor::Default));
+                }
             }
             WindowEvent::MouseInput {
                 state,
@@ -548,7 +564,11 @@ impl AppHandler {
                 };
                 let pos = popup_position_to_widget(position, p);
                 p.cursor = Some(pos);
-                self.dispatch(&Event::PointerMove { pos }, event_loop);
+                let ctx = self.dispatch(&Event::PointerMove { pos }, event_loop);
+                if let Some(p) = self.popups.get_mut(idx) {
+                    let win = p.win.clone();
+                    reconcile_cursor(&win, &mut p.cursor_icon, ctx.cursor_request);
+                }
                 self.mark_popups_dirty();
             }
             WindowEvent::CursorLeft { .. } => {
@@ -562,6 +582,10 @@ impl AppHandler {
                     p.cursor = None;
                 }
                 self.dispatch(&Event::PointerLeave, event_loop);
+                if let Some(p) = self.popups.get_mut(idx) {
+                    let win = p.win.clone();
+                    reconcile_cursor(&win, &mut p.cursor_icon, Some(Cursor::Default));
+                }
                 self.mark_popups_dirty();
             }
             WindowEvent::MouseInput {
@@ -1057,6 +1081,7 @@ impl AppHandler {
             physical: actual,
             scale: self.scale,
             cursor: None,
+            cursor_icon: Cursor::Default,
             needs_redraw: true,
         })
     }
@@ -1074,6 +1099,9 @@ struct PopupWindow {
     physical: PhysicalSize<u32>,
     scale: f32,
     cursor: Option<Point>,
+    /// Pointer shape currently applied to this popup window — see the same
+    /// field on [`AppHandler`].
+    cursor_icon: Cursor,
     needs_redraw: bool,
 }
 
@@ -1162,6 +1190,53 @@ fn map_button(button: WinitMouseButton) -> Option<MouseButton> {
         WinitMouseButton::Right => Some(MouseButton::Right),
         WinitMouseButton::Middle => Some(MouseButton::Middle),
         _ => None,
+    }
+}
+
+/// Map a saudade [`Cursor`] onto winit's [`CursorIcon`]. Both vocabularies are
+/// CSS-derived, so every saudade variant has a direct winit equivalent (the one
+/// rename is [`Cursor::Hand`] → [`CursorIcon::Pointer`]).
+fn winit_cursor(cursor: Cursor) -> CursorIcon {
+    match cursor {
+        Cursor::Default => CursorIcon::Default,
+        Cursor::Hand => CursorIcon::Pointer,
+        Cursor::Text => CursorIcon::Text,
+        Cursor::VerticalText => CursorIcon::VerticalText,
+        Cursor::Crosshair => CursorIcon::Crosshair,
+        Cursor::Move => CursorIcon::Move,
+        Cursor::Grab => CursorIcon::Grab,
+        Cursor::Grabbing => CursorIcon::Grabbing,
+        Cursor::NotAllowed => CursorIcon::NotAllowed,
+        Cursor::NoDrop => CursorIcon::NoDrop,
+        Cursor::Copy => CursorIcon::Copy,
+        Cursor::Alias => CursorIcon::Alias,
+        Cursor::ContextMenu => CursorIcon::ContextMenu,
+        Cursor::Help => CursorIcon::Help,
+        Cursor::Progress => CursorIcon::Progress,
+        Cursor::Wait => CursorIcon::Wait,
+        Cursor::Cell => CursorIcon::Cell,
+        Cursor::ZoomIn => CursorIcon::ZoomIn,
+        Cursor::ZoomOut => CursorIcon::ZoomOut,
+        Cursor::AllScroll => CursorIcon::AllScroll,
+        Cursor::ColResize => CursorIcon::ColResize,
+        Cursor::RowResize => CursorIcon::RowResize,
+        Cursor::EwResize => CursorIcon::EwResize,
+        Cursor::NsResize => CursorIcon::NsResize,
+        Cursor::NeswResize => CursorIcon::NeswResize,
+        Cursor::NwseResize => CursorIcon::NwseResize,
+    }
+}
+
+/// Apply the pointer shape a [`PointerMove`](Event::PointerMove) dispatch asked
+/// for to `win`, tracking the last shape in `current` so an unchanged hover
+/// doesn't re-issue the request (winit's cursor is a sticky window attribute).
+/// `requested` is `None` when no widget under the pointer asked for one, which
+/// resolves to the arrow.
+fn reconcile_cursor(win: &Window, current: &mut Cursor, requested: Option<Cursor>) {
+    let want = requested.unwrap_or(Cursor::Default);
+    if *current != want {
+        *current = want;
+        win.set_cursor(winit_cursor(want));
     }
 }
 

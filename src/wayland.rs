@@ -67,8 +67,8 @@ use wayland_protocols::xdg::shell::client::xdg_surface::XdgSurface as XdgSurface
 use crate::app::{App, KeySwallow};
 use crate::background::BackgroundState;
 use crate::event::{
-    DragData, Event, EventCtx, Key, Modifiers, MouseButton, NamedKey, SCROLL_PIXELS_PER_LINE,
-    WHEEL_LINES_PER_DETENT,
+    Cursor, DragData, Event, EventCtx, Key, Modifiers, MouseButton, NamedKey,
+    SCROLL_PIXELS_PER_LINE, WHEEL_LINES_PER_DETENT,
 };
 use crate::font::Font;
 use crate::geometry::{Color, Point, Rect, Size};
@@ -199,6 +199,7 @@ pub(crate) fn run(app: App) {
         modifiers: Modifiers::default(),
         bg: BackgroundState::from_env(),
         cursor: None,
+        cursor_shape: Cursor::Default,
 
         popups: Vec::new(),
         qh: qh.clone(),
@@ -300,6 +301,11 @@ struct State {
     /// pointer pixels, and translated by the popup anchor when the
     /// cursor is over a popup).
     cursor: Option<Point>,
+    /// Pointer shape last requested via `wp_cursor_shape`. Tracked so an
+    /// unchanged hover doesn't re-issue a `set_shape`, and reset to
+    /// [`Cursor::Default`] on leave (the compositor restores its own default
+    /// when the pointer exits, so the next enter must re-apply from scratch).
+    cursor_shape: Cursor,
 
     /// Stack of popup windows, outermost first — a dropdown opened inside a
     /// dialog nests a second entry on top of it.
@@ -551,7 +557,7 @@ impl State {
         // (it revokes our pointer focus), but compositors that render DnD cursors
         // (GNOME, KDE) honor it — so the cursor is right there and the icon badge
         // covers wlroots.
-        self.set_drag_cursor(Shape::NoDrop);
+        self.set_cursor_shape(Shape::NoDrop);
     }
 
     /// Lay out the cursor-following drag icon and allocate its surface + pool,
@@ -668,17 +674,22 @@ impl State {
                 icon.surface.destroy();
             }
             self.drag_payload.clear();
-            // Hand the pointer back to its normal cursor.
-            self.set_drag_cursor(Shape::Default);
+            // Hand the pointer back to its normal cursor, and forget the shape
+            // we were showing so the next move re-applies whatever the widget
+            // under the pointer wants (it may not be the arrow).
+            self.set_cursor_shape(Shape::Default);
+            self.cursor_shape = Cursor::Default;
         }
     }
 
-    /// Set the pointer to `shape` via `wp_cursor_shape` — used to show the drag
-    /// cursor (copy / no-drop) while we're the drag source. `set_shape` wants
-    /// the latest `wl_pointer.enter` serial, which SCTK tracks for us. A no-op
-    /// when the protocol is unavailable or no serial is on record; if the
-    /// compositor declines to honor it mid-drag, the cursor simply stays put.
-    fn set_drag_cursor(&self, shape: Shape) {
+    /// Set the pointer to `shape` via `wp_cursor_shape` — the mechanism behind
+    /// both a widget's requested cursor (hand over a button, I-beam over a text
+    /// field) and the copy / no-drop feedback shown while we're a drag source.
+    /// `set_shape` wants the latest `wl_pointer.enter` serial, which SCTK tracks
+    /// for us. A no-op when the protocol is unavailable or no serial is on
+    /// record; if the compositor declines to honor it (e.g. mid-drag), the
+    /// cursor simply stays put.
+    fn set_cursor_shape(&self, shape: Shape) {
         let (Some(device), Some(pointer)) =
             (self.cursor_shape_device.as_ref(), self.pointer.as_ref())
         else {
@@ -690,6 +701,24 @@ impl State {
         {
             device.set_shape(serial, shape);
         }
+    }
+
+    /// Reconcile the pointer shape after a [`PointerMove`](Event::PointerMove)
+    /// dispatch: show whatever the widget under the pointer asked for (or the
+    /// arrow if none did). The last shape is remembered so an unchanged hover
+    /// doesn't re-issue a request. An in-flight *outbound* drag drives the
+    /// cursor itself (copy / no-drop), so we stay out of its way while one is
+    /// live.
+    fn apply_cursor(&mut self, requested: Option<Cursor>) {
+        if self.drag_source.is_some() {
+            return;
+        }
+        let want = requested.unwrap_or(Cursor::Default);
+        if self.cursor_shape == want {
+            return;
+        }
+        self.cursor_shape = want;
+        self.set_cursor_shape(wayland_shape(want));
     }
 
     /// Resize the window to `size` logical (surface) pixels, at the widget's
@@ -1416,7 +1445,11 @@ impl PointerHandler for State {
                         Some(i) => self.popups[i].cursor = Some(pos),
                         None => self.cursor = Some(pos),
                     }
-                    self.dispatch(Event::PointerMove { pos });
+                    let ctx = self.dispatch(Event::PointerMove { pos });
+                    // Show the shape the widget under the pointer asked for —
+                    // the enter serial SCTK just recorded is what `set_shape`
+                    // rides on.
+                    self.apply_cursor(ctx.cursor_request);
                     self.mark_popups_dirty();
                 }
                 PointerEventKind::Leave { .. } => {
@@ -1425,6 +1458,9 @@ impl PointerHandler for State {
                         None => self.cursor = None,
                     }
                     self.dispatch(Event::PointerLeave);
+                    // The compositor restores its default cursor on leave, so
+                    // forget what we'd shown; the next enter re-applies it.
+                    self.cursor_shape = Cursor::Default;
                 }
                 PointerEventKind::Press { button, serial, .. } => {
                     let Some(b) = map_button(button) else {
@@ -1799,7 +1835,7 @@ impl DataSourceHandler for State {
         } else {
             Shape::NoDrop
         };
-        self.set_drag_cursor(shape);
+        self.set_cursor_shape(shape);
     }
 }
 
@@ -2016,6 +2052,40 @@ fn map_button(button: u32) -> Option<MouseButton> {
         0x111 => Some(MouseButton::Right),
         0x112 => Some(MouseButton::Middle),
         _ => None,
+    }
+}
+
+/// Map a saudade [`Cursor`] onto a `wp_cursor_shape` [`Shape`]. The two
+/// vocabularies are both CSS-derived, so every saudade variant has a direct
+/// equivalent (the one rename is [`Cursor::Hand`] → [`Shape::Pointer`]).
+fn wayland_shape(cursor: Cursor) -> Shape {
+    match cursor {
+        Cursor::Default => Shape::Default,
+        Cursor::Hand => Shape::Pointer,
+        Cursor::Text => Shape::Text,
+        Cursor::VerticalText => Shape::VerticalText,
+        Cursor::Crosshair => Shape::Crosshair,
+        Cursor::Move => Shape::Move,
+        Cursor::Grab => Shape::Grab,
+        Cursor::Grabbing => Shape::Grabbing,
+        Cursor::NotAllowed => Shape::NotAllowed,
+        Cursor::NoDrop => Shape::NoDrop,
+        Cursor::Copy => Shape::Copy,
+        Cursor::Alias => Shape::Alias,
+        Cursor::ContextMenu => Shape::ContextMenu,
+        Cursor::Help => Shape::Help,
+        Cursor::Progress => Shape::Progress,
+        Cursor::Wait => Shape::Wait,
+        Cursor::Cell => Shape::Cell,
+        Cursor::ZoomIn => Shape::ZoomIn,
+        Cursor::ZoomOut => Shape::ZoomOut,
+        Cursor::AllScroll => Shape::AllScroll,
+        Cursor::ColResize => Shape::ColResize,
+        Cursor::RowResize => Shape::RowResize,
+        Cursor::EwResize => Shape::EwResize,
+        Cursor::NsResize => Shape::NsResize,
+        Cursor::NeswResize => Shape::NeswResize,
+        Cursor::NwseResize => Shape::NwseResize,
     }
 }
 

@@ -12,6 +12,13 @@ While pre-1.0, the minor version is bumped for breaking changes.
 
 ### Added
 
+- Widgets can request the mouse-pointer shape while handling a pointer event
+  via `EventCtx::set_cursor`, choosing from the new `Cursor` enum (arrow, hand,
+  I-beam, resize handles, …). The runtime applies it after each move on both
+  backends (`wp_cursor_shape` on Wayland, `CursorIcon` on X11/Windows/macOS) and
+  falls back to the arrow when no widget asks. `TextInput` / `TextEditor` show
+  the I-beam over their text; every other widget keeps the default arrow.
+
 - `FocusLabel` is a caption that carries a keyboard mnemonic and moves focus to
   the field beside it. Mark the accelerator with `&` exactly like a menu label
   (`"Last &name:"` underlines the **n** and binds **Alt+N**); pressing it

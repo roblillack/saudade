@@ -281,12 +281,29 @@ impl Widget for Button {
 mod tests {
     use super::*;
     use crate::event::Modifiers;
+    use crate::geometry::Point;
 
     fn enter() -> Event {
         Event::KeyDown {
             key: Key::Named(NamedKey::Enter),
             modifiers: Modifiers::default(),
         }
+    }
+
+    #[test]
+    fn a_button_leaves_the_pointer_at_the_default_arrow() {
+        // Like every modern toolkit, a push button keeps the normal arrow — the
+        // hand/finger is reserved for hyperlinks. Hovering must not request a
+        // cursor, so the runtime falls back to `Cursor::Default`.
+        let mut button = Button::new(Rect::new(0, 0, 70, 26), "OK");
+        let mut ctx = EventCtx::new();
+        button.event(
+            &Event::PointerMove {
+                pos: Point::new(10, 10),
+            },
+            &mut ctx,
+        );
+        assert_eq!(ctx.cursor_request, None);
     }
 
     #[test]
