@@ -266,6 +266,12 @@ pub struct EventCtx {
     /// Set by a widget that has fully handled a key press and wants the runtime
     /// to drop the rest of it — see [`Self::swallow_key_until_release`].
     pub(crate) swallow_key: bool,
+    /// Set by a mnemonic-bearing widget (e.g. a [`FocusLabel`](crate::widgets::FocusLabel))
+    /// whose accelerator was just matched, asking its parent container to move
+    /// keyboard focus to the *next focusable sibling* after it. The container
+    /// acts on it right after the accelerator dispatch. See
+    /// [`Self::request_focus_next`].
+    pub(crate) focus_next_requested: bool,
 }
 
 impl EventCtx {
@@ -281,6 +287,7 @@ impl EventCtx {
             drag_request: None,
             accepts_drop: false,
             swallow_key: false,
+            focus_next_requested: false,
         }
     }
 
@@ -357,6 +364,26 @@ impl EventCtx {
     pub fn release_focus(&mut self) {
         self.focus_released = true;
         self.focus_requested = false;
+    }
+
+    /// A mnemonic-bearing widget (typically a
+    /// [`FocusLabel`](crate::widgets::FocusLabel)) asks its parent container to
+    /// move keyboard focus to the *next focusable sibling* after it — the
+    /// classic buddy-label behaviour, where `"Last &name:"` hands focus to the
+    /// text field that follows it. Call this from the widget's `event` handler
+    /// when its accelerator letter is pressed; the container performs the move
+    /// once dispatch unwinds. The requesting widget needs no knowledge of its
+    /// own position in the tree.
+    pub fn request_focus_next(&mut self) {
+        self.focus_next_requested = true;
+    }
+
+    /// `true` if a widget called [`Self::request_focus_next`] during this
+    /// dispatch. Read by container widgets — including custom ones outside
+    /// saudade — to learn a buddy label's accelerator was matched, so they can
+    /// move focus to the next focusable child after the requester.
+    pub fn is_focus_next_requested(&self) -> bool {
+        self.focus_next_requested
     }
 
     /// Content inside a modal dialog calls this to ask the hosting

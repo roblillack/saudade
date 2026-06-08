@@ -35,6 +35,7 @@ Reference apps live under `examples/`. Run any of them with
 | `filer`         | Filesystem browser using `List` with folder/file icons. Drag an entry out of the window to drop it onto another app (drag *source* via `EventCtx::start_drag`; Wayland only).                                                                                                                                                                                                                       |
 | `dnd`           | A drop zone that highlights while a file drag hovers and lists the paths dropped onto it. Demonstrates OS file drag-and-drop (`DragEnter` / `DragMove` / `DragLeave` / `Drop`) across macOS, Windows, X11, and Wayland.                                                                                                                                                                            |
 | `picker`        | Pick-an-item dialog: `List` + buttons + `Dialog`, with Tab/Shift+Tab focus cycling.                                                                                                                                                                                                                                                                                                              |
+| `focus_form`    | `FocusLabel` buddy labels: Alt+letter mnemonics jump focus to the next field.                                                                                                                                                                                                                                                                                                                    |
 | `counter`       | [7GUIs](https://eugenkiss.github.io/7guis/) task 1 — a `Label` field and a `Button`.                                                                                                                                                                                                                                                                                                             |
 | `temperature`   | 7GUIs task 2 — two `TextInput`s converting Celsius ↔ Fahrenheit live.                                                                                                                                                                                                                                                                                                                            |
 | `flight_booker` | 7GUIs task 3 — a `Dropdown` picks the flight type and reactively enables / disables the return-date field and the Book `Button`.                                                                                                                                                                                                                                                                 |
@@ -123,7 +124,7 @@ to an object-oriented UI framework.
 | svg      | `SvgImage`, `SvgPolygon`, `FillRule` + the `include_svg!` macro — compile-time vector icons                                                                                                              |
 | font     | `Font` — system font lookup + glyph rasterization                                                                                                                                                        |
 | widget   | `Widget` trait (paint / event / focus / overlay hooks)                                                                                                                                                   |
-| widgets  | `Container`, `Column`, `Row`, `Label`, `Button`, `Checkbox`, `Bevel`, `Image`, `MenuBar`, `Menu`, `MenuItem`, `ScrollBar`, `Slider`, `ProgressBar`, `List`, `Modal`, `Dialog`, `FileDialog`, `TextInput`, `TextEditor` |
+| widgets  | `Container`, `Column`, `Row`, `Label`, `FocusLabel`, `Button`, `Checkbox`, `Bevel`, `Image`, `MenuBar`, `Menu`, `MenuItem`, `ScrollBar`, `Slider`, `ProgressBar`, `List`, `Modal`, `Dialog`, `FileDialog`, `TextInput`, `TextEditor` |
 | app      | `App`, `WindowConfig` — runtime entry point                                                                                                                                                              |
 | mock     | `MockBackend`, `Snapshot` — offscreen rendering to a pixel buffer / PNG                                                                                                                                   |
 | chrome   | `WindowChrome`, `WindowFrame` — Canoe-style title bar + frame for screenshots                                                                                                                             |
@@ -482,6 +483,28 @@ to its bounds, so a label never paints outside the rectangle it was given.
 Placed in a `Column` or `Row`, a label adopts its slot and wraps/clips to
 that; placed at an absolute position in a `Container`, it keeps the
 rectangle it was constructed with.
+
+### `FocusLabel`
+
+A single-line caption that carries a keyboard **mnemonic** and moves focus to
+the field beside it. Mark the accelerator with `&`, exactly like a menu label:
+`"Last &name:"` renders *Last name:* with the **n** underlined and binds
+**Alt+N**. Pressing that combination anywhere in the surrounding container
+hands focus to the *next focusable widget added to the same parent* — the
+classic "buddy label" convention — so a caption simply precedes its field:
+
+```rust
+Container::new(220, 60)
+    .add(FocusLabel::new(Rect::new(8, 8, 80, 24), "Last &name:")) // Alt+N…
+    .add(TextInput::new(Rect::new(92, 8, 120, 24)));              // …focuses this
+```
+
+The accelerator reaches the label even while a sibling holds focus (it rides
+the same `accepts_accelerators()` path as `MenuBar`); the label requests the
+move with `EventCtx::request_focus_next`, which `Container`, `Column`, and
+`Row` resolve to the first focusable child after it. A `FocusLabel` is never
+itself focusable, and a caption with no `&` behaves like a plain (single-line)
+`Label`. See the `focus_form` example for a full window.
 
 ### `Button`
 
