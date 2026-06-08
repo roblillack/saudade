@@ -12,6 +12,20 @@ While pre-1.0, the minor version is bumped for breaking changes.
 
 ### Added
 
+- `ScrollBar` arrow buttons now behave like real push buttons. Clicking one
+  sinks it — a single dark top/left shadow line, no highlight, the arrow glyph
+  nudged 1px down-right — and *holding* it auto-repeats the line-step scroll at
+  a keyboard-style cadence (a ~300ms initial delay, then every 50ms) for as long
+  as the button stays pressed with the pointer over it; sliding off pauses the
+  repeat and pops the button back out, sliding back resumes it. (#41)
+- `EventCtx::request_tick` asks the runtime to deliver another `Event::Tick`
+  without any ancestor having to forward the request — the *push* counterpart to
+  `Widget::wants_ticks`. Like `request_paint`, it rides the shared `EventCtx`
+  straight back to the runtime, so a widget buried under custom wrapper widgets
+  can drive a transient animation on its own. It is one-shot: a widget that
+  needs a stream re-requests on each tick. The scrollbar's hold-to-repeat uses
+  it, which is why it works even inside a wrapper that doesn't forward
+  `wants_ticks` (such as the `filer` example's `FileBrowser`). (#41)
 - `List` gained optional multi-selection, off by default so existing
   single-selection lists are unchanged. Enable it with `List::with_multi_select`
   / `set_multi_select`: Ctrl/Cmd+click toggles a row, Shift+click and Shift+Arrow

@@ -266,6 +266,9 @@ pub struct EventCtx {
     /// Set by a widget that has fully handled a key press and wants the runtime
     /// to drop the rest of it — see [`Self::swallow_key_until_release`].
     pub(crate) swallow_key: bool,
+    /// Set by a widget that wants the runtime to deliver at least one more
+    /// [`Event::Tick`] soon — see [`Self::request_tick`].
+    pub(crate) tick_requested: bool,
 }
 
 impl EventCtx {
@@ -281,6 +284,7 @@ impl EventCtx {
             drag_request: None,
             accepts_drop: false,
             swallow_key: false,
+            tick_requested: false,
         }
     }
 
@@ -316,6 +320,25 @@ impl EventCtx {
     /// Mark the window dirty so the runtime repaints on the next idle tick.
     pub fn request_paint(&mut self) {
         self.paint_requested = true;
+    }
+
+    /// Ask the runtime to deliver at least one more [`Event::Tick`] soon.
+    ///
+    /// This is the *push* counterpart to [`Widget::wants_ticks`](crate::Widget::wants_ticks):
+    /// where `wants_ticks` is a steady-state flag the runtime *pulls* by walking
+    /// the widget tree (so every container in the path must forward it), this
+    /// request rides the shared `EventCtx` straight back to the runtime — no
+    /// ancestor has to know or forward anything, exactly like
+    /// [`Self::request_paint`]. A widget buried under custom wrappers can thus
+    /// drive an animation without its parents cooperating.
+    ///
+    /// It is one-shot: it guarantees the *next* tick, not a stream. A widget
+    /// that needs continuous ticks (e.g. a scrollbar auto-repeating while its
+    /// arrow button is held) simply calls this again each time it handles a
+    /// [`Event::Tick`], for as long as it still needs them; the moment it stops
+    /// re-requesting, the ticks wind down on their own.
+    pub fn request_tick(&mut self) {
+        self.tick_requested = true;
     }
 
     /// Ask the runtime to close the window after this dispatch completes.

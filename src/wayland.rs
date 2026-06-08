@@ -183,6 +183,7 @@ pub(crate) fn run(app: App) {
         configured: false,
         needs_redraw: true,
         exit: false,
+        tick_requested: false,
 
         keyboard: None,
         pointer: None,
@@ -262,6 +263,10 @@ struct State {
     /// loop iteration (~60Hz) and eventually get a BrokenPipe.
     needs_redraw: bool,
     exit: bool,
+    /// Push-based tick keep-alive: set whenever a dispatch called
+    /// [`EventCtx::request_tick`], so a widget can drive an animation without
+    /// any `wants_ticks()` forwarding. Cleared just before each tick we fire.
+    tick_requested: bool,
 
     keyboard: Option<wl_keyboard::WlKeyboard>,
     pointer: Option<wl_pointer::WlPointer>,
@@ -442,8 +447,13 @@ impl State {
 
         // Animation: while any widget asks for ticks, fan one out each
         // loop iteration (~60 Hz). Idle widgets ignore the event, so
-        // the cost is a single function call per widget per frame.
-        if self.root.wants_ticks() {
+        // the cost is a single function call per widget per frame. Two
+        // triggers: a `wants_ticks()` pull (steady-state, e.g. a blinking
+        // caret) or a pushed `request_tick` latch (transient, e.g. a held
+        // scrollbar arrow). The latch is cleared before dispatch so the tick
+        // handler re-arms it only while it still needs more.
+        if self.root.wants_ticks() || self.tick_requested {
+            self.tick_requested = false;
             self.dispatch(Event::Tick);
         }
 
@@ -491,6 +501,12 @@ impl State {
         if ctx.paint_requested {
             self.needs_redraw = true;
             self.mark_popups_dirty();
+        }
+        // Push-based tick keep-alive (see `EventCtx::request_tick`): latch the
+        // request so the next `tick()` keeps the clock running, regardless of
+        // how deeply the requesting widget is nested.
+        if ctx.tick_requested {
+            self.tick_requested = true;
         }
         if ctx.close_requested {
             self.exit = true;

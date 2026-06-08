@@ -724,7 +724,12 @@ impl<'a> Painter<'a> {
     /// top/left, and a 2px shadow on the bottom/right. Reads as lighter than
     /// [`Self::button`], whose rounded outline and doubled highlight give the
     /// heavier "dialog" chrome.
-    pub fn light_button(&mut self, rect: Rect, theme: &Theme) {
+    ///
+    /// When `pressed`, the face is drawn pushed in: the top/left carries a
+    /// single shadow line (no highlight) and the bottom/right loses its shadow
+    /// — the inverse of the raised look, the way a held scrollbar arrow sinks
+    /// in Win 3.1.
+    pub fn light_button(&mut self, rect: Rect, theme: &Theme, pressed: bool) {
         if rect.w <= 0 || rect.h <= 0 {
             return;
         }
@@ -733,11 +738,18 @@ impl<'a> Painter<'a> {
         // at exact device pixels there (the re-entry runs at `scale == 1.0`,
         // which also breaks the recursion).
         if self.wants_1x_crispness() {
-            return self.physical(rect, |p, r| p.light_button(r, theme));
+            return self.physical(rect, |p, r| p.light_button(r, theme, pressed));
         }
         self.stroke_rect(rect, theme.border);
         let inner = rect.inset(1);
         self.fill_rect(inner, theme.face);
+        if pressed {
+            // Depressed: a single shadow line on the top/left, no highlight and
+            // no bottom/right shadow, so the button reads as pushed in.
+            self.h_line(inner.x, inner.y, inner.w, theme.shadow);
+            self.v_line(inner.x, inner.y, inner.h, theme.shadow);
+            return;
+        }
         // One highlight line on the top/left...
         self.h_line(inner.x, inner.y, inner.w, theme.highlight);
         self.v_line(inner.x, inner.y, inner.h, theme.highlight);
