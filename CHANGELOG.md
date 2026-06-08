@@ -48,12 +48,23 @@ While pre-1.0, the minor version is bumped for breaking changes.
   out — the `picker` and `filer` examples now do. To carry the click modifiers,
   `Event::PointerDown` and `Event::PointerUp` now include a `modifiers` field.
   (#37)
+- Widgets can request the mouse-pointer shape while handling a pointer event
+  via `EventCtx::set_cursor`, choosing from the new `Cursor` enum (arrow, hand,
+  I-beam, resize handles, …). The runtime applies it after each move on both
+  backends (`wp_cursor_shape` on Wayland, `CursorIcon` on X11/Windows/macOS) and
+  falls back to the arrow when no widget asks. `TextInput` / `TextEditor` show
+  the I-beam over their text; every other widget keeps the default arrow. (#42)
 - `WindowConfig::min_size` sets the smallest inner size a resizable window may
   be dragged to (in logical pixels). The window manager enforces the bound, so
   layouts never see sizes below it. (#36)
 
 ### Fixed
 
+- On Wayland, the mouse pointer could keep a stale shape when entering a window
+  or surface. Wayland leaves the pointer image undefined on `wl_pointer.enter`
+  and makes the client set it, but the runtime deduplicated against the last
+  shape it had shown and so skipped re-establishing the arrow on entry. It now
+  forces the cursor shape on every enter (plain motion still dedups). (#42)
 - On X11, dragging a `ScrollBar` / `Slider` thumb (or any captured press) no
   longer stops the moment the pointer leaves the window. winit reports the
   cursor crossing the window edge as a `CursorLeft` even while X11's implicit

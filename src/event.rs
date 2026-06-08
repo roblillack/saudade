@@ -228,6 +228,80 @@ impl Event {
     }
 }
 
+/// The shape the mouse pointer takes while it rests over a widget.
+///
+/// A widget asks for one with [`EventCtx::set_cursor`] while handling a pointer
+/// event; the runtime maps it onto the platform's cursor — a `wp_cursor_shape`
+/// request on Wayland, a `CursorIcon` on the winit backends (X11 / Windows /
+/// macOS). The names follow the CSS / freedesktop cursor vocabulary the two
+/// platforms share, so every variant has a native equivalent on each. A
+/// compositor that supplies no themed cursor for a given shape falls back to
+/// its own default; nothing here can fail.
+///
+/// The default everywhere is [`Cursor::Default`] — the arrow. A widget that
+/// never calls [`EventCtx::set_cursor`] keeps it, which is why plain content
+/// (labels, panels) needs no cursor code at all.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Cursor {
+    /// The normal arrow — every widget's pointer unless it asks otherwise.
+    #[default]
+    Default,
+    /// Pointing hand / "finger": the thing under the pointer can be clicked or
+    /// activated. [`Button`](crate::widgets::Button) and
+    /// [`Checkbox`](crate::widgets::Checkbox) use it (CSS `pointer`).
+    Hand,
+    /// I-beam / vertical text bar: text here can be placed-into, selected, or
+    /// edited. [`TextInput`](crate::widgets::TextInput) and
+    /// [`TextEditor`](crate::widgets::TextEditor) use it.
+    Text,
+    /// Sideways I-beam, for text laid out vertically.
+    VerticalText,
+    /// Precise crosshair, for picking an exact point (drawing, color-picking).
+    Crosshair,
+    /// Four-way arrow — the element under the pointer can be moved.
+    Move,
+    /// Open hand: something here can be grabbed and dragged.
+    Grab,
+    /// Closed hand: a grab / drag is in progress.
+    Grabbing,
+    /// "No" circle — the attempted action is not allowed here.
+    NotAllowed,
+    /// Like [`Cursor::NotAllowed`], but specifically "a drop won't land here".
+    NoDrop,
+    /// A copy will be made — the usual drag-with-modifier feedback.
+    Copy,
+    /// An alias / shortcut will be created, rather than a copy or a move.
+    Alias,
+    /// A context menu is available for the element under the pointer.
+    ContextMenu,
+    /// Help is available — the arrow gains a question mark.
+    Help,
+    /// The program is busy but still interactive (arrow + spinner).
+    Progress,
+    /// The program is busy and not accepting input (hourglass / watch).
+    Wait,
+    /// A table / grid cell can be selected.
+    Cell,
+    /// Something under the pointer can be zoomed in,
+    ZoomIn,
+    /// …or zoomed out.
+    ZoomOut,
+    /// Scroll in any direction — the middle-button autoscroll anchor.
+    AllScroll,
+    /// Resize a column boundary (a vertical splitter): a left-right bar.
+    ColResize,
+    /// Resize a row boundary (a horizontal splitter): an up-down bar.
+    RowResize,
+    /// Bidirectional east-west resize handle.
+    EwResize,
+    /// Bidirectional north-south resize handle.
+    NsResize,
+    /// Bidirectional resize along the ↗↙ diagonal.
+    NeswResize,
+    /// Bidirectional resize along the ↖↘ diagonal.
+    NwseResize,
+}
+
 /// Capabilities granted to a widget while it handles an event.
 ///
 /// Widgets do not mutate the runtime directly: they set request flags here, and
@@ -275,6 +349,12 @@ pub struct EventCtx {
     /// acts on it right after the accelerator dispatch. See
     /// [`Self::request_focus_next`].
     pub(crate) focus_next_requested: bool,
+    /// The pointer shape a widget asked for via [`Self::set_cursor`] while
+    /// handling this event, or `None` if none did. After dispatching a pointer
+    /// *move*, the runtime applies it to the window — falling back to
+    /// [`Cursor::Default`] when it's `None` — so the shape always reflects the
+    /// widget the pointer currently rests over.
+    pub(crate) cursor_request: Option<Cursor>,
 }
 
 impl EventCtx {
@@ -292,6 +372,7 @@ impl EventCtx {
             swallow_key: false,
             tick_requested: false,
             focus_next_requested: false,
+            cursor_request: None,
         }
     }
 
@@ -466,5 +547,24 @@ impl EventCtx {
     /// portable.
     pub fn accept_drop(&mut self) {
         self.accepts_drop = true;
+    }
+
+    /// Ask the runtime to show `cursor` as the mouse-pointer shape while it
+    /// rests over this widget. Call it while handling a pointer event — almost
+    /// always [`Event::PointerMove`].
+    ///
+    /// The runtime reconciles the pointer shape after every move: whatever a
+    /// widget requests during that move's dispatch becomes the cursor, and a
+    /// move no widget answers falls back to [`Cursor::Default`] (the arrow). A
+    /// widget that wants a non-default cursor therefore simply re-requests it
+    /// on each `PointerMove` it receives — the cost is one enum write, and
+    /// there's nothing to "unset" on the way out: moving onto another widget,
+    /// or off this one, re-runs the reconciliation. Because only moves drive
+    /// it, a request made while handling a press, key, or tick is ignored.
+    ///
+    /// Buttons request [`Cursor::Hand`] and text fields [`Cursor::Text`] this
+    /// way; a widget that never calls this keeps the normal arrow.
+    pub fn set_cursor(&mut self, cursor: Cursor) {
+        self.cursor_request = Some(cursor);
     }
 }

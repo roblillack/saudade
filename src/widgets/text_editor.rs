@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
-use crate::event::{Event, EventCtx, Key, MouseButton, NamedKey};
+use crate::event::{Cursor, Event, EventCtx, Key, MouseButton, NamedKey};
 use crate::geometry::{Color, Point, Rect};
 use crate::painter::Painter;
 use crate::theme::Theme;
@@ -654,6 +654,14 @@ impl Widget for TextEditor {
         {
             self.v_scrollbar.event(event, ctx);
             return;
+        }
+
+        // Past the scrollbar routing above, a pointer move is over the text
+        // area — show the I-beam so the user sees they can place the caret or
+        // select. Covers a selection drag too (the scrollbar would have
+        // captured first if one were in progress there).
+        if matches!(event, Event::PointerMove { .. }) {
+            ctx.set_cursor(Cursor::Text);
         }
 
         match event {

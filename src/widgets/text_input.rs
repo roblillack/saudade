@@ -1,6 +1,6 @@
 use std::time::{Duration, Instant};
 
-use crate::event::{Event, EventCtx, Key, MouseButton, NamedKey};
+use crate::event::{Cursor, Event, EventCtx, Key, MouseButton, NamedKey};
 use crate::geometry::{Color, Point, Rect};
 use crate::painter::Painter;
 use crate::theme::Theme;
@@ -587,11 +587,18 @@ impl Widget for TextInput {
                 self.reset_blink();
                 ctx.request_paint();
             }
-            Event::PointerMove { pos } if self.drag_active => {
-                let local_x = pos.x - self.rect.x;
-                self.cursor = self.char_index_at_x(local_x);
-                self.reset_blink();
-                ctx.request_paint();
+            Event::PointerMove { pos } => {
+                if self.drag_active {
+                    let local_x = pos.x - self.rect.x;
+                    self.cursor = self.char_index_at_x(local_x);
+                    self.reset_blink();
+                    ctx.request_paint();
+                }
+                // I-beam over the field (and throughout a selection drag, even
+                // if it strays outside) so the field reads as editable text.
+                if self.drag_active || self.rect.contains(*pos) {
+                    ctx.set_cursor(Cursor::Text);
+                }
             }
             Event::PointerUp {
                 button: MouseButton::Left,
@@ -757,4 +764,35 @@ fn draw_unfocused_caret(painter: &mut Painter, cx: i32, top_y: i32, color: Color
     painter.pixel(cx - 1, top_y + 1, color);
     painter.pixel(cx, top_y + 1, color);
     painter.pixel(cx + 1, top_y + 1, color);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::event::Cursor;
+
+    fn move_to(input: &mut TextInput, x: i32, y: i32) -> EventCtx {
+        let mut ctx = EventCtx::new();
+        input.event(
+            &Event::PointerMove {
+                pos: Point::new(x, y),
+            },
+            &mut ctx,
+        );
+        ctx
+    }
+
+    #[test]
+    fn hovering_the_field_requests_the_text_cursor() {
+        let mut input = TextInput::new(Rect::new(0, 0, 120, 24));
+        let ctx = move_to(&mut input, 10, 12);
+        assert_eq!(ctx.cursor_request, Some(Cursor::Text));
+    }
+
+    #[test]
+    fn a_disabled_field_keeps_the_default_cursor() {
+        let mut input = TextInput::new(Rect::new(0, 0, 120, 24)).with_enabled(false);
+        let ctx = move_to(&mut input, 10, 12);
+        assert_eq!(ctx.cursor_request, None);
+    }
 }
