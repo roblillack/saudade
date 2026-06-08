@@ -560,6 +560,7 @@ impl Widget for TextInput {
             Event::PointerDown {
                 pos,
                 button: MouseButton::Left,
+                ..
             } => {
                 if !self.rect.contains(*pos) {
                     return;

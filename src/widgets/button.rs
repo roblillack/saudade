@@ -158,6 +158,7 @@ impl Widget for Button {
             Event::PointerDown {
                 pos,
                 button: MouseButton::Left,
+                ..
             } if self.rect.contains(*pos) && self.press == Press::None => {
                 self.press = Press::Mouse;
                 self.armed = true;
@@ -174,6 +175,7 @@ impl Widget for Button {
             Event::PointerUp {
                 pos,
                 button: MouseButton::Left,
+                ..
             } if self.press == Press::Mouse => {
                 let fire = self.armed && self.rect.contains(*pos);
                 self.press = Press::None;

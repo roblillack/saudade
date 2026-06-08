@@ -1044,6 +1044,7 @@ mod tests {
             &Event::PointerDown {
                 pos,
                 button: MouseButton::Left,
+                modifiers: Modifiers::default(),
             },
         );
         backend.dispatch(
@@ -1051,6 +1052,7 @@ mod tests {
             &Event::PointerUp {
                 pos,
                 button: MouseButton::Left,
+                modifiers: Modifiers::default(),
             },
         );
     }
@@ -1158,6 +1160,7 @@ mod tests {
         let down = Event::PointerDown {
             pos: Point::new(dx, dy),
             button: MouseButton::Left,
+            modifiers: Modifiers::default(),
         };
         backend.dispatch(&mut dlg, &down);
         backend.dispatch(&mut dlg, &down);

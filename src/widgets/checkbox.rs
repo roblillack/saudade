@@ -172,6 +172,7 @@ impl Widget for Checkbox {
             Event::PointerDown {
                 pos,
                 button: MouseButton::Left,
+                ..
             } if self.rect.contains(*pos) => {
                 self.pressed = true;
                 self.armed = true;
@@ -188,6 +189,7 @@ impl Widget for Checkbox {
             Event::PointerUp {
                 pos,
                 button: MouseButton::Left,
+                ..
             } if self.pressed => {
                 let fire = self.armed && self.rect.contains(*pos);
                 self.pressed = false;

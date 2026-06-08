@@ -128,10 +128,19 @@ pub enum Event {
     PointerDown {
         pos: Point,
         button: MouseButton,
+        /// Keyboard modifiers held at the moment of the press. Carried so a
+        /// widget can distinguish a plain click from Ctrl/Shift+click — e.g. a
+        /// multi-selection [`List`](crate::widgets::List) toggles on
+        /// Ctrl/Cmd+click and range-selects on Shift+click. Mirrors the
+        /// `modifiers` already on [`Event::KeyDown`].
+        modifiers: Modifiers,
     },
     PointerUp {
         pos: Point,
         button: MouseButton,
+        /// Keyboard modifiers held at the moment of the release. See
+        /// [`Event::PointerDown::modifiers`].
+        modifiers: Modifiers,
     },
     PointerLeave,
     /// The mouse wheel turned or a trackpad scroll gesture moved. `delta` is

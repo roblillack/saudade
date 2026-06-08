@@ -1429,14 +1429,22 @@ impl PointerHandler for State {
                     // happened on.
                     self.drag_grab_serial = Some(serial);
                     self.drag_origin_surface = Some(event.surface.clone());
-                    self.dispatch(Event::PointerDown { pos, button: b });
+                    self.dispatch(Event::PointerDown {
+                        pos,
+                        button: b,
+                        modifiers: self.modifiers,
+                    });
                     self.mark_popups_dirty();
                 }
                 PointerEventKind::Release { button, .. } => {
                     let Some(b) = map_button(button) else {
                         continue;
                     };
-                    self.dispatch(Event::PointerUp { pos, button: b });
+                    self.dispatch(Event::PointerUp {
+                        pos,
+                        button: b,
+                        modifiers: self.modifiers,
+                    });
                     self.mark_popups_dirty();
                 }
                 PointerEventKind::Axis {

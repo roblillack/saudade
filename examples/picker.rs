@@ -3,9 +3,10 @@
 //! Shift+Tab move focus between them, Enter / Space activate the focused
 //! button, and the list's own keyboard handlers work whenever it has focus.
 //!
-//! Clicking (or activating) "OK" pops a confirmation dialog with the
-//! currently-picked item; "Cancel" pops a "Cancelled" dialog. Dismissing
-//! either dialog closes the window.
+//! The list allows multi-selection: Ctrl/Cmd+click toggles an ingredient and
+//! Shift+click (or Shift+Arrow) selects a range. Clicking (or activating) "OK"
+//! pops a confirmation dialog listing every picked item; "Cancel" pops a
+//! "Cancelled" dialog. Dismissing either dialog closes the window.
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -28,7 +29,9 @@ fn main() {
         ListItem::new("Fennel"),
         ListItem::new("Garlic"),
     ];
-    let mut list = List::new(Rect::new(16, 32, 248, 130)).with_items(items);
+    let mut list = List::new(Rect::new(16, 32, 248, 130))
+        .with_items(items)
+        .with_multi_select(true);
     list.set_selected(Some(0));
     let list = Rc::new(RefCell::new(list));
 
@@ -54,10 +57,12 @@ fn main() {
             let name = name.clone();
             let dialog = dialog.clone();
             move |cx| {
-                let label = {
+                let picks: Vec<String> = {
                     let l = list.borrow();
-                    l.selected_index()
-                        .and_then(|i| l.items().get(i).map(|x| x.label.clone()))
+                    l.selected_indices()
+                        .iter()
+                        .filter_map(|&i| l.items().get(i).map(|x| x.label.clone()))
+                        .collect()
                 };
                 let starred = favorite.borrow().is_checked();
                 let who = name.borrow().text();
@@ -66,12 +71,15 @@ fn main() {
                 } else {
                     who
                 };
-                let body = match label {
-                    Some(item) if starred => {
-                        format!("{} picked:\n\n{}\n\nSaved to favorites.", who, item)
+                let body = if picks.is_empty() {
+                    format!("{} picked nothing.", who)
+                } else {
+                    let picked = picks.join("\n");
+                    if starred {
+                        format!("{} picked:\n\n{}\n\nSaved to favorites.", who, picked)
+                    } else {
+                        format!("{} picked:\n\n{}", who, picked)
                     }
-                    Some(item) => format!("{} picked:\n\n{}", who, item),
-                    None => format!("{} picked nothing.", who),
                 };
                 dialog.borrow_mut().show_info("Confirmed", body);
                 cx.request_paint();
@@ -91,7 +99,7 @@ fn main() {
     let content = Container::new(WINDOW_W, WINDOW_H)
         .add(Label::new(
             Rect::new(16, 12, WINDOW_W - 32, 16),
-            "Pick an ingredient (Tab to cycle):",
+            "Pick ingredients (Ctrl/Shift+click):",
         ))
         .add(SharedList(list.clone()))
         .add(Label::new(Rect::new(16, 172, 60, 16), "Name:"))

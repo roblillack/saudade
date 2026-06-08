@@ -536,6 +536,7 @@ impl Widget for Dropdown {
                 Event::PointerDown {
                     pos,
                     button: MouseButton::Left,
+                    ..
                 } if self.scrollable() && self.popup_scrollbar_rect().contains(*pos) => {
                     self.scrollbar.event(event, ctx);
                     ctx.request_paint();
@@ -548,6 +549,7 @@ impl Widget for Dropdown {
             Event::PointerDown {
                 pos,
                 button: MouseButton::Left,
+                ..
             } => {
                 if self.open {
                     // Released over a row → pick it; over the field → toggle

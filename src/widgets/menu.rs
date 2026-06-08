@@ -470,6 +470,7 @@ impl Widget for MenuBar {
             Event::PointerDown {
                 pos,
                 button: MouseButton::Left,
+                ..
             } => {
                 if let Some(menu_idx) = self.open {
                     if let Some(item) = self.hit_item(*pos) {
@@ -509,6 +510,7 @@ impl Widget for MenuBar {
             Event::PointerUp {
                 pos,
                 button: MouseButton::Left,
+                ..
             } => {
                 if !self.drag_armed {
                     return;
