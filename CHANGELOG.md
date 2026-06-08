@@ -12,6 +12,14 @@ While pre-1.0, the minor version is bumped for breaking changes.
 
 ### Added
 
+- `FocusLabel` is a caption that carries a keyboard mnemonic and moves focus to
+  the field beside it. Mark the accelerator with `&` exactly like a menu label
+  (`"Last &name:"` underlines the **n** and binds **Alt+N**); pressing it
+  transfers focus to the next focusable widget added to the same parent — the
+  classic "buddy label" convention. The accelerator reaches the label even while
+  a sibling holds focus, via a new `EventCtx::request_focus_next` request that
+  `Container`, `Column`, and `Row` resolve. See the new `focus_form` example.
+  (#39)
 - `MockBackend::render_framed` now paints the window background pattern behind
   the content for regular (resizable / fixed) windows, matching the live
   backend's main surface; dialogs stay plain, as they do on screen. The pattern

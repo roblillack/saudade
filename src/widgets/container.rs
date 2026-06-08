@@ -178,6 +178,14 @@ impl Container {
         self.change_focus(Some(next), ctx);
         true
     }
+
+    /// Index of the first focusable child after `from`, or `None` if there is
+    /// none (e.g. a buddy label that's the last child). Used to resolve a
+    /// [`FocusLabel`]'s focus-next request, with `from` the index of the label
+    /// that asked.
+    fn next_focusable_after(&self, from: usize) -> Option<usize> {
+        (from + 1..self.children.len()).find(|&i| self.children[i].focusable())
+    }
 }
 
 fn next_in_cycle(candidates: &[usize], current: Option<usize>, dir: i32) -> usize {
@@ -271,9 +279,19 @@ impl Widget for Container {
         // leaking into an editor while a menu is up.
         if event.is_keyboard() && !focused_capturing {
             let mut accelerator_blocking = false;
+            // Index of an accelerator child (e.g. a `FocusLabel`) that asked to
+            // move focus to its successor. Captured here and acted on after the
+            // loop, so the `iter_mut` borrow is released before we re-borrow
+            // children to change focus.
+            let mut focus_next_from: Option<usize> = None;
             for (idx, child) in self.children.iter_mut().enumerate() {
                 if child.accepts_accelerators() && Some(idx) != self.focused {
                     child.event(event, ctx);
+                    if ctx.focus_next_requested {
+                        ctx.focus_next_requested = false;
+                        focus_next_from = Some(idx);
+                        break;
+                    }
                     if ctx.is_consumed() {
                         return;
                     }
@@ -281,6 +299,12 @@ impl Widget for Container {
                         accelerator_blocking = true;
                     }
                 }
+            }
+            if let Some(from) = focus_next_from {
+                if let Some(target) = self.next_focusable_after(from) {
+                    self.change_focus(Some(target), ctx);
+                }
+                return;
             }
             if accelerator_blocking {
                 return;
@@ -319,6 +343,15 @@ impl Widget for Container {
                 } else if captured_was_set {
                     self.captured = None;
                 }
+            }
+        }
+
+        // A focused child can also ask to advance focus (e.g. a custom
+        // mnemonic widget that holds focus). Move to its successor.
+        if ctx.focus_next_requested {
+            ctx.focus_next_requested = false;
+            if let Some(target) = self.next_focusable_after(idx) {
+                self.change_focus(Some(target), ctx);
             }
         }
 
@@ -377,8 +410,9 @@ impl Widget for Container {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::event::{Modifiers, MouseButton};
+    use crate::event::{Key, Modifiers, MouseButton};
     use crate::geometry::Point;
+    use crate::widgets::FocusLabel;
     use std::cell::Cell;
     use std::rc::Rc;
 
@@ -459,5 +493,77 @@ mod tests {
         c.layout(Rect::new(0, 0, 100, 50));
         press(&mut c, 15, 12);
         assert!(hit.get(), "at the origin the children must not move");
+    }
+
+    fn probe() -> Probe {
+        Probe {
+            rect: Rect::new(0, 0, 10, 10),
+            hit: Rc::new(Cell::new(false)),
+        }
+    }
+
+    /// Send Alt+`ch` as a keyboard accelerator.
+    fn alt_key(c: &mut Container, ch: char) {
+        let mut ctx = EventCtx::new();
+        c.event(
+            &Event::KeyDown {
+                key: Key::Char(ch),
+                modifiers: Modifiers {
+                    alt: true,
+                    ..Modifiers::default()
+                },
+            },
+            &mut ctx,
+        );
+    }
+
+    #[test]
+    fn mnemonic_focuses_next_focusable_sibling() {
+        let mut c = Container::new(100, 50)
+            .add(FocusLabel::new(Rect::new(0, 0, 40, 16), "Last &name:"))
+            .add(probe());
+        assert_eq!(c.focused_index(), None);
+        alt_key(&mut c, 'n');
+        assert_eq!(
+            c.focused_index(),
+            Some(1),
+            "Alt+N should focus the field after the label"
+        );
+    }
+
+    #[test]
+    fn unrelated_mnemonic_leaves_focus_untouched() {
+        let mut c = Container::new(100, 50)
+            .add(FocusLabel::new(Rect::new(0, 0, 40, 16), "&Name:"))
+            .add(probe());
+        alt_key(&mut c, 'x');
+        assert_eq!(c.focused_index(), None, "Alt+X matches no label");
+    }
+
+    #[test]
+    fn mnemonic_skips_non_focusable_widgets_to_the_next_field() {
+        // A decorative widget sits between the label and the real field; focus
+        // must skip it and land on the focusable one.
+        let mut c = Container::new(100, 50)
+            .add(FocusLabel::new(Rect::new(0, 0, 40, 16), "&Go:"))
+            .add(FocusLabel::new(Rect::new(0, 0, 40, 16), "spacer")) // not focusable
+            .add(probe());
+        alt_key(&mut c, 'g');
+        assert_eq!(
+            c.focused_index(),
+            Some(2),
+            "focus advances past the non-focusable widget"
+        );
+    }
+
+    #[test]
+    fn buddy_label_with_no_following_field_is_harmless() {
+        // A label whose mnemonic has no focusable widget after it must not
+        // panic or focus anything.
+        let mut c = Container::new(100, 50)
+            .add(probe())
+            .add(FocusLabel::new(Rect::new(0, 0, 40, 16), "&Tail:"));
+        alt_key(&mut c, 't');
+        assert_eq!(c.focused_index(), None);
     }
 }
