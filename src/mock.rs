@@ -22,10 +22,11 @@
 //! able to feed [`Event`](crate::event::Event)s into the same backend to
 //! drive widgets between renders.
 
+use crate::background::{BackgroundPattern, BackgroundState, PATTERN_COLORS};
 use crate::chrome::{self, WindowChrome};
 use crate::event::{Event, EventCtx};
 use crate::font::Font;
-use crate::geometry::{Rect, Size};
+use crate::geometry::{Color, Rect, Size};
 use crate::painter::Painter;
 use crate::theme::Theme;
 use crate::widget::Widget;
@@ -37,6 +38,20 @@ pub struct MockBackend {
     theme: Theme,
     font: Option<Font>,
     mono_font: Option<Font>,
+    /// The window background pattern painted behind the widget tree, exactly
+    /// as the live backend's main surface does. Only [`Self::render_framed`]
+    /// honors it (and only for non-dialog frames); the bare [`Self::render`]
+    /// client-area pass stays plain.
+    bg: BackgroundState,
+}
+
+/// Which backdrop the content pass fills behind the widget tree, mirroring the
+/// two fills the live runtime uses: a plain theme fill for the popup/dialog
+/// pass, and the window background pattern for a regular main window.
+#[derive(Clone, Copy)]
+enum Backdrop {
+    Plain,
+    Pattern,
 }
 
 impl MockBackend {
@@ -51,6 +66,12 @@ impl MockBackend {
             theme: Theme::default(),
             font: None,
             mono_font: None,
+            // The live runtime's default backdrop (`BackgroundState::from_env`
+            // with nothing set): a `superlight` forward-diagonal hatch.
+            bg: BackgroundState {
+                pattern: BackgroundPattern::DiagonalForward,
+                color: PATTERN_COLORS[0].1,
+            },
         }
     }
 
@@ -77,6 +98,15 @@ impl MockBackend {
     /// Supply the monospace font used for [`Painter::mono_text`].
     pub fn with_mono_font(mut self, font: Font) -> Self {
         self.mono_font = Some(font);
+        self
+    }
+
+    /// Override the window background pattern painted behind the widget tree by
+    /// [`Self::render_framed`] for regular (resizable / fixed) windows. Defaults
+    /// to the live runtime's default — a `superlight` forward-diagonal hatch.
+    /// Dialog frames ignore this and stay plain, matching the live backend.
+    pub fn with_background_pattern(mut self, pattern: BackgroundPattern, color: Color) -> Self {
+        self.bg = BackgroundState { pattern, color };
         self
     }
 
@@ -107,6 +137,17 @@ impl MockBackend {
     /// composited on top of the main pass so the snapshot looks the same
     /// as what the user sees on-screen.
     pub fn render(&self, root: &mut dyn Widget) -> Snapshot {
+        // The bare client-area pass stays plain, like the live popup/dialog
+        // pass; the window background pattern is reserved for the framed,
+        // regular-window path (see [`Self::render_framed`]).
+        self.render_backdrop(root, Backdrop::Plain)
+    }
+
+    /// Shared body of [`Self::render`] and the content pass of
+    /// [`Self::render_framed`]. `backdrop` selects what is filled behind the
+    /// widget tree before it paints — a plain theme fill or the window
+    /// background pattern — exactly mirroring the live runtime's two passes.
+    fn render_backdrop(&self, root: &mut dyn Widget, backdrop: Backdrop) -> Snapshot {
         let physical = self.physical_size();
         // The runtime derives the logical content rect from the actual
         // physical buffer size rather than the requested logical size —
@@ -130,7 +171,12 @@ impl MockBackend {
                 self.mono_font.as_ref(),
                 None,
             );
-            painter.fill(self.theme.background);
+            match backdrop {
+                Backdrop::Plain => painter.fill(self.theme.background),
+                Backdrop::Pattern => {
+                    painter.fill_pattern(self.theme.background, self.bg.pattern, self.bg.color)
+                }
+            }
             root.paint(&mut painter, &self.theme);
         }
 
@@ -174,6 +220,12 @@ impl MockBackend {
     /// window the way a user sees it on the desktop, rather than just its
     /// client area (which is what [`Self::render`] produces).
     ///
+    /// A regular ([`WindowFrame::Resizable`] / [`WindowFrame::Fixed`]) window
+    /// paints the [background pattern](Self::with_background_pattern) behind its
+    /// content, exactly as the live backend's main surface does; a
+    /// [`WindowFrame::Dialog`] stays plain, matching the live runtime's
+    /// popup/dialog pass.
+    ///
     /// The window is always drawn *active* (focused). [`WindowChrome`] picks
     /// the title and the frame style — [`WindowFrame::Resizable`],
     /// [`WindowFrame::Fixed`], or [`WindowFrame::Dialog`] — which differ in
@@ -183,7 +235,12 @@ impl MockBackend {
     /// [`WindowFrame::Fixed`]: crate::WindowFrame::Fixed
     /// [`WindowFrame::Dialog`]: crate::WindowFrame::Dialog
     pub fn render_framed(&self, root: &mut dyn Widget, chrome: &WindowChrome) -> Snapshot {
-        let content = self.render(root);
+        let backdrop = if chrome.paints_background_pattern() {
+            Backdrop::Pattern
+        } else {
+            Backdrop::Plain
+        };
+        let content = self.render_backdrop(root, backdrop);
         let content_size = Size::new(content.width, content.height);
         let m = chrome::metrics(content_size, self.scale, chrome);
 
@@ -283,5 +340,72 @@ impl Snapshot {
                 .expect("saudade::mock: png data");
         }
         buf
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::Container;
+
+    /// A regular (resizable / fixed) framed window paints the window background
+    /// pattern behind its content, exactly like the live main surface; a dialog
+    /// stays plain. With a `Solid` pattern and a transparent root the whole
+    /// content slot is flooded with the pattern color for a regular window and
+    /// left at the (plain) theme background for a dialog, so a pixel census of
+    /// the framed buffer distinguishes the two without any baseline image.
+    #[test]
+    fn framed_regular_window_paints_pattern_but_dialog_stays_plain() {
+        // A color the Canoe chrome palette never uses, so every matching pixel
+        // came from the content backdrop.
+        let distinct = Color::rgb(0xAB, 0xCD, 0xEF);
+        // Transparent container: paints nothing, so the backdrop shows through.
+        let build = || Container::new(40, 30);
+        let backend =
+            MockBackend::new(40, 30).with_background_pattern(BackgroundPattern::Solid, distinct);
+
+        let census = |snap: &Snapshot| snap.pixels().iter().filter(|&&px| px == distinct.0).count();
+        let content_px = (backend.physical_size().w * backend.physical_size().h) as usize;
+
+        let resizable = backend.render_framed(&mut build(), &WindowChrome::resizable("App"));
+        let dialog = backend.render_framed(&mut build(), &WindowChrome::dialog("App"));
+
+        // Regular window: the entire content slot is the pattern color.
+        assert_eq!(census(&resizable), content_px);
+        // Dialog: the pattern is suppressed, so it appears nowhere.
+        assert_eq!(census(&dialog), 0);
+    }
+
+    /// The default backend paints the live runtime's default backdrop — a
+    /// `superlight` forward-diagonal hatch — behind a regular framed window, and
+    /// suppresses it for a dialog.
+    #[test]
+    fn framed_uses_live_default_pattern() {
+        let hatch = PATTERN_COLORS[0].1.0; // superlight, the default fg
+        let build = || Container::new(40, 30);
+        let backend = MockBackend::new(40, 30);
+
+        let has_hatch = |snap: &Snapshot| snap.pixels().contains(&hatch);
+
+        let resizable = backend.render_framed(&mut build(), &WindowChrome::resizable("App"));
+        let dialog = backend.render_framed(&mut build(), &WindowChrome::dialog("App"));
+
+        assert!(
+            has_hatch(&resizable),
+            "regular window should show the default hatch"
+        );
+        assert!(!has_hatch(&dialog), "dialog must stay plain");
+    }
+
+    /// The bare client-area pass keeps its plain fill — the pattern is reserved
+    /// for the framed, regular-window path.
+    #[test]
+    fn bare_render_stays_plain() {
+        let distinct = Color::rgb(0xAB, 0xCD, 0xEF);
+        let mut root = Container::new(40, 30);
+        let snap = MockBackend::new(40, 30)
+            .with_background_pattern(BackgroundPattern::Solid, distinct)
+            .render(&mut root);
+        assert!(snap.pixels().iter().all(|&px| px != distinct.0));
     }
 }

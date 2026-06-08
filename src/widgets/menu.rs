@@ -3,6 +3,7 @@ use crate::geometry::{Color, Point, Rect};
 use crate::painter::Painter;
 use crate::theme::Theme;
 use crate::widget::{PopupKind, PopupRequest, Widget};
+use crate::widgets::mnemonic::{draw_label_with_mnemonic, parse_label};
 
 const BAR_PADDING: i32 = 8;
 /// Top inset for the label baseline inside the bar. Tight enough that the
@@ -82,45 +83,6 @@ impl Menu {
             label: label.into(),
             items,
         }
-    }
-}
-
-/// Parsed view of a label like `"&File"`: the visible text with the `&`
-/// stripped, and the (logical) character index of the mnemonic glyph.
-#[derive(Clone)]
-struct ParsedLabel {
-    display: String,
-    mnemonic_index: Option<usize>,
-    mnemonic_char: Option<char>,
-}
-
-fn parse_label(raw: &str) -> ParsedLabel {
-    let mut display = String::with_capacity(raw.len());
-    let mut mnemonic_index = None;
-    let mut mnemonic_char = None;
-    let mut chars = raw.chars().peekable();
-    let mut idx = 0;
-    while let Some(c) = chars.next() {
-        if c == '&' {
-            if chars.peek() == Some(&'&') {
-                chars.next();
-                display.push('&');
-                idx += 1;
-            } else if let Some(&next) = chars.peek() {
-                mnemonic_index = Some(idx);
-                mnemonic_char = Some(next.to_ascii_lowercase());
-                // do not push the '&' itself; the next loop iteration pushes
-                // the actual character at idx.
-            }
-        } else {
-            display.push(c);
-            idx += 1;
-        }
-    }
-    ParsedLabel {
-        display,
-        mnemonic_index,
-        mnemonic_char,
     }
 }
 
@@ -302,42 +264,6 @@ impl MenuBar {
         }
         None
     }
-
-    /// Draw text with the mnemonic glyph underlined. `dy_phys` lets the
-    /// caller nudge both the text and the underline by a physical-pixel
-    /// amount independent of any logical-pixel inset (the menu bar uses
-    /// this to drop its labels exactly one physical pixel without growing
-    /// the bar by a whole logical pixel).
-    fn draw_label_with_mnemonic(
-        painter: &mut Painter,
-        x: i32,
-        y: i32,
-        dy_phys: i32,
-        parsed: &ParsedLabel,
-        size: f32,
-        color: Color,
-    ) {
-        painter.text_with_phys_offset(x, y, 0, dy_phys, &parsed.display, size, color);
-        if let Some(idx) = parsed.mnemonic_index {
-            let prefix: String = parsed.display.chars().take(idx).collect();
-            let mnemonic_ch: String = parsed.display.chars().skip(idx).take(1).collect();
-            if mnemonic_ch.is_empty() {
-                return;
-            }
-            let prefix_w = painter.measure_text(&prefix, size).w;
-            let glyph_w = painter.measure_text(&mnemonic_ch, size).w;
-            // Drop the underline 1 logical pixel below the baseline so it
-            // doesn't kiss the bottom of the letter (and doesn't fight any
-            // descender on the rare lowercase mnemonic).
-            let underline_y = y + (size as i32) + 1;
-            painter.fill_rect_with_phys_offset(
-                Rect::new(x + prefix_w, underline_y, glyph_w, 1),
-                0,
-                dy_phys,
-                color,
-            );
-        }
-    }
 }
 
 impl Widget for MenuBar {
@@ -375,7 +301,7 @@ impl Widget for MenuBar {
             // Bar labels are nudged down by one physical pixel so the cap
             // height has visible breathing room above without growing the
             // bar by a whole logical pixel.
-            Self::draw_label_with_mnemonic(
+            draw_label_with_mnemonic(
                 painter,
                 lx + BAR_PADDING,
                 self.rect.y + BAR_LABEL_INSET_Y,
@@ -438,7 +364,7 @@ impl Widget for MenuBar {
                         (theme.background, theme.text)
                     };
                     painter.fill_rect(row, bg);
-                    Self::draw_label_with_mnemonic(
+                    draw_label_with_mnemonic(
                         painter,
                         row.x + POPUP_PADDING_X - 4,
                         row.y + ITEM_TEXT_INSET_Y,

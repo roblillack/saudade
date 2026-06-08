@@ -150,6 +150,10 @@ struct AppHandler {
 
     // Per-frame state:
     cursor: Option<Point>,
+    /// Mouse buttons currently held. While any is down an OS pointer grab is in
+    /// effect, which on X11 keeps motion flowing past the window edge — see
+    /// [`PointerButtons`] and the `CursorLeft` handling.
+    buttons: PointerButtons,
     modifiers: Modifiers,
     needs_redraw: bool,
     /// Background pattern + color for the main window, toggled with the
@@ -225,6 +229,40 @@ impl KeySwallow {
     }
 }
 
+/// Count of mouse buttons currently held down on the winit backend.
+///
+/// X11 keeps an implicit pointer grab from the first button press until the
+/// last release; during it, motion events keep flowing to the grabbing window
+/// even after the cursor leaves it. The runtime consults [`Self::any_held`] to
+/// recognize that grab and ignore the `CursorLeft` winit reports across the
+/// window edge mid-drag (see [`AppHandler::drag_grab_active`]).
+///
+/// A plain count tolerates a missing event (e.g. a release delivered to another
+/// window) without going negative; pairing it with an active-capture check at
+/// the call site means a drifted count can never wrongly swallow a real leave.
+#[derive(Default)]
+struct PointerButtons {
+    held: u32,
+}
+
+impl PointerButtons {
+    /// Record a button press.
+    fn press(&mut self) {
+        self.held += 1;
+    }
+
+    /// Record a button release.
+    fn release(&mut self) {
+        self.held = self.held.saturating_sub(1);
+    }
+
+    /// True while at least one button is down — i.e. an OS pointer grab is
+    /// keeping motion events flowing regardless of the cursor's position.
+    fn any_held(&self) -> bool {
+        self.held > 0
+    }
+}
+
 /// Target interval between [`Event::Tick`](crate::event::Event::Tick)
 /// dispatches when a widget is animating — roughly 60 Hz.
 const TICK_INTERVAL: Duration = Duration::from_millis(16);
@@ -246,6 +284,7 @@ impl AppHandler {
             physical: PhysicalSize::new(0, 0),
             scale: 1.0,
             cursor: None,
+            buttons: PointerButtons::default(),
             modifiers: Modifiers::default(),
             needs_redraw: true,
             bg: BackgroundState::from_env(),
@@ -397,6 +436,14 @@ impl AppHandler {
                 self.dispatch(&Event::PointerMove { pos }, event_loop);
             }
             WindowEvent::CursorLeft { .. } => {
+                // Ignore the leave while a button-held drag owns the pointer:
+                // the OS grab keeps motion flowing past the window edge, so the
+                // drag genuinely continues even though winit reports a leave
+                // here (see `drag_grab_active`). Honoring it would cut a
+                // scrollbar / slider thumb drag short.
+                if self.drag_grab_active() {
+                    return;
+                }
                 self.cursor = None;
                 self.dispatch(&Event::PointerLeave, event_loop);
             }
@@ -405,10 +452,16 @@ impl AppHandler {
                 button: winit_button,
                 ..
             } => {
-                let Some(pos) = self.cursor else { return };
                 let Some(button) = map_button(winit_button) else {
                     return;
                 };
+                // Track the OS pointer grab before anything can bail out, so the
+                // held-button count stays balanced regardless of cursor state.
+                match state {
+                    ElementState::Pressed => self.buttons.press(),
+                    ElementState::Released => self.buttons.release(),
+                }
+                let Some(pos) = self.cursor else { return };
                 let modifiers = self.modifiers;
                 let event = match state {
                     ElementState::Pressed => Event::PointerDown {
@@ -505,6 +558,12 @@ impl AppHandler {
                 self.mark_popups_dirty();
             }
             WindowEvent::CursorLeft { .. } => {
+                // As in the main window: keep a button-held drag alive across
+                // the popup edge instead of cutting it short on the spurious
+                // winit leave.
+                if self.drag_grab_active() {
+                    return;
+                }
                 if let Some(p) = self.popups.get_mut(idx) {
                     p.cursor = None;
                 }
@@ -516,10 +575,14 @@ impl AppHandler {
                 button: winit_button,
                 ..
             } => {
-                let Some(pos) = self.popups.get(idx).and_then(|p| p.cursor) else {
+                let Some(button) = map_button(winit_button) else {
                     return;
                 };
-                let Some(button) = map_button(winit_button) else {
+                match state {
+                    ElementState::Pressed => self.buttons.press(),
+                    ElementState::Released => self.buttons.release(),
+                }
+                let Some(pos) = self.popups.get(idx).and_then(|p| p.cursor) else {
                     return;
                 };
                 let modifiers = self.modifiers;
@@ -568,6 +631,25 @@ impl AppHandler {
         for p in &mut self.popups {
             p.needs_redraw = true;
         }
+    }
+
+    /// Whether an OS pointer grab is currently keeping a widget's drag alive
+    /// past the window edge — a mouse button is held *and* a widget is
+    /// capturing the pointer from that press.
+    ///
+    /// This is the signal to ignore winit's `CursorLeft`: on X11 the pointer is
+    /// implicitly grabbed for the lifetime of a button press, during which
+    /// motion keeps being delivered even after the cursor crosses the window
+    /// edge — but winit still reports that crossing as a leave (an `XI_Leave`
+    /// with mode `WhileGrabbed`, which it does not filter out). Treating it as a
+    /// real leave would end a scrollbar / slider thumb drag the moment the
+    /// cursor stepped outside. Wayland's compositor sends no leave at all during
+    /// its own implicit grab, so suppressing the winit one makes the backends
+    /// agree. Requiring an active capture keeps a popup-held capture (an open
+    /// menu / dropdown the user navigates without holding a button) still
+    /// receiving its leave.
+    fn drag_grab_active(&self) -> bool {
+        self.buttons.any_held() && self.root.captures_pointer()
     }
 
     fn dispatch(&mut self, event: &Event, event_loop: &ActiveEventLoop) -> EventCtx {
@@ -1219,5 +1301,47 @@ mod tests {
         // would swallow every other unmapped event.
         assert!(!s.drops_press(None));
         assert!(!s.ends_on_release(None));
+    }
+
+    #[test]
+    fn no_buttons_held_by_default() {
+        assert!(!PointerButtons::default().any_held());
+    }
+
+    #[test]
+    fn a_held_button_marks_the_grab_active_until_released() {
+        let mut b = PointerButtons::default();
+        b.press();
+        assert!(b.any_held(), "a held button means an OS grab is in effect");
+        b.release();
+        assert!(!b.any_held(), "the grab ends once the button is released");
+    }
+
+    #[test]
+    fn the_grab_persists_until_the_last_of_several_buttons_is_up() {
+        // X11's implicit grab lives until *all* buttons are released, so a chord
+        // (e.g. left held while right taps) must keep the grab active.
+        let mut b = PointerButtons::default();
+        b.press();
+        b.press();
+        b.release();
+        assert!(b.any_held(), "one button still down keeps the grab alive");
+        b.release();
+        assert!(!b.any_held());
+    }
+
+    #[test]
+    fn an_extra_release_cannot_drive_the_count_negative() {
+        // A release whose press was delivered elsewhere (e.g. to a popup window
+        // that was torn down) must not underflow the count and wedge the grab
+        // on forever.
+        let mut b = PointerButtons::default();
+        b.release();
+        assert!(!b.any_held());
+        b.press();
+        assert!(
+            b.any_held(),
+            "the count still tracks a real press afterward"
+        );
     }
 }

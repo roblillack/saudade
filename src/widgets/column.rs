@@ -241,6 +241,12 @@ impl Column {
         self.change_focus(Some(next), ctx);
         true
     }
+
+    /// Index of the first focusable child after `from`, or `None` if there is
+    /// none. Used to resolve a [`FocusLabel`]'s focus-next request.
+    fn next_focusable_after(&self, from: usize) -> Option<usize> {
+        (from + 1..self.children.len()).find(|&i| self.children[i].widget.focusable())
+    }
 }
 
 fn next_in_cycle(candidates: &[usize], current: Option<usize>, dir: i32) -> usize {
@@ -392,9 +398,17 @@ impl Widget for Column {
 
         if event.is_keyboard() && !focused_capturing {
             let mut accelerator_blocking = false;
+            // See `Container::event`: capture a `FocusLabel`'s focus-next request
+            // here and act on it after the borrow on children is released.
+            let mut focus_next_from: Option<usize> = None;
             for (idx, child) in self.children.iter_mut().enumerate() {
                 if child.widget.accepts_accelerators() && Some(idx) != self.focused {
                     child.widget.event(event, ctx);
+                    if ctx.focus_next_requested {
+                        ctx.focus_next_requested = false;
+                        focus_next_from = Some(idx);
+                        break;
+                    }
                     if ctx.is_consumed() {
                         return;
                     }
@@ -402,6 +416,12 @@ impl Widget for Column {
                         accelerator_blocking = true;
                     }
                 }
+            }
+            if let Some(from) = focus_next_from {
+                if let Some(target) = self.next_focusable_after(from) {
+                    self.change_focus(Some(target), ctx);
+                }
+                return;
             }
             if accelerator_blocking {
                 return;
@@ -437,6 +457,14 @@ impl Widget for Column {
                 } else if captured_was_set {
                     self.captured = None;
                 }
+            }
+        }
+
+        // A focused child may itself ask to advance focus; move to its successor.
+        if ctx.focus_next_requested {
+            ctx.focus_next_requested = false;
+            if let Some(target) = self.next_focusable_after(idx) {
+                self.change_focus(Some(target), ctx);
             }
         }
 
