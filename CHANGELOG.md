@@ -21,6 +21,9 @@ While pre-1.0, the minor version is bumped for breaking changes.
   out — the `picker` and `filer` examples now do. To carry the click modifiers,
   `Event::PointerDown` and `Event::PointerUp` now include a `modifiers` field.
   (#37)
+- `WindowConfig::min_size` sets the smallest inner size a resizable window may
+  be dragged to (in logical pixels). The window manager enforces the bound, so
+  layouts never see sizes below it. (#36)
 
 ## [0.3.0] - 2026-06-07
 

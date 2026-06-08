@@ -35,6 +35,10 @@ pub struct WindowConfig {
     pub title: String,
     pub size: Size,
     pub resizable: bool,
+    /// Smallest inner size the window may be resized to, in logical pixels.
+    /// `None` leaves the lower bound to the window manager. Only meaningful for
+    /// [`resizable`](Self::resizable) windows.
+    pub min_size: Option<Size>,
 }
 
 impl WindowConfig {
@@ -43,11 +47,19 @@ impl WindowConfig {
             title: title.into(),
             size: Size::new(width, height),
             resizable: false,
+            min_size: None,
         }
     }
 
     pub fn resizable(mut self, resizable: bool) -> Self {
         self.resizable = resizable;
+        self
+    }
+
+    /// Constrain how small the user may drag the window. The window manager
+    /// enforces the bound, so the layout never has to cope with sizes below it.
+    pub fn min_size(mut self, width: i32, height: i32) -> Self {
+        self.min_size = Some(Size::new(width, height));
         self
     }
 }
@@ -247,13 +259,16 @@ impl ApplicationHandler for AppHandler {
         if self.main_win.is_some() {
             return; // already initialized; ignore redundant resumes
         }
-        let attrs = WindowAttributes::default()
+        let mut attrs = WindowAttributes::default()
             .with_title(&self.window_config.title)
             .with_inner_size(LogicalSize::new(
                 self.window_config.size.w as f64,
                 self.window_config.size.h as f64,
             ))
             .with_resizable(self.window_config.resizable);
+        if let Some(min) = self.window_config.min_size {
+            attrs = attrs.with_min_inner_size(LogicalSize::new(min.w as f64, min.h as f64));
+        }
         let win = event_loop
             .create_window(attrs)
             .expect("saudade: failed to create window");
