@@ -1,4 +1,4 @@
-use crate::event::{Event, EventCtx, Key, Modifiers, MouseButton, NamedKey};
+use crate::event::{Cursor, Event, EventCtx, Key, Modifiers, MouseButton, NamedKey};
 use crate::geometry::{Color, Point, Rect};
 use crate::painter::Painter;
 use crate::theme::Theme;
@@ -549,6 +549,15 @@ impl Widget for MenuBar {
             }
             _ => {}
         }
+
+        // The bar labels and the open menu's action items are all click
+        // targets, so they take the hand. Computed after the match so it tracks
+        // the menu the press above may have just opened or closed.
+        if let Some(pos) = event.position()
+            && (self.hit_item(pos).is_some() || self.hit_label(pos).is_some())
+        {
+            ctx.set_cursor(Cursor::Hand);
+        }
     }
 
     fn captures_pointer(&self) -> bool {
@@ -694,6 +703,7 @@ impl MenuBar {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::mock::MockBackend;
     use std::cell::Cell;
     use std::rc::Rc;
 
@@ -702,6 +712,34 @@ mod tests {
             "&Help",
             vec![MenuItem::action("&About", move |_| fired.set(true))],
         ))
+    }
+
+    #[test]
+    fn hovering_a_bar_label_requests_the_hand() {
+        let mut bar = bar_with_help(Rc::new(Cell::new(false)));
+        // Paint once at the bar's natural height so the label hit-rects exist.
+        MockBackend::new(200, 20).render(&mut bar);
+        let mut ctx = EventCtx::new();
+        bar.event(
+            &Event::PointerMove {
+                pos: Point::new(10, 10),
+            },
+            &mut ctx,
+        );
+        assert_eq!(ctx.cursor_request, Some(Cursor::Hand));
+    }
+
+    #[test]
+    fn hovering_an_open_menu_item_requests_the_hand() {
+        let mut bar = bar_with_help(Rc::new(Cell::new(false)));
+        bar.open(0);
+        // Render once so the popup geometry is cached.
+        MockBackend::new(200, 20).render(&mut bar);
+        let popup = bar.cache.popup.expect("an open menu caches its popup rect");
+        let pos = Point::new(popup.x + 10, popup.y + POPUP_PADDING_Y + 1);
+        let mut ctx = EventCtx::new();
+        bar.event(&Event::PointerMove { pos }, &mut ctx);
+        assert_eq!(ctx.cursor_request, Some(Cursor::Hand));
     }
 
     fn keydown(key: Key) -> Event {

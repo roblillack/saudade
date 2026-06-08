@@ -1,4 +1,4 @@
-use crate::event::{Event, EventCtx, Key, MouseButton, NamedKey};
+use crate::event::{Cursor, Event, EventCtx, Key, MouseButton, NamedKey};
 use crate::geometry::Rect;
 use crate::painter::Painter;
 use crate::theme::Theme;
@@ -260,6 +260,16 @@ impl Widget for Slider {
             }
             _ => {}
         }
+
+        // Pointer shape, computed after the match so a press on the thumb shows
+        // the closed hand at once rather than only on the first drag motion.
+        if let Some(pos) = event.position() {
+            if self.dragging {
+                ctx.set_cursor(Cursor::Grabbing);
+            } else if self.thumb_rect().contains(pos) {
+                ctx.set_cursor(Cursor::Grab);
+            }
+        }
     }
 
     fn captures_pointer(&self) -> bool {
@@ -276,5 +286,66 @@ impl Widget for Slider {
 
     fn layout(&mut self, bounds: Rect) {
         self.rect = bounds;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::event::Modifiers;
+    use crate::geometry::Point;
+
+    fn slider() -> Slider {
+        Slider::new(Rect::new(0, 0, 100, 20), 0, 100).with_value(50)
+    }
+
+    fn thumb_center(s: &Slider) -> Point {
+        let t = s.thumb_rect();
+        Point::new(t.x + t.w / 2, t.y + t.h / 2)
+    }
+
+    #[test]
+    fn the_thumb_requests_grab() {
+        let mut s = slider();
+        let c = thumb_center(&s);
+        let mut ctx = EventCtx::new();
+        s.event(&Event::PointerMove { pos: c }, &mut ctx);
+        assert_eq!(ctx.cursor_request, Some(Cursor::Grab));
+    }
+
+    #[test]
+    fn pressing_the_thumb_requests_grabbing_at_once() {
+        let mut s = slider();
+        let c = thumb_center(&s);
+        // The press alone — before any movement — already shows the closed hand.
+        let mut press = EventCtx::new();
+        s.event(
+            &Event::PointerDown {
+                pos: c,
+                button: MouseButton::Left,
+                modifiers: Modifiers::default(),
+            },
+            &mut press,
+        );
+        assert_eq!(press.cursor_request, Some(Cursor::Grabbing));
+
+        // And it persists through the drag.
+        let mut ctx = EventCtx::new();
+        s.event(
+            &Event::PointerMove {
+                pos: Point::new(c.x + 5, c.y),
+            },
+            &mut ctx,
+        );
+        assert_eq!(ctx.cursor_request, Some(Cursor::Grabbing));
+    }
+
+    #[test]
+    fn a_disabled_slider_keeps_the_default_cursor() {
+        let mut s = slider().with_enabled(false);
+        let c = thumb_center(&s);
+        let mut ctx = EventCtx::new();
+        s.event(&Event::PointerMove { pos: c }, &mut ctx);
+        assert_eq!(ctx.cursor_request, None);
     }
 }

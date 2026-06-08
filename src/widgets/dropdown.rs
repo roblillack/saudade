@@ -1,4 +1,4 @@
-use crate::event::{Event, EventCtx, Key, MouseButton, NamedKey};
+use crate::event::{Cursor, Event, EventCtx, Key, MouseButton, NamedKey};
 use crate::geometry::{Color, Point, Rect};
 use crate::include_svg;
 use crate::painter::Painter;
@@ -542,6 +542,15 @@ impl Widget for Dropdown {
                     ctx.request_paint();
                     return;
                 }
+                // Hovering the popup's scrollbar gutter: let the bar pick its
+                // own pointer shape (hand over its arrows, grab over its thumb)
+                // rather than falling through to the row-highlight logic.
+                Event::PointerMove { pos }
+                    if self.scrollable() && self.popup_scrollbar_rect().contains(*pos) =>
+                {
+                    self.scrollbar.event(event, ctx);
+                    return;
+                }
                 _ => {}
             }
         }
@@ -582,6 +591,21 @@ impl Widget for Dropdown {
                 self.handle_key(key, ctx);
             }
             _ => {}
+        }
+
+        // Pointer shape: both the closed field (a button that drops the list
+        // open) and, while open, the list rows are click targets, so they take
+        // the hand. The popup's scrollbar gutter was already routed away above,
+        // so it keeps its own shape.
+        if let Some(pos) = event.position() {
+            let clickable = if self.open {
+                self.hit_item(pos).is_some()
+            } else {
+                self.rect.contains(pos)
+            };
+            if clickable {
+                ctx.set_cursor(Cursor::Hand);
+            }
         }
     }
 
@@ -718,6 +742,31 @@ mod tests {
             None,
             "the scrollbar gutter is not an item"
         );
+    }
+
+    #[test]
+    fn the_closed_field_requests_the_hand() {
+        // Closed, the whole field is a button that drops the list open.
+        let mut d = dropdown_with(3);
+        let mut ctx = EventCtx::new();
+        d.event(
+            &Event::PointerMove {
+                pos: Point::new(10, 10),
+            },
+            &mut ctx,
+        );
+        assert_eq!(ctx.cursor_request, Some(Cursor::Hand));
+    }
+
+    #[test]
+    fn an_open_list_row_requests_the_hand() {
+        let mut d = dropdown_with(3);
+        d.open();
+        let popup = d.popup_rect();
+        let pos = Point::new(popup.x + 4, popup.y + POPUP_PAD_Y + 1);
+        let mut ctx = EventCtx::new();
+        d.event(&Event::PointerMove { pos }, &mut ctx);
+        assert_eq!(ctx.cursor_request, Some(Cursor::Hand));
     }
 
     #[test]

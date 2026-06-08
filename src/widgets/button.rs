@@ -1,4 +1,4 @@
-use crate::event::{Event, EventCtx, Key, MouseButton, NamedKey};
+use crate::event::{Cursor, Event, EventCtx, Key, MouseButton, NamedKey};
 use crate::geometry::Rect;
 use crate::painter::Painter;
 use crate::theme::Theme;
@@ -165,11 +165,20 @@ impl Widget for Button {
                 ctx.request_focus();
                 ctx.request_paint();
             }
-            Event::PointerMove { pos } if self.press == Press::Mouse => {
-                let armed_now = self.rect.contains(*pos);
-                if armed_now != self.armed {
-                    self.armed = armed_now;
-                    ctx.request_paint();
+            Event::PointerMove { pos } => {
+                if self.press == Press::Mouse {
+                    let armed_now = self.rect.contains(*pos);
+                    if armed_now != self.armed {
+                        self.armed = armed_now;
+                        ctx.request_paint();
+                    }
+                }
+                // Show the hand while the pointer is over us, so the button
+                // reads as clickable. We only receive moves when we're the hit
+                // target (hover) or capturing a press, so the `contains` check
+                // just excludes the off-button part of a press-drag.
+                if self.rect.contains(*pos) {
+                    ctx.set_cursor(Cursor::Hand);
                 }
             }
             Event::PointerUp {
@@ -281,12 +290,40 @@ impl Widget for Button {
 mod tests {
     use super::*;
     use crate::event::Modifiers;
+    use crate::geometry::Point;
 
     fn enter() -> Event {
         Event::KeyDown {
             key: Key::Named(NamedKey::Enter),
             modifiers: Modifiers::default(),
         }
+    }
+
+    fn move_to(button: &mut Button, x: i32, y: i32) -> EventCtx {
+        let mut ctx = EventCtx::new();
+        button.event(
+            &Event::PointerMove {
+                pos: Point::new(x, y),
+            },
+            &mut ctx,
+        );
+        ctx
+    }
+
+    #[test]
+    fn hovering_an_enabled_button_requests_the_hand_cursor() {
+        let mut button = Button::new(Rect::new(0, 0, 70, 26), "OK");
+        let ctx = move_to(&mut button, 10, 10);
+        assert_eq!(ctx.cursor_request, Some(Cursor::Hand));
+    }
+
+    #[test]
+    fn a_disabled_button_keeps_the_default_cursor() {
+        // Disabled buttons can't be activated, so they shouldn't promise a
+        // click with the hand — the event handler bails before requesting it.
+        let mut button = Button::new(Rect::new(0, 0, 70, 26), "OK").with_enabled(false);
+        let ctx = move_to(&mut button, 10, 10);
+        assert_eq!(ctx.cursor_request, None);
     }
 
     #[test]

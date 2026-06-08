@@ -1,4 +1,4 @@
-use crate::event::{Event, EventCtx, Key, MouseButton, NamedKey};
+use crate::event::{Cursor, Event, EventCtx, Key, MouseButton, NamedKey};
 use crate::geometry::Rect;
 use crate::include_svg;
 use crate::painter::Painter;
@@ -179,11 +179,19 @@ impl Widget for Checkbox {
                 ctx.request_focus();
                 ctx.request_paint();
             }
-            Event::PointerMove { pos } if self.pressed => {
-                let armed_now = self.rect.contains(*pos);
-                if armed_now != self.armed {
-                    self.armed = armed_now;
-                    ctx.request_paint();
+            Event::PointerMove { pos } => {
+                if self.pressed {
+                    let armed_now = self.rect.contains(*pos);
+                    if armed_now != self.armed {
+                        self.armed = armed_now;
+                        ctx.request_paint();
+                    }
+                }
+                // A checkbox is clickable, so it takes the hand too while the
+                // pointer is over it (the `contains` check excludes the
+                // off-target part of a press-drag).
+                if self.rect.contains(*pos) {
+                    ctx.set_cursor(Cursor::Hand);
                 }
             }
             Event::PointerUp {

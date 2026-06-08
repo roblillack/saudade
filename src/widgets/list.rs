@@ -1,6 +1,6 @@
 use std::time::{Duration, Instant};
 
-use crate::event::{Event, EventCtx, Key, Modifiers, MouseButton, NamedKey};
+use crate::event::{Cursor, Event, EventCtx, Key, Modifiers, MouseButton, NamedKey};
 use crate::geometry::{Color, Point, Rect};
 use crate::painter::Painter;
 use crate::svg::SvgImage;
@@ -669,6 +669,15 @@ impl Widget for List {
             return;
         }
 
+        // Past the scrollbar routing, a positional event over an actual row
+        // takes the hand — the rows are clickable. Empty space below the last
+        // row keeps the arrow.
+        if let Some(pos) = event.position()
+            && self.row_at(pos).is_some()
+        {
+            ctx.set_cursor(Cursor::Hand);
+        }
+
         match event {
             Event::PointerDown {
                 pos,
@@ -835,6 +844,24 @@ mod tests {
         click(l, 1, plain());
         click(l, 3, shift());
         assert_eq!(l.selected_indices(), &[1, 2, 3]);
+    }
+
+    #[test]
+    fn hovering_a_row_requests_the_hand() {
+        let mut l = list_with(8);
+        let mut ctx = EventCtx::new();
+        l.event(&Event::PointerMove { pos: row_point(2) }, &mut ctx);
+        assert_eq!(ctx.cursor_request, Some(Cursor::Hand));
+    }
+
+    #[test]
+    fn empty_space_below_the_rows_keeps_the_default_cursor() {
+        // Three items in a tall field: row band 7 is inside the field but past
+        // the last item, so it's not a click target.
+        let mut l = list_with(3);
+        let mut ctx = EventCtx::new();
+        l.event(&Event::PointerMove { pos: row_point(7) }, &mut ctx);
+        assert_eq!(ctx.cursor_request, None);
     }
 
     #[test]

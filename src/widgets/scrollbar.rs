@@ -1,4 +1,4 @@
-use crate::event::{Event, EventCtx, MouseButton};
+use crate::event::{Cursor, Event, EventCtx, MouseButton};
 use crate::geometry::{Color, Point, Rect};
 use crate::include_svg;
 use crate::painter::Painter;
@@ -393,6 +393,23 @@ impl Widget for ScrollBar {
             }
             _ => {}
         }
+
+        // Reflect the resulting state in the pointer shape for any positional
+        // event — computed *after* the match so a press that grabs the thumb
+        // shows the closed hand right away, not only on the first drag motion.
+        if let Some(pos) = event.position() {
+            if self.drag_offset.is_some() {
+                // Thumb drag underway — closed hand throughout, even off-thumb.
+                ctx.set_cursor(Cursor::Grabbing);
+            } else if self.neg_arrow_rect().contains(pos) || self.pos_arrow_rect().contains(pos) {
+                // The end arrows are press buttons like any other.
+                ctx.set_cursor(Cursor::Hand);
+            } else if self.max > 0 && self.thumb_rect().contains(pos) {
+                // The thumb can be grabbed (only present when there's somewhere
+                // to scroll).
+                ctx.set_cursor(Cursor::Grab);
+            }
+        }
     }
 
     fn captures_pointer(&self) -> bool {
@@ -433,4 +450,73 @@ fn draw_arrow(painter: &mut Painter, btn: Rect, orient: Orientation, dir: ArrowD
         (Orientation::Horizontal, ArrowDir::Positive) => &ARROW_RIGHT,
     };
     arrow.draw_tinted(painter, btn, color);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::event::Modifiers;
+
+    fn bar() -> ScrollBar {
+        let mut b = ScrollBar::vertical(Rect::new(0, 0, 16, 100));
+        b.set_range(10, 20); // a real range, so a draggable thumb exists
+        b
+    }
+
+    fn move_to(b: &mut ScrollBar, x: i32, y: i32) -> EventCtx {
+        let mut ctx = EventCtx::new();
+        b.event(
+            &Event::PointerMove {
+                pos: Point::new(x, y),
+            },
+            &mut ctx,
+        );
+        ctx
+    }
+
+    #[test]
+    fn the_arrow_buttons_request_the_hand() {
+        let mut b = bar();
+        // A point inside the top arrow button.
+        let ctx = move_to(&mut b, 8, 4);
+        assert_eq!(ctx.cursor_request, Some(Cursor::Hand));
+    }
+
+    #[test]
+    fn the_thumb_requests_grab_then_grabbing_while_dragged() {
+        let mut b = bar();
+        let thumb = b.thumb_rect();
+        let (cx, cy) = (thumb.x + thumb.w / 2, thumb.y + thumb.h / 2);
+
+        // Hovering the thumb: open hand.
+        assert_eq!(move_to(&mut b, cx, cy).cursor_request, Some(Cursor::Grab));
+
+        // The press itself — with no movement yet — must already show the
+        // closed hand.
+        let mut press = EventCtx::new();
+        b.event(
+            &Event::PointerDown {
+                pos: Point::new(cx, cy),
+                button: MouseButton::Left,
+                modifiers: Modifiers::default(),
+            },
+            &mut press,
+        );
+        assert_eq!(press.cursor_request, Some(Cursor::Grabbing));
+
+        // …and it stays closed through the drag motion.
+        assert_eq!(
+            move_to(&mut b, cx, cy + 5).cursor_request,
+            Some(Cursor::Grabbing)
+        );
+    }
+
+    #[test]
+    fn the_track_keeps_the_default_cursor() {
+        let mut b = bar();
+        // Just below the thumb but still on the track / page area.
+        let thumb = b.thumb_rect();
+        let ctx = move_to(&mut b, 8, thumb.bottom() + 4);
+        assert_eq!(ctx.cursor_request, None);
+    }
 }
