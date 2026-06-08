@@ -25,6 +25,17 @@ While pre-1.0, the minor version is bumped for breaking changes.
   be dragged to (in logical pixels). The window manager enforces the bound, so
   layouts never see sizes below it. (#36)
 
+### Fixed
+
+- On X11, dragging a `ScrollBar` / `Slider` thumb (or any captured press) no
+  longer stops the moment the pointer leaves the window. winit reports the
+  cursor crossing the window edge as a `CursorLeft` even while X11's implicit
+  pointer grab keeps motion flowing during a held button, so the runtime took it
+  for a real leave and ended the drag. It now ignores that leave while a button
+  is held and a widget is capturing the pointer, so the drag keeps tracking
+  up/down motion until release — matching the Wayland backend, whose compositor
+  sends no leave during its implicit grab. (#40)
+
 ## [0.3.0] - 2026-06-07
 
 ### Fixed
