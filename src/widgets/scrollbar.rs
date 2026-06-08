@@ -1,3 +1,5 @@
+use std::time::{Duration, Instant};
+
 use crate::event::{Event, EventCtx, MouseButton};
 use crate::geometry::{Color, Point, Rect};
 use crate::include_svg;
@@ -11,6 +13,43 @@ use crate::widget::Widget;
 pub const SCROLLBAR_THICKNESS: i32 = 16;
 const ARROW_BTN: i32 = SCROLLBAR_THICKNESS;
 const MIN_THUMB: i32 = 16;
+
+/// How long an arrow button must stay held before its line-step scroll begins
+/// to auto-repeat, and the steady interval between repeats once it does. These
+/// mirror a typical keyboard auto-repeat: a longer initial pause, then a
+/// regular stream of clicks for as long as the button is held.
+const REPEAT_DELAY: Duration = Duration::from_millis(300);
+const REPEAT_INTERVAL: Duration = Duration::from_millis(50);
+
+/// State of an arrow button held down with the primary mouse button. While a
+/// button is held the bar paints it depressed and auto-repeats its scroll, the
+/// same way Win 3.1's arrow buttons "machine-gun" when you hold them.
+#[derive(Clone, Copy)]
+struct HeldButton {
+    /// Which arrow is held — the same direction its single click scrolls.
+    dir: ArrowDir,
+    /// Whether the pointer is currently over the held button. The button only
+    /// paints depressed and only auto-repeats while armed; sliding the pointer
+    /// off it pauses both (and re-arms on return), mirroring how a held button
+    /// pops back out when you drag away from it.
+    armed: bool,
+    /// When the button was first pressed — drives the initial repeat delay.
+    pressed_at: Instant,
+    /// When the last auto-repeat fired — drives the steady repeat interval.
+    last_repeat: Instant,
+}
+
+impl HeldButton {
+    fn new(dir: ArrowDir) -> Self {
+        let now = Instant::now();
+        Self {
+            dir,
+            armed: true,
+            pressed_at: now,
+            last_repeat: now,
+        }
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Orientation {
@@ -39,6 +78,9 @@ pub struct ScrollBar {
     /// While dragging the thumb, the pointer's offset from the thumb's
     /// leading edge (top for vertical, left for horizontal).
     drag_offset: Option<i32>,
+    /// `Some` while an arrow button is held down — the source of the depressed
+    /// look and the click auto-repeat. `None` when no button is held.
+    held: Option<HeldButton>,
     /// Sub-line scroll-wheel remainder. Wheel / trackpad deltas arrive in
     /// fractional lines; we accumulate them here and only move `value` once a
     /// whole line has built up, so a high-resolution trackpad scrolls smoothly
@@ -56,6 +98,7 @@ impl ScrollBar {
             viewport: 0,
             line_step: 1,
             drag_offset: None,
+            held: None,
             wheel_accum: 0.0,
         }
     }
@@ -106,11 +149,14 @@ impl ScrollBar {
         self.line_step = step.max(1);
     }
 
-    /// Abandon any in-progress thumb drag. A host that can be torn down mid-drag
-    /// (e.g. a dropdown popup that closes on focus loss) calls this so a stale
-    /// `drag_offset` can't grab the thumb on the next pointer move.
+    /// Abandon any in-progress thumb drag or held arrow button. A host that can
+    /// be torn down mid-gesture (e.g. a dropdown popup that closes on focus
+    /// loss) calls this so a stale `drag_offset` can't grab the thumb on the
+    /// next pointer move, and a stale held button can't keep the bar capturing
+    /// the pointer or requesting ticks.
     pub fn end_drag(&mut self) {
         self.drag_offset = None;
+        self.held = None;
     }
 
     fn track_rect(&self) -> Rect {
@@ -223,11 +269,53 @@ impl ScrollBar {
         self.viewport.max(1)
     }
 
+    /// Rect of the arrow button currently held, if any.
+    fn held_button_rect(&self) -> Option<Rect> {
+        self.held.map(|h| match h.dir {
+            ArrowDir::Negative => self.neg_arrow_rect(),
+            ArrowDir::Positive => self.pos_arrow_rect(),
+        })
+    }
+
+    /// Drive the held-button auto-repeat from an [`Event::Tick`]. After the
+    /// initial [`REPEAT_DELAY`] from the press, scrolls one line-step every
+    /// [`REPEAT_INTERVAL`] for as long as the button stays armed. Returns `true`
+    /// if `value` actually moved, so the caller can decide whether to repaint.
+    fn tick_repeat(&mut self) -> bool {
+        let Some(held) = self.held else {
+            return false;
+        };
+        if !held.armed {
+            return false;
+        }
+        let now = Instant::now();
+        // Wait out the initial delay (timed from the press) before the first
+        // repeat, then pace the rest by the steady interval (timed from the
+        // previous repeat).
+        if now.duration_since(held.pressed_at) < REPEAT_DELAY
+            || now.duration_since(held.last_repeat) < REPEAT_INTERVAL
+        {
+            return false;
+        }
+        if let Some(h) = self.held.as_mut() {
+            h.last_repeat = now;
+        }
+        let step = match held.dir {
+            ArrowDir::Negative => -self.line_step,
+            ArrowDir::Positive => self.line_step,
+        };
+        let before = self.value;
+        self.scroll_by(step);
+        self.value != before
+    }
+
     fn handle_press(&mut self, pos: Point) {
         if self.neg_arrow_rect().contains(pos) {
             self.scroll_by(-self.line_step);
+            self.held = Some(HeldButton::new(ArrowDir::Negative));
         } else if self.pos_arrow_rect().contains(pos) {
             self.scroll_by(self.line_step);
+            self.held = Some(HeldButton::new(ArrowDir::Positive));
         } else if self.thumb_rect().contains(pos) {
             let thumb = self.thumb_rect();
             let offset = match self.orientation {
@@ -284,14 +372,30 @@ impl Widget for ScrollBar {
         let down = self.pos_arrow_rect();
         let thumb_opt = (self.max > 0).then(|| self.thumb_rect());
 
+        // A held arrow paints depressed — but only while the pointer is still
+        // over it (armed), so dragging off a held button pops it back out.
+        let (neg_pressed, pos_pressed) = match self.held {
+            Some(HeldButton {
+                dir: ArrowDir::Negative,
+                armed: true,
+                ..
+            }) => (true, false),
+            Some(HeldButton {
+                dir: ArrowDir::Positive,
+                armed: true,
+                ..
+            }) => (false, true),
+            _ => (false, false),
+        };
+
         // Track: the Win 3.1 "newsprint" checkerboard (black on gray) that shows
         // in the gap between the buttons wherever the thumb isn't.
         painter.fill_checker(self.track_rect(), theme.face, theme.border);
 
         // Buttons and thumb in the lighter frame (square outline, single
-        // top/left highlight, 2px bottom/right shadow).
-        painter.light_button(up, theme);
-        painter.light_button(down, theme);
+        // top/left highlight, 2px bottom/right shadow); a held button sinks in.
+        painter.light_button(up, theme, neg_pressed);
+        painter.light_button(down, theme, pos_pressed);
         if let Some(thumb) = thumb_opt {
             // Where the thumb sits flush against an arrow button, overlap that
             // button's frame by 1px so the thumb's black outline lands on the
@@ -320,7 +424,7 @@ impl Widget for ScrollBar {
                     }
                 }
             }
-            painter.light_button(t, theme);
+            painter.light_button(t, theme, false);
         }
 
         // A single black outline around the whole bar. Its long sides are the
@@ -334,16 +438,25 @@ impl Widget for ScrollBar {
         // (the SVGs' own black is just a placeholder). Sized to the classic
         // footprint, they are pixel-clean at 1.0x and anti-aliased (rather than
         // blocky) at fractional / HiDPI scales.
+        // A depressed button carries its glyph 1px down/right for the same
+        // tactile "pushed in" feel the dialog buttons give their labels.
+        let nudge = |r: Rect, on: bool| {
+            if on {
+                Rect::new(r.x + 1, r.y + 1, r.w, r.h)
+            } else {
+                r
+            }
+        };
         draw_arrow(
             painter,
-            up,
+            nudge(up, neg_pressed),
             self.orientation,
             ArrowDir::Negative,
             theme.text,
         );
         draw_arrow(
             painter,
-            down,
+            nudge(down, pos_pressed),
             self.orientation,
             ArrowDir::Positive,
             theme.text,
@@ -364,21 +477,44 @@ impl Widget for ScrollBar {
                 self.handle_drag(*pos);
                 ctx.request_paint();
             }
+            // While an arrow button is held, track whether the pointer is still
+            // over it: sliding off pauses the depressed look and the repeat,
+            // sliding back resumes them — the same way a real push button pops
+            // out when you drag away from it.
+            Event::PointerMove { pos } if self.held.is_some() => {
+                let over = self.held_button_rect().is_some_and(|r| r.contains(*pos));
+                if let Some(h) = self.held.as_mut()
+                    && h.armed != over
+                {
+                    h.armed = over;
+                    ctx.request_paint();
+                }
+            }
             Event::PointerUp {
                 button: MouseButton::Left,
                 ..
-            } if self.drag_offset.is_some() => {
+            } if self.drag_offset.is_some() || self.held.is_some() => {
                 self.drag_offset = None;
+                self.held = None;
                 ctx.request_paint();
             }
-            // The pointer left the window mid-drag — most often because an
+            // The pointer left the window mid-gesture — most often because an
             // outbound drag-and-drop (or a popup teardown) revoked our pointer
             // focus, so the matching release never arrives. With no OS grab to
-            // keep tracking, end the drag here; otherwise a stale `drag_offset`
-            // would make the thumb chase the cursor the moment it returns.
-            Event::PointerLeave if self.drag_offset.is_some() => {
+            // keep tracking, end the drag / release the held button here;
+            // otherwise a stale `drag_offset` would make the thumb chase the
+            // cursor when it returns, and a stale `held` would keep repeating.
+            Event::PointerLeave if self.drag_offset.is_some() || self.held.is_some() => {
                 self.drag_offset = None;
+                self.held = None;
                 ctx.request_paint();
+            }
+            // Auto-repeat the held arrow's line-step scroll at the key-repeat
+            // cadence for as long as the button stays armed.
+            Event::Tick if self.held.is_some() => {
+                if self.tick_repeat() {
+                    ctx.request_paint();
+                }
             }
             Event::Scroll {
                 delta_x, delta_y, ..
@@ -393,10 +529,23 @@ impl Widget for ScrollBar {
             }
             _ => {}
         }
+        // While a button is held, keep the animation clock alive by pushing a
+        // one-shot tick request on every event we handle (the press that grabs
+        // the button, each repeat tick, the re-arming moves). This rides the
+        // shared `EventCtx` straight to the runtime, so the bar auto-repeats
+        // even when it's buried under custom wrappers that don't forward
+        // `wants_ticks()`. Releasing the button stops the re-requests and the
+        // ticks wind down on their own.
+        if self.held.is_some() {
+            ctx.request_tick();
+        }
     }
 
     fn captures_pointer(&self) -> bool {
-        self.drag_offset.is_some()
+        // Hold the pointer while dragging the thumb or while an arrow button is
+        // held, so the move / release (and the ticks driving the repeat) keep
+        // routing here even when the host hit-tests by position.
+        self.drag_offset.is_some() || self.held.is_some()
     }
 
     fn layout(&mut self, bounds: Rect) {
@@ -433,4 +582,218 @@ fn draw_arrow(painter: &mut Painter, btn: Rect, orient: Orientation, dir: ArrowD
         (Orientation::Horizontal, ArrowDir::Positive) => &ARROW_RIGHT,
     };
     arrow.draw_tinted(painter, btn, color);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::event::Modifiers;
+
+    /// A 16×200 vertical bar with 100 lines of content, 10 of them visible —
+    /// so `value` can travel 0..=90 a single line-step at a time.
+    fn vbar() -> ScrollBar {
+        let mut sb = ScrollBar::vertical(Rect::new(0, 0, 16, 200));
+        sb.set_range(10, 90);
+        sb
+    }
+
+    fn center(r: Rect) -> Point {
+        Point::new(r.x + r.w / 2, r.y + r.h / 2)
+    }
+
+    /// Dispatch `event` and hand back the `EventCtx`, so tests can read both
+    /// `paint_requested` and the push-based `tick_requested` it set.
+    fn send(sb: &mut ScrollBar, event: Event) -> EventCtx {
+        let mut ctx = EventCtx::new();
+        sb.event(&event, &mut ctx);
+        ctx
+    }
+
+    fn press(sb: &mut ScrollBar, pos: Point) -> EventCtx {
+        send(
+            sb,
+            Event::PointerDown {
+                pos,
+                button: MouseButton::Left,
+                modifiers: Modifiers::default(),
+            },
+        )
+    }
+
+    fn release(sb: &mut ScrollBar, pos: Point) -> EventCtx {
+        send(
+            sb,
+            Event::PointerUp {
+                pos,
+                button: MouseButton::Left,
+                modifiers: Modifiers::default(),
+            },
+        )
+    }
+
+    fn tick(sb: &mut ScrollBar) -> EventCtx {
+        send(sb, Event::Tick)
+    }
+
+    /// Backdate the held button so the *next* tick is past both the initial
+    /// delay and the repeat interval — lets the repeat be tested without
+    /// actually sleeping.
+    fn ripen_repeat(sb: &mut ScrollBar) {
+        let past = Instant::now()
+            .checked_sub(REPEAT_DELAY + REPEAT_INTERVAL)
+            .expect("clock is far enough past the epoch");
+        let h = sb.held.as_mut().expect("a button is held");
+        h.pressed_at = past;
+        h.last_repeat = past;
+    }
+
+    #[test]
+    fn pressing_an_arrow_scrolls_one_step_and_grabs_the_pointer() {
+        let mut sb = vbar();
+        let p = center(sb.pos_arrow_rect());
+        let ctx = press(&mut sb, p);
+        assert_eq!(sb.value(), 1, "the press itself scrolls one line-step");
+        assert!(sb.captures_pointer(), "a held button captures the pointer");
+        assert!(
+            ctx.tick_requested,
+            "a held button pushes a tick request to drive the repeat"
+        );
+    }
+
+    #[test]
+    fn releasing_the_button_ends_the_repeat() {
+        let mut sb = vbar();
+        let p = center(sb.pos_arrow_rect());
+        press(&mut sb, p);
+        let ctx = release(&mut sb, p);
+        assert!(!sb.captures_pointer(), "the pointer is freed on release");
+        assert!(
+            !ctx.tick_requested,
+            "and the bar stops re-requesting ticks, so they wind down"
+        );
+    }
+
+    #[test]
+    fn no_repeat_before_the_initial_delay_elapses() {
+        let mut sb = vbar();
+        let p = center(sb.pos_arrow_rect());
+        press(&mut sb, p);
+        // A tick right after the press is inside the initial delay.
+        let ctx = tick(&mut sb);
+        assert_eq!(sb.value(), 1, "the button doesn't repeat during the delay");
+        assert!(!ctx.paint_requested, "nothing moved, so no repaint");
+        assert!(
+            ctx.tick_requested,
+            "but the held button keeps the clock alive through the delay"
+        );
+    }
+
+    #[test]
+    fn the_repeat_fires_once_the_delay_has_elapsed() {
+        let mut sb = vbar();
+        let p = center(sb.pos_arrow_rect());
+        press(&mut sb, p);
+        ripen_repeat(&mut sb);
+        let ctx = tick(&mut sb);
+        assert_eq!(sb.value(), 2, "a ripe held button repeats its line-step");
+        assert!(
+            ctx.paint_requested,
+            "a repeat that moves asks for a repaint"
+        );
+        assert!(ctx.tick_requested, "and keeps requesting the next tick");
+    }
+
+    #[test]
+    fn sliding_off_the_held_button_pauses_the_repeat() {
+        let mut sb = vbar();
+        let p = center(sb.pos_arrow_rect());
+        press(&mut sb, p);
+        // Move onto the track, away from the held arrow: still held, disarmed.
+        let off = center(sb.track_rect());
+        send(&mut sb, Event::PointerMove { pos: off });
+        ripen_repeat(&mut sb);
+        let ctx = tick(&mut sb);
+        assert_eq!(
+            sb.value(),
+            1,
+            "an off-button (disarmed) hold doesn't repeat"
+        );
+        assert!(sb.captures_pointer(), "but the hold persists until release");
+        assert!(
+            ctx.tick_requested,
+            "and the clock keeps running so a slide back can resume it"
+        );
+    }
+
+    #[test]
+    fn the_up_arrow_at_the_top_holds_without_underflowing() {
+        let mut sb = vbar();
+        let p = center(sb.neg_arrow_rect());
+        press(&mut sb, p);
+        assert_eq!(sb.value(), 0, "already at the top, value can't go negative");
+        assert!(
+            sb.captures_pointer(),
+            "the button still grabs so the release lands here"
+        );
+    }
+
+    #[test]
+    fn pointer_leave_releases_a_held_button() {
+        let mut sb = vbar();
+        let p = center(sb.pos_arrow_rect());
+        press(&mut sb, p);
+        let ctx = send(&mut sb, Event::PointerLeave);
+        assert!(!sb.captures_pointer(), "leaving the window ends the hold");
+        assert!(!ctx.tick_requested, "and stops the tick re-requests");
+    }
+
+    /// A minimal host that forwards events to an inner scrollbar but
+    /// deliberately does *not* override `wants_ticks` — so the pull model would
+    /// never schedule a tick for it. Stands in for a custom wrapper widget like
+    /// the `filer` example's `FileBrowser`.
+    struct BareWrapper(ScrollBar);
+
+    impl Widget for BareWrapper {
+        fn bounds(&self) -> Rect {
+            self.0.bounds()
+        }
+        fn paint(&mut self, _painter: &mut Painter, _theme: &Theme) {}
+        fn event(&mut self, event: &Event, ctx: &mut EventCtx) {
+            self.0.event(event, ctx);
+        }
+        fn layout(&mut self, bounds: Rect) {
+            self.0.layout(bounds);
+        }
+    }
+
+    #[test]
+    fn a_held_button_requests_ticks_through_a_non_forwarding_wrapper() {
+        let mut host = BareWrapper(vbar());
+        // The wrapper never forwards tick appetite, so `wants_ticks()` is dead.
+        assert!(
+            !host.wants_ticks(),
+            "the wrapper doesn't forward wants_ticks"
+        );
+
+        // Pressing the arrow *through* the wrapper still pushes a tick request
+        // all the way to the top via the shared `EventCtx`.
+        let p = center(host.0.pos_arrow_rect());
+        let mut ctx = EventCtx::new();
+        host.event(
+            &Event::PointerDown {
+                pos: p,
+                button: MouseButton::Left,
+                modifiers: Modifiers::default(),
+            },
+            &mut ctx,
+        );
+        assert!(
+            ctx.tick_requested,
+            "the held scrollbar's tick request reaches the top with no forwarding"
+        );
+        assert!(
+            !host.wants_ticks(),
+            "and it never had to rely on wants_ticks to do so"
+        );
+    }
 }
