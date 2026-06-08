@@ -60,6 +60,11 @@ While pre-1.0, the minor version is bumped for breaking changes.
 
 ### Fixed
 
+- On Wayland, the mouse pointer could keep a stale shape when entering a window
+  or surface. Wayland leaves the pointer image undefined on `wl_pointer.enter`
+  and makes the client set it, but the runtime deduplicated against the last
+  shape it had shown and so skipped re-establishing the arrow on entry. It now
+  forces the cursor shape on every enter (plain motion still dedups). (#42)
 - On X11, dragging a `ScrollBar` / `Slider` thumb (or any captured press) no
   longer stops the moment the pointer leaves the window. winit reports the
   cursor crossing the window edge as a `CursorLeft` even while X11's implicit
