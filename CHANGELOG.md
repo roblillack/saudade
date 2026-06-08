@@ -12,6 +12,11 @@ While pre-1.0, the minor version is bumped for breaking changes.
 
 ### Added
 
+- `MockBackend::render_framed` now paints the window background pattern behind
+  the content for regular (resizable / fixed) windows, matching the live
+  backend's main surface; dialogs stay plain, as they do on screen. The pattern
+  defaults to the live default (a `superlight` forward-diagonal hatch) and is
+  overridable with the new `MockBackend::with_background_pattern`. (#38)
 - `List` gained optional multi-selection, off by default so existing
   single-selection lists are unchanged. Enable it with `List::with_multi_select`
   / `set_multi_select`: Ctrl/Cmd+click toggles a row, Shift+click and Shift+Arrow
