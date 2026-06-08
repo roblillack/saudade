@@ -722,15 +722,24 @@ impl State {
     /// Reconcile the pointer shape after a [`PointerMove`](Event::PointerMove)
     /// dispatch: show whatever the widget under the pointer asked for (or the
     /// arrow if none did). The last shape is remembered so an unchanged hover
-    /// doesn't re-issue a request. An in-flight *outbound* drag drives the
-    /// cursor itself (copy / no-drop), so we stay out of its way while one is
-    /// live.
-    fn apply_cursor(&mut self, requested: Option<Cursor>) {
+    /// doesn't re-issue a request — except when `force` is set, which always
+    /// emits the shape.
+    ///
+    /// `force` is used on `wl_pointer.enter`: Wayland leaves the pointer image
+    /// *undefined* when the pointer enters a surface and makes the client
+    /// responsible for setting it, so we can't trust our remembered shape (it
+    /// may have been the previous surface's) and must re-establish it — even
+    /// when it's the plain arrow. A subsequent motion that doesn't change the
+    /// shape can still skip the request.
+    ///
+    /// An in-flight *outbound* drag drives the cursor itself (copy / no-drop),
+    /// so we stay out of its way while one is live.
+    fn apply_cursor(&mut self, requested: Option<Cursor>, force: bool) {
         if self.drag_source.is_some() {
             return;
         }
         let want = requested.unwrap_or(Cursor::Default);
-        if self.cursor_shape == want {
+        if !force && self.cursor_shape == want {
             return;
         }
         self.cursor_shape = want;
@@ -1462,10 +1471,12 @@ impl PointerHandler for State {
                         None => self.cursor = Some(pos),
                     }
                     let ctx = self.dispatch(Event::PointerMove { pos });
-                    // Show the shape the widget under the pointer asked for —
-                    // the enter serial SCTK just recorded is what `set_shape`
-                    // rides on.
-                    self.apply_cursor(ctx.cursor_request);
+                    // Show the shape the widget under the pointer asked for. On
+                    // enter we *must* set it — Wayland leaves the pointer image
+                    // undefined there — so force it then; the enter serial SCTK
+                    // just recorded is what `set_shape` rides on.
+                    let entered = matches!(event.kind, PointerEventKind::Enter { .. });
+                    self.apply_cursor(ctx.cursor_request, entered);
                     self.mark_popups_dirty();
                 }
                 PointerEventKind::Leave { .. } => {
@@ -1474,8 +1485,9 @@ impl PointerHandler for State {
                         None => self.cursor = None,
                     }
                     self.dispatch(Event::PointerLeave);
-                    // The compositor restores its default cursor on leave, so
-                    // forget what we'd shown; the next enter re-applies it.
+                    // The pointer image is the next surface's responsibility now;
+                    // forget what we'd shown so the next enter re-establishes it
+                    // unconditionally (see `apply_cursor`'s `force`).
                     self.cursor_shape = Cursor::Default;
                 }
                 PointerEventKind::Press { button, serial, .. } => {
