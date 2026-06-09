@@ -747,8 +747,8 @@ let text: String = editor.text();
 The editor renders with the monospace font loaded by the runtime
 (Consolas / Courier / Liberation Mono / DejaVu Sans Mono, in that
 preference order). The rest of the UI (menu labels, dialog text) keeps
-the proportional default — pick whichever font you want per call via
-`Painter::text` vs `Painter::mono_text`.
+the proportional default — pick whichever family you want per call via
+`Painter::text` (sans) vs `Painter::text_styled(.., FontFamily::Mono, ..)`.
 
 Editing operations:
 
@@ -1087,22 +1087,31 @@ matches `resvg`'s rasterization to within ~0.5% per channel).
 
 ## Font handling
 
-`Font::load_system()` walks `fontdb` for a reasonable proportional sans
+`Font::load_sans()` walks `fontdb` for a reasonable proportional sans
 serif, preferring MS Sans Serif → Microsoft Sans Serif → Tahoma → Segoe
 UI → Arial → Helvetica → Geneva → DejaVu Sans → Liberation Sans, then
 falling back to any face it can load. Returns `Option<Font>` — `None`
 means no font was found, and the painter silently skips text.
 
-The runtime calls `Font::load_system()` once at startup and hands the
-font reference to every `Painter` it constructs.
+`Font::load_serif()` and `Font::load_monospace()` load the other two
+families the same way — the serif preferring Times New Roman → Georgia →
+… and the monospace preferring Lucida Console → Consolas → Courier New →
+Courier → Liberation Mono → DejaVu Sans Mono → Menlo → Monaco (with
+fontdb's monospace flag as a last-ditch fallback). Each `Font` is a whole
+family: alongside the regular face, the loader also pulls the host's real
+**bold**, *italic*, and ***bold-italic*** faces of that family (verified
+against fontdb so a regular face is never passed off as styled). A style
+the system has no face for falls back to the nearest real face — never a
+synthesized smear or shear.
 
-A monospace counterpart is loaded the same way via
-`Font::load_monospace`, preferring Lucida Console → Consolas → Courier
-New → Courier → Liberation Mono → DejaVu Sans Mono → Menlo → Monaco. If
-none of those match, fontdb's monospace flag is used as a fallback.
-`Painter::mono_text` / `Painter::measure_mono_text` use that font;
-`Painter::text` / `Painter::measure_text` keep using the proportional
-default.
+The runtime loads all three once at startup and hands them to every
+`Painter` it constructs as a `FontSet { sans, serif, mono }`. Draw and
+measure in a specific family and weight with `Painter::text_styled(..,
+family, style)` / `Painter::measure_text_styled(.., family, style)`,
+choosing a `FontFamily` (`Sans` / `Serif` / `Mono`) and a `FontStyle`
+(`Regular` / `Bold` / `Italic` / `BoldItalic`). `Painter::text` /
+`Painter::measure_text` are the sans-regular shorthand; the text editors
+draw with the mono family.
 
 Saudade does **not** ship a bundled bitmap font, so its text rendering
 inherits the local system font. The Win 3.1 chrome still looks right,

@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 use crate::event::{Cursor, Event, EventCtx, Key, MouseButton, NamedKey};
+use crate::font::{FontFamily, FontStyle};
 use crate::geometry::{Color, Point, Rect};
 use crate::painter::Painter;
 use crate::theme::Theme;
@@ -581,7 +582,12 @@ impl Widget for TextEditor {
             if row >= self.lines.len() {
                 break;
             }
-            let widths = painter.mono_cumulative_widths(&self.lines[row], self.font_size);
+            let widths = painter.cumulative_widths(
+                &self.lines[row],
+                self.font_size,
+                FontFamily::Mono,
+                FontStyle::Regular,
+            );
             self.cumulative_widths.insert(row, widths);
         }
 
@@ -596,12 +602,14 @@ impl Widget for TextEditor {
                 self.paint_line(painter, theme, row, text_x, y, selection);
             } else {
                 // Disabled: plain greyed text, no selection band.
-                painter.mono_text(
+                painter.text_styled(
                     text_x,
                     y,
                     &self.lines[row],
                     self.font_size,
                     theme.disabled_text,
+                    FontFamily::Mono,
+                    FontStyle::Regular,
                 );
             }
         }
@@ -959,13 +967,45 @@ impl TextEditor {
             let before: String = line.chars().take(s).collect();
             let middle: String = line.chars().skip(s).take(e - s).collect();
             let after: String = line.chars().skip(e).collect();
-            painter.mono_text(text_x, y, &before, self.font_size, theme.text);
+            painter.text_styled(
+                text_x,
+                y,
+                &before,
+                self.font_size,
+                theme.text,
+                FontFamily::Mono,
+                FontStyle::Regular,
+            );
             let middle_x = text_x + widths.get(s).copied().unwrap_or(0);
-            painter.mono_text(middle_x, y, &middle, self.font_size, sel_text);
+            painter.text_styled(
+                middle_x,
+                y,
+                &middle,
+                self.font_size,
+                sel_text,
+                FontFamily::Mono,
+                FontStyle::Regular,
+            );
             let after_x = text_x + widths.get(e).copied().unwrap_or(0);
-            painter.mono_text(after_x, y, &after, self.font_size, theme.text);
+            painter.text_styled(
+                after_x,
+                y,
+                &after,
+                self.font_size,
+                theme.text,
+                FontFamily::Mono,
+                FontStyle::Regular,
+            );
         } else {
-            painter.mono_text(text_x, y, line, self.font_size, theme.text);
+            painter.text_styled(
+                text_x,
+                y,
+                line,
+                self.font_size,
+                theme.text,
+                FontFamily::Mono,
+                FontStyle::Regular,
+            );
         }
     }
 }

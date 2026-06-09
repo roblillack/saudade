@@ -4,8 +4,8 @@
 
 use saudade::mock::MockBackend;
 use saudade::{
-    Color, Column, Dropdown, Event, EventCtx, Modal, Painter, PopupKind, PopupRequest, Rect, Size,
-    Theme, Widget,
+    Color, Column, Dropdown, Event, EventCtx, FontSet, Modal, Painter, PopupKind, PopupRequest,
+    Rect, Size, Theme, Widget,
 };
 
 /// Allocate a buffer big enough to hold `w × h` pixels and run `f` against a
@@ -15,7 +15,7 @@ fn render_into(anchor: Option<Rect>, w: i32, h: i32, mut f: impl FnMut(&mut Pain
     let mut pixels = vec![0u32; (w * h) as usize];
     {
         let mut painter =
-            Painter::with_popup_anchor(&mut pixels, w, h, 1.0, 0, 0, None, None, anchor);
+            Painter::with_popup_anchor(&mut pixels, w, h, 1.0, 0, 0, FontSet::default(), anchor);
         f(&mut painter);
     }
     pixels
