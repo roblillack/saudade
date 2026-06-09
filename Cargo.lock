@@ -1516,7 +1516,7 @@ dependencies = [
 
 [[package]]
 name = "saudade"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "arboard",
  "fontdb 0.16.2",
