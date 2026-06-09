@@ -734,7 +734,14 @@ impl Widget for List {
             bounds.h,
         );
         self.v_scrollbar.set_rect(sb_rect);
-        self.ensure_selection_visible();
+        // Only re-sync the scrollbar's range to the new viewport — don't snap
+        // the view to the selection. A layout pass fires for reasons unrelated
+        // to selection (on Wayland a window focus change triggers a `configure`
+        // and hence a relayout), so scrolling to the lead row here would yank a
+        // wheel-scrolled view back to the selection whenever the window lost or
+        // regained focus. Selection changes and keyboard nav call
+        // `ensure_selection_visible` themselves, so the cursor still follows.
+        self.sync_scrollbar();
     }
 }
 
@@ -984,5 +991,44 @@ mod tests {
         click(&mut l, 2, plain()); // second click of the pair → activation
         assert_eq!(l.selected_indices(), &[2]);
         assert_eq!(l.take_activated(), Some(2));
+    }
+
+    /// A wheel-scrolled list with a selection must not jump back to that
+    /// selection on a relayout that isn't a resize. On Wayland a window focus
+    /// change triggers a `configure` (and a relayout), so a `layout()` that
+    /// snapped to the selection would yank the view back the moment the window
+    /// lost or regained focus — the list analogue of the notepad caret jump.
+    #[test]
+    fn relayout_preserves_wheel_scroll() {
+        let rect = Rect::new(0, 0, 200, 120);
+        let items = (0..100)
+            .map(|i| ListItem::new(format!("item {i}")))
+            .collect();
+        let mut l = List::new(rect).with_items(items);
+        l.layout(rect);
+
+        // Select the top row, then wheel far down so the selection scrolls out
+        // of view above the viewport.
+        l.set_selected(Some(0));
+        assert_eq!(l.scroll_top(), 0);
+        let mut ctx = EventCtx::new();
+        l.event(
+            &Event::Scroll {
+                pos: Point::new(100, 60),
+                delta_x: 0.0,
+                delta_y: 40.0,
+            },
+            &mut ctx,
+        );
+        let scrolled = l.scroll_top();
+        assert!(scrolled > 0, "wheel should have moved the view down");
+
+        // Window focus change → relayout at the same size. The view stays put.
+        l.layout(rect);
+        assert_eq!(
+            l.scroll_top(),
+            scrolled,
+            "a relayout (e.g. on window focus change) must not jump to the selection"
+        );
     }
 }
