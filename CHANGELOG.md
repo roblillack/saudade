@@ -21,7 +21,7 @@ While pre-1.0, the minor version is bumped for breaking changes.
   changed (visible in the `notepad` example as the caret jumping to the first
   line). `layout` now only re-clamps the scroll range to the new viewport;
   edits, keyboard navigation, and selection changes still scroll the
-  caret/selection into view as before.
+  caret/selection into view as before. (#43)
 
 ## [0.4.0] - 2026-06-08
 
