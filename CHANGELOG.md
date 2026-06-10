@@ -56,6 +56,19 @@ While pre-1.0, the minor version is bumped for breaking changes.
   `Painter::cumulative_widths(text, size, family, style)`. `Font::cumulative_widths`
   likewise gains a `FontStyle` argument.
 
+### Fixed
+
+- `TextEditor` and `List` no longer jump their scroll position back to the
+  caret / selected row when the window merely gains or loses focus. Their
+  `layout` re-synced the scrollbar range *and* scrolled the caret/selection into
+  view, but a layout pass also fires for reasons unrelated to editing — on
+  Wayland the compositor sends a `configure` (hence a relayout) on every
+  activation change — so a wheel-scrolled view snapped back the instant focus
+  changed (visible in the `notepad` example as the caret jumping to the first
+  line). `layout` now only re-clamps the scroll range to the new viewport;
+  edits, keyboard navigation, and selection changes still scroll the
+  caret/selection into view as before. (#43)
+
 ## [0.4.0] - 2026-06-08
 
 ### Added

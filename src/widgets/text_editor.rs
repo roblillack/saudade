@@ -905,7 +905,14 @@ impl Widget for TextEditor {
             bounds.h,
         );
         self.v_scrollbar.set_rect(sb_rect);
-        self.ensure_cursor_visible();
+        // Re-sync the scrollbar's range to the new viewport height and clamp the
+        // current scroll into it — but DON'T snap the view to the caret. A
+        // layout pass fires for reasons unrelated to editing: on Wayland the
+        // compositor sends a `configure` (hence a relayout) every time the
+        // window's activation state changes, so forcing the cursor into view
+        // here would yank a wheel-scrolled view back to the caret (line 0 for a
+        // freshly opened file) the moment the window lost or regained focus.
+        self.sync_scrollbar();
     }
 }
 
@@ -1024,4 +1031,58 @@ fn draw_unfocused_caret(painter: &mut Painter, cx: i32, top_y: i32, color: Color
     painter.pixel(cx - 1, top_y + 1, color);
     painter.pixel(cx, top_y + 1, color);
     painter.pixel(cx + 1, top_y + 1, color);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn dispatch(editor: &mut TextEditor, event: &Event) {
+        let mut ctx = EventCtx::new();
+        editor.event(event, &mut ctx);
+    }
+
+    /// A wheel-scrolled view must survive a relayout that isn't a resize. On
+    /// Wayland the compositor sends a `configure` — and the runtime a relayout —
+    /// every time the window's activation state changes, so a `layout()` that
+    /// snapped the view to the caret made the notepad example jump back to the
+    /// first line the instant the window lost or regained focus.
+    #[test]
+    fn relayout_preserves_wheel_scroll() {
+        let rect = Rect::new(0, 0, 200, 120);
+        let text = (0..100)
+            .map(|i| format!("line {i}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        // A freshly opened document: the caret sits at the top (set_text leaves
+        // the cursor on line 0) and the view starts at the top.
+        let mut editor = TextEditor::new(rect).with_text(&text);
+        editor.layout(rect);
+        assert_eq!(editor.cursor, (0, 0));
+        assert_eq!(editor.scroll_top(), 0);
+
+        // Wheel down past the first page. The wheel scrolls the view and leaves
+        // the caret where it is, so the caret ends up offscreen above the view.
+        dispatch(
+            &mut editor,
+            &Event::Scroll {
+                pos: Point::new(100, 60),
+                delta_x: 0.0,
+                delta_y: 40.0,
+            },
+        );
+        let scrolled = editor.scroll_top();
+        assert!(scrolled > 0, "wheel should have moved the view down");
+        assert_eq!(editor.cursor, (0, 0), "wheel must not move the caret");
+
+        // The window loses focus: the runtime relayouts at the same size. The
+        // view must stay put — not snap back to the caret on line 0.
+        editor.layout(rect);
+        assert_eq!(
+            editor.scroll_top(),
+            scrolled,
+            "a relayout (e.g. on window focus change) must not jump to the caret"
+        );
+    }
 }
