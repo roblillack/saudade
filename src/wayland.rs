@@ -70,7 +70,7 @@ use crate::event::{
     Cursor, DragData, Event, EventCtx, Key, Modifiers, MouseButton, NamedKey,
     SCROLL_PIXELS_PER_LINE, WHEEL_LINES_PER_DETENT,
 };
-use crate::font::Font;
+use crate::font::{Font, FontSet};
 use crate::geometry::{Color, Point, Rect, Size};
 use crate::painter::Painter;
 use crate::theme::Theme;
@@ -170,7 +170,8 @@ pub(crate) fn run(app: App) {
         window,
         root,
         theme,
-        font: Font::load_system(),
+        font: Font::load_sans(),
+        serif_font: Font::load_serif(),
         mono_font: Font::load_monospace(),
 
         pool,
@@ -234,6 +235,7 @@ struct State {
     root: Box<dyn Widget>,
     theme: Theme,
     font: Option<Font>,
+    serif_font: Option<Font>,
     mono_font: Option<Font>,
 
     pool: SlotPool,
@@ -636,8 +638,11 @@ impl State {
                 icon.scale as f32,
                 0,
                 0,
-                self.font.as_ref(),
-                self.mono_font.as_ref(),
+                FontSet {
+                    sans: self.font.as_ref(),
+                    serif: self.serif_font.as_ref(),
+                    mono: self.mono_font.as_ref(),
+                },
                 None,
             );
             painter.set_system_scale(self.fractional_scale.unwrap_or(icon.scale as f32));
@@ -796,8 +801,11 @@ impl State {
             scale as f32,
             0,
             0,
-            self.font.as_ref(),
-            self.mono_font.as_ref(),
+            FontSet {
+                sans: self.font.as_ref(),
+                serif: self.serif_font.as_ref(),
+                mono: self.mono_font.as_ref(),
+            },
             None,
         );
         // Report the true display scale (e.g. 1.5) when the compositor gives it
@@ -854,8 +862,11 @@ impl State {
             scale_f,
             origin_x,
             origin_y,
-            self.font.as_ref(),
-            self.mono_font.as_ref(),
+            FontSet {
+                sans: self.font.as_ref(),
+                serif: self.serif_font.as_ref(),
+                mono: self.mono_font.as_ref(),
+            },
             Some(anchor),
         );
         painter.set_system_scale(self.fractional_scale.unwrap_or(scale_f));

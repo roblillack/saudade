@@ -1437,7 +1437,7 @@ fn snapshot_facility_smoke_test() {
     );
     let backend = MockBackend::new(40, 20)
         .with_scale(1.0)
-        .with_font(common::sans_font())
+        .with_sans_font(common::sans_font())
         .with_mono_font(common::mono_font());
     let snap = backend.render(root.as_mut());
     assert_eq!(snap.width(), 40);

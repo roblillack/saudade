@@ -307,13 +307,14 @@ fn add_span(cov: &mut [f32], base_x: i32, xa: f32, xb: f32, weight: f32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::FontSet;
 
     /// Paint `image` into a fresh `size × size` device buffer over `WHITE` at
     /// scale 1.0 and return the pixels.
     fn render(image: &SvgImage, size: i32) -> Vec<u32> {
         let mut pixels = vec![Color::WHITE.0; (size * size) as usize];
         {
-            let mut p = Painter::new(&mut pixels, size, size, 1.0, 0, 0, None, None);
+            let mut p = Painter::new(&mut pixels, size, size, 1.0, 0, 0, FontSet::default());
             image.draw(&mut p, Rect::new(0, 0, size, size));
         }
         pixels
@@ -348,7 +349,7 @@ mod tests {
         let size = 8;
         let mut px = vec![Color::WHITE.0; (size * size) as usize];
         {
-            let mut p = Painter::new(&mut px, size, size, 1.0, 0, 0, None, None);
+            let mut p = Painter::new(&mut px, size, size, 1.0, 0, 0, FontSet::default());
             SQUARE.draw_tinted(&mut p, Rect::new(0, 0, size, size), Color::RED);
         }
         let at = |x: i32, y: i32| Color(px[(y * size + x) as usize]);
@@ -419,7 +420,7 @@ mod tests {
         // Draw into a 3x1 footprint at scale 1 so 1 viewBox unit == 1 px.
         let mut pixels = vec![Color::WHITE.0; 3];
         {
-            let mut p = Painter::new(&mut pixels, 3, 1, 1.0, 0, 0, None, None);
+            let mut p = Painter::new(&mut pixels, 3, 1, 1.0, 0, 0, FontSet::default());
             half.draw(&mut p, Rect::new(0, 0, 3, 1));
         }
         assert_eq!(Color(pixels[0]), Color::BLACK, "fully covered column");
