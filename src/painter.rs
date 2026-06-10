@@ -1117,7 +1117,7 @@ mod tests {
         // A 2×2 source: red, green / blue, white (already opaque ARGB).
         let src = [0xFFFF0000, 0xFF00FF00, 0xFF0000FF, 0xFFFFFFFF];
         {
-            let mut p = Painter::new(&mut pixels, w, h, 1.0, 0, 0, None, None);
+            let mut p = Painter::new(&mut pixels, w, h, 1.0, 0, 0, FontSet::default());
             p.blit_argb(3, 2, 2, 2, &src);
         }
         let at = |x: i32, y: i32| pixels[(y * w + x) as usize];
@@ -1138,7 +1138,7 @@ mod tests {
         let mut pixels = vec![0u32; (w * h) as usize];
         let src = [0xFFFF0000, 0xFF00FF00, 0xFF0000FF, 0xFFFFFFFF];
         {
-            let mut p = Painter::new(&mut pixels, w, h, 2.0, 0, 0, None, None);
+            let mut p = Painter::new(&mut pixels, w, h, 2.0, 0, 0, FontSet::default());
             // Logical (1,1): the top-left source pixel maps to the 2×2 device
             // block anchored at (2,2).
             p.blit_argb(1, 1, 2, 2, &src);
@@ -1163,7 +1163,7 @@ mod tests {
         let mut pixels = vec![0u32; (w * h) as usize];
         let src = vec![0xFFFFFFFFu32; 16]; // 4×4 opaque white
         {
-            let mut p = Painter::new(&mut pixels, w, h, 1.0, 0, 0, None, None);
+            let mut p = Painter::new(&mut pixels, w, h, 1.0, 0, 0, FontSet::default());
             // Clip to a 2×2 window; only that corner of the 4×4 blit survives.
             p.set_clip_phys(1, 1, 2, 2);
             p.blit_argb(0, 0, 4, 4, &src);
