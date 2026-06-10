@@ -25,7 +25,7 @@
 use crate::background::{BackgroundPattern, BackgroundState, PATTERN_COLORS};
 use crate::chrome::{self, WindowChrome};
 use crate::event::{Event, EventCtx};
-use crate::font::Font;
+use crate::font::{Font, FontSet};
 use crate::geometry::{Color, Rect, Size};
 use crate::painter::Painter;
 use crate::theme::Theme;
@@ -37,6 +37,7 @@ pub struct MockBackend {
     scale: f32,
     theme: Theme,
     font: Option<Font>,
+    serif_font: Option<Font>,
     mono_font: Option<Font>,
     /// The window background pattern painted behind the widget tree, exactly
     /// as the live backend's main surface does. Only [`Self::render_framed`]
@@ -65,6 +66,7 @@ impl MockBackend {
             scale: 1.0,
             theme: Theme::default(),
             font: None,
+            serif_font: None,
             mono_font: None,
             // The live runtime's default backdrop (`BackgroundState::from_env`
             // with nothing set): a `superlight` forward-diagonal hatch.
@@ -87,15 +89,23 @@ impl MockBackend {
         self
     }
 
-    /// Supply the proportional font used for [`Painter::text`]. Tests
-    /// should bundle a known font (e.g. via `include_bytes!`) so glyph
-    /// output stays byte-identical across machines.
-    pub fn with_font(mut self, font: Font) -> Self {
+    /// Supply the sans-serif font used for [`Painter::text`]. Tests should
+    /// bundle a known font (e.g. via `include_bytes!`) so glyph output stays
+    /// byte-identical across machines.
+    pub fn with_sans_font(mut self, font: Font) -> Self {
         self.font = Some(font);
         self
     }
 
-    /// Supply the monospace font used for [`Painter::mono_text`].
+    /// Supply the serif font used for [`Painter::text_styled`] with
+    /// [`FontFamily::Serif`](crate::FontFamily::Serif).
+    pub fn with_serif_font(mut self, font: Font) -> Self {
+        self.serif_font = Some(font);
+        self
+    }
+
+    /// Supply the monospace font used by the text editors and by
+    /// [`Painter::text_styled`] with [`FontFamily::Mono`](crate::FontFamily::Mono).
     pub fn with_mono_font(mut self, font: Font) -> Self {
         self.mono_font = Some(font);
         self
@@ -167,8 +177,11 @@ impl MockBackend {
                 self.scale,
                 origin_x,
                 origin_y,
-                self.font.as_ref(),
-                self.mono_font.as_ref(),
+                FontSet {
+                    sans: self.font.as_ref(),
+                    serif: self.serif_font.as_ref(),
+                    mono: self.mono_font.as_ref(),
+                },
                 None,
             );
             match backdrop {
@@ -197,8 +210,11 @@ impl MockBackend {
                 self.scale,
                 origin_x,
                 origin_y,
-                self.font.as_ref(),
-                self.mono_font.as_ref(),
+                FontSet {
+                    sans: self.font.as_ref(),
+                    serif: self.serif_font.as_ref(),
+                    mono: self.mono_font.as_ref(),
+                },
                 Some(req.rect),
             );
             painter.set_clip_phys(popup_phys_x, popup_phys_y, popup_phys_w, popup_phys_h);
@@ -255,8 +271,11 @@ impl MockBackend {
                 1.0,
                 0,
                 0,
-                self.font.as_ref(),
-                self.mono_font.as_ref(),
+                FontSet {
+                    sans: self.font.as_ref(),
+                    serif: self.serif_font.as_ref(),
+                    mono: self.mono_font.as_ref(),
+                },
             );
             chrome::paint(&mut painter, &m, chrome);
         }

@@ -25,7 +25,7 @@ use crate::event::{
     Cursor, DragData, Event, EventCtx, Key, Modifiers, MouseButton, NamedKey,
     SCROLL_PIXELS_PER_LINE, WHEEL_LINES_PER_DETENT,
 };
-use crate::font::Font;
+use crate::font::{Font, FontSet};
 use crate::geometry::{Point, Rect, Size};
 use crate::painter::Painter;
 use crate::theme::Theme;
@@ -131,6 +131,7 @@ struct AppHandler {
     theme: Theme,
     root: Box<dyn Widget>,
     font: Option<Font>,
+    serif_font: Option<Font>,
     mono_font: Option<Font>,
 
     // Resources created in `resumed`:
@@ -280,7 +281,8 @@ impl AppHandler {
             design_size,
             theme: app.theme,
             root: app.root,
-            font: Font::load_system(),
+            font: Font::load_sans(),
+            serif_font: Font::load_serif(),
             mono_font: Font::load_monospace(),
             main_win: None,
             main_id: None,
@@ -887,8 +889,11 @@ impl AppHandler {
             self.scale,
             origin_x,
             origin_y,
-            self.font.as_ref(),
-            self.mono_font.as_ref(),
+            FontSet {
+                sans: self.font.as_ref(),
+                serif: self.serif_font.as_ref(),
+                mono: self.mono_font.as_ref(),
+            },
             None,
         );
         painter.fill_pattern(self.theme.background, self.bg.pattern, self.bg.color);
@@ -918,8 +923,11 @@ impl AppHandler {
             p.scale,
             origin_x,
             origin_y,
-            self.font.as_ref(),
-            self.mono_font.as_ref(),
+            FontSet {
+                sans: self.font.as_ref(),
+                serif: self.serif_font.as_ref(),
+                mono: self.mono_font.as_ref(),
+            },
             Some(anchor),
         );
         painter.fill(self.theme.background);

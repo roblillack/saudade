@@ -1,5 +1,5 @@
 use crate::background::BackgroundPattern;
-use crate::font::Font;
+use crate::font::{Font, FontFamily, FontSet, FontStyle};
 use crate::geometry::{Color, Rect, Size};
 use crate::theme::Theme;
 
@@ -40,13 +40,11 @@ pub struct Painter<'a> {
     /// resized larger than the design — surroundings become clean letterbox.
     origin_x: i32,
     origin_y: i32,
-    /// Default proportional font, used by `text`/`text_centered`/etc. Most
-    /// widgets pick this up via the `Theme`.
-    font: Option<&'a Font>,
-    /// Fixed-width font, used by text-editor widgets that need predictable
-    /// per-character advances. May be the same physical face as `font` on
-    /// systems where no dedicated monospace face was discovered.
-    mono_font: Option<&'a Font>,
+    /// The sans / serif / mono families this painter draws with. `text` /
+    /// `text_centered` and `measure_text` use the sans family; the text editors
+    /// use the mono family; `text_styled` / `measure_text_styled` pick a family
+    /// explicitly. Any family may be `None` (its draws no-op).
+    fonts: FontSet<'a>,
     /// `Some(anchor)` when this painter is drawing into a popup top-level
     /// window, where `anchor` is the popup's [`PopupRequest::rect`] (the
     /// same value the runtime opened the popup window with). `None` in the
@@ -63,7 +61,6 @@ pub struct Painter<'a> {
 }
 
 impl<'a> Painter<'a> {
-    #[allow(clippy::too_many_arguments)]
     pub fn new(
         pixels: &'a mut [u32],
         width: i32,
@@ -71,11 +68,10 @@ impl<'a> Painter<'a> {
         scale: f32,
         origin_x: i32,
         origin_y: i32,
-        font: Option<&'a Font>,
-        mono_font: Option<&'a Font>,
+        fonts: FontSet<'a>,
     ) -> Self {
         Self::with_popup_anchor(
-            pixels, width, height, scale, origin_x, origin_y, font, mono_font, None,
+            pixels, width, height, scale, origin_x, origin_y, fonts, None,
         )
     }
 
@@ -94,8 +90,7 @@ impl<'a> Painter<'a> {
         scale: f32,
         origin_x: i32,
         origin_y: i32,
-        font: Option<&'a Font>,
-        mono_font: Option<&'a Font>,
+        fonts: FontSet<'a>,
         popup_anchor: Option<Rect>,
     ) -> Self {
         Self {
@@ -106,8 +101,7 @@ impl<'a> Painter<'a> {
             system_scale: scale.max(0.01),
             origin_x,
             origin_y,
-            font,
-            mono_font,
+            fonts,
             popup_anchor,
             clip: None,
         }
@@ -361,16 +355,7 @@ impl<'a> Painter<'a> {
         let off_h = (phys_h / zoom).max(1);
         let mut buf = vec![bg.0; (off_w * off_h) as usize];
         {
-            let mut p = Painter::new(
-                &mut buf,
-                off_w,
-                off_h,
-                scale,
-                0,
-                0,
-                self.font,
-                self.mono_font,
-            );
+            let mut p = Painter::new(&mut buf, off_w, off_h, scale, 0, 0, self.fonts);
             f(&mut p);
         }
         let dst_x = self.origin_x + self.snap(area.x);
@@ -428,12 +413,36 @@ impl<'a> Painter<'a> {
         image.draw_tinted(self, rect, tint);
     }
 
-    pub fn font(&self) -> Option<&Font> {
-        self.font
+    /// The font families this painter draws with.
+    pub fn fonts(&self) -> FontSet<'a> {
+        self.fonts
     }
 
+    /// The sans-serif family — what `text` / `measure_text` use.
+    pub fn font(&self) -> Option<&Font> {
+        self.fonts.sans
+    }
+
+    /// The serif family.
+    pub fn serif_font(&self) -> Option<&Font> {
+        self.fonts.serif
+    }
+
+    /// The monospace family — what the text editors and `text_styled` with
+    /// [`FontFamily::Mono`] use.
     pub fn mono_font(&self) -> Option<&Font> {
-        self.mono_font
+        self.fonts.mono
+    }
+
+    /// The loaded font for `family`, if any. Returns the `'a`-lifetime reference
+    /// from the [`FontSet`] (not one borrowed from `&self`) so a caller can hold
+    /// it across a `&mut self` draw call, the way `text` / `text_styled` do.
+    fn family_font(&self, family: FontFamily) -> Option<&'a Font> {
+        match family {
+            FontFamily::Sans => self.fonts.sans,
+            FontFamily::Serif => self.fonts.serif,
+            FontFamily::Mono => self.fonts.mono,
+        }
     }
 
     /// Snap a logical-pixel coordinate (edge or position) to a physical pixel.
@@ -790,11 +799,37 @@ impl<'a> Painter<'a> {
         }
     }
 
-    /// Draw a line of text. `x` / `y` and `size` are in logical units; the
-    /// painter rasterizes glyphs once at `size × scale` physical pixels for
-    /// crisp output regardless of fractional DPI.
+    /// Draw a line of regular-weight text. `x` / `y` and `size` are in logical
+    /// units; the painter rasterizes glyphs once at `size × scale` physical
+    /// pixels for crisp output regardless of fractional DPI.
     pub fn text(&mut self, x: i32, y: i32, text: &str, size: f32, color: Color) {
         self.text_with_phys_offset(x, y, 0, 0, text, size, color);
+    }
+
+    /// Draw a line of text in the given [`FontFamily`] and [`FontStyle`]. Bold /
+    /// italic / bold-italic render with the host's *real* styled faces (see
+    /// [`Font`]); a style the system ships no face for falls back to the nearest
+    /// real face it does have, never a synthesized one. Drawing in a family the
+    /// painter has no font for is a no-op. Like [`text`](Self::text), `x` / `y`
+    /// and `size` are logical and glyphs rasterize at `size × scale`.
+    #[allow(clippy::too_many_arguments)]
+    pub fn text_styled(
+        &mut self,
+        x: i32,
+        y: i32,
+        text: &str,
+        size: f32,
+        color: Color,
+        family: FontFamily,
+        style: FontStyle,
+    ) {
+        let Some(font) = self.family_font(family) else {
+            return;
+        };
+        let x_phys = self.snap(x) as f32;
+        let y_phys = self.snap(y) as f32;
+        let size_phys = size * self.scale;
+        font.draw_phys(self, text, x_phys, y_phys, size_phys, color, style);
     }
 
     /// Draw text with an additional physical-pixel offset applied *after*
@@ -812,17 +847,25 @@ impl<'a> Painter<'a> {
         size: f32,
         color: Color,
     ) {
-        let Some(font) = self.font else {
+        let Some(font) = self.fonts.sans else {
             return;
         };
         let x_phys = (self.snap(x) + dx_phys) as f32;
         let y_phys = (self.snap(y) + dy_phys) as f32;
         let size_phys = size * self.scale;
-        font.draw_phys(self, text, x_phys, y_phys, size_phys, color);
+        font.draw_phys(
+            self,
+            text,
+            x_phys,
+            y_phys,
+            size_phys,
+            color,
+            FontStyle::Regular,
+        );
     }
 
     pub fn text_centered(&mut self, rect: Rect, text: &str, size: f32, color: Color) {
-        let Some(font) = self.font else {
+        let Some(font) = self.fonts.sans else {
             return;
         };
         let (w, h) = font.measure(text, size);
@@ -832,41 +875,42 @@ impl<'a> Painter<'a> {
     }
 
     pub fn measure_text(&self, text: &str, size: f32) -> Size {
-        let Some(font) = self.font else {
+        self.measure_text_styled(text, size, FontFamily::Sans, FontStyle::Regular)
+    }
+
+    /// Measure text as it would be drawn by [`text_styled`](Self::text_styled)
+    /// in the same family and style. Serif vs sans and bold/italic faces carry
+    /// their own advances, so measuring in the style the text is drawn keeps
+    /// word-wrap pixel-accurate. Zero when that family has no font.
+    pub fn measure_text_styled(
+        &self,
+        text: &str,
+        size: f32,
+        family: FontFamily,
+        style: FontStyle,
+    ) -> Size {
+        let Some(font) = self.family_font(family) else {
             return Size::new(0, 0);
         };
-        let (w, h) = font.measure(text, size);
+        let (w, h) = font.measure_styled(text, size, style);
         Size::new(w.ceil() as i32, h.ceil() as i32)
     }
 
-    /// Draw text using the monospace font. Returns immediately if no
-    /// monospace font is available — the caller should be prepared for
-    /// `measure_mono_text` to return zero in that case.
-    pub fn mono_text(&mut self, x: i32, y: i32, text: &str, size: f32, color: Color) {
-        let Some(font) = self.mono_font else { return };
-        let x_phys = self.snap(x) as f32;
-        let y_phys = self.snap(y) as f32;
-        let size_phys = size * self.scale;
-        font.draw_phys(self, text, x_phys, y_phys, size_phys, color);
-    }
-
-    pub fn measure_mono_text(&self, text: &str, size: f32) -> Size {
-        let Some(font) = self.mono_font else {
-            return Size::new(0, 0);
-        };
-        let (w, h) = font.measure(text, size);
-        Size::new(w.ceil() as i32, h.ceil() as i32)
-    }
-
-    /// Cumulative caret x-offsets for `text` in the monospace font at `size`
-    /// logical pixels — `out[i]` is the x where the caret sits before the i-th
-    /// character, `out[len]` the end of the string. One O(n) pass over the
-    /// font's per-glyph advance cache, so a text editor can rebuild its
-    /// per-row caret table every frame without the O(n²) cost of remeasuring
-    /// each prefix. Returns `[0]` when no monospace font is available.
-    pub fn mono_cumulative_widths(&self, text: &str, size: f32) -> Vec<i32> {
-        match self.mono_font {
-            Some(font) => font.cumulative_widths(text, size),
+    /// Cumulative caret x-offsets for `text` drawn in `family` and `style` at
+    /// `size` logical pixels — `out[i]` is the x where the caret sits before the
+    /// i-th character, `out[len]` the end of the string. One O(n) pass over the
+    /// font's per-glyph advance cache, so a text editor can rebuild its per-row
+    /// caret table every frame without the O(n²) cost of remeasuring each
+    /// prefix. Returns `[0]` when that family has no font.
+    pub fn cumulative_widths(
+        &self,
+        text: &str,
+        size: f32,
+        family: FontFamily,
+        style: FontStyle,
+    ) -> Vec<i32> {
+        match self.family_font(family) {
+            Some(font) => font.cumulative_widths(text, size, style),
             None => vec![0],
         }
     }
@@ -882,7 +926,7 @@ mod tests {
     fn render(w: i32, h: i32, pattern: BackgroundPattern, fg: Color) -> Vec<u32> {
         let mut pixels = vec![0u32; (w * h) as usize];
         {
-            let mut p = Painter::new(&mut pixels, w, h, 1.0, 0, 0, None, None);
+            let mut p = Painter::new(&mut pixels, w, h, 1.0, 0, 0, FontSet::default());
             p.fill_pattern(Color::WHITE, pattern, fg);
         }
         pixels
@@ -950,7 +994,7 @@ mod tests {
         let (w, h) = (20, 20);
         let mut pixels = vec![0u32; (w * h) as usize];
         {
-            let mut p = Painter::new(&mut pixels, w, h, 1.0, 0, 0, None, None);
+            let mut p = Painter::new(&mut pixels, w, h, 1.0, 0, 0, FontSet::default());
             p.with_scale(Rect::new(2, 2, 8, 8), 2.0, |p| {
                 assert_eq!(p.scale(), 2.0, "the closure sees the nested scale");
                 // A 1×1 logical pixel at local (1,1) maps to a 2×2 device block
@@ -971,7 +1015,7 @@ mod tests {
         let (w, h) = (20, 20);
         let mut pixels = vec![0u32; (w * h) as usize];
         {
-            let mut p = Painter::new(&mut pixels, w, h, 1.0, 0, 0, None, None);
+            let mut p = Painter::new(&mut pixels, w, h, 1.0, 0, 0, FontSet::default());
             // A fill far larger than the 8×8 region is trimmed to it.
             p.with_scale(Rect::new(2, 2, 8, 8), 2.0, |p| {
                 p.fill_rect(Rect::new(0, 0, 100, 100), Color::WHITE);
@@ -989,7 +1033,7 @@ mod tests {
         let (w, h) = (20, 20);
         let mut pixels = vec![0u32; (w * h) as usize];
         {
-            let mut p = Painter::new(&mut pixels, w, h, 1.0, 0, 0, None, None);
+            let mut p = Painter::new(&mut pixels, w, h, 1.0, 0, 0, FontSet::default());
             // Footprint (2,2)+8×8 at scale 1.0, zoomed 2×: the offscreen is
             // rendered at 4×4 then each pixel becomes a 2×2 block.
             p.draw_scaled(Rect::new(2, 2, 8, 8), 1.0, 2, Color::WHITE, |p| {

@@ -56,8 +56,8 @@ fn main() {
 
     for (file, chrome) in shots {
         let mut backend = MockBackend::new(W, H).with_scale(2.0);
-        if let Some(font) = Font::load_system() {
-            backend = backend.with_font(font);
+        if let Some(font) = Font::load_sans() {
+            backend = backend.with_sans_font(font);
         }
         let snap = backend.render_framed(build().as_mut(), &chrome);
         std::fs::write(file, snap.to_png()).unwrap_or_else(|e| panic!("write {file}: {e}"));

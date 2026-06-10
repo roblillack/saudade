@@ -52,7 +52,7 @@ pub use app::{App, WindowConfig};
 pub use background::{BackgroundPattern, PATTERN_COLORS};
 pub use chrome::{WindowChrome, WindowFrame};
 pub use event::{Cursor, DragData, Event, EventCtx, Key, Modifiers, MouseButton, NamedKey};
-pub use font::Font;
+pub use font::{Font, FontFamily, FontSet, FontStyle};
 pub use geometry::{Color, Point, Rect, Size};
 pub use painter::Painter;
 // `include_svg!` reads an SVG at compile time and expands to a const

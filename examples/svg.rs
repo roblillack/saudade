@@ -27,7 +27,9 @@
 use std::time::{Duration, Instant};
 
 use resvg::{tiny_skia, usvg};
-use saudade::{App, Color, Painter, Rect, SvgImage, Theme, Widget, WindowConfig, include_svg};
+use saudade::{
+    App, Color, FontSet, Painter, Rect, SvgImage, Theme, Widget, WindowConfig, include_svg,
+};
 
 /// One icon available through both pipelines: the compile-time-baked polygons
 /// and the raw SVG text the runtime rasterizer parses.
@@ -300,7 +302,15 @@ fn benchmark() {
             let mut buf = vec![Color::WHITE.0; (size * size) as usize];
             let t = Instant::now();
             for _ in 0..iters {
-                let mut p = Painter::new(&mut buf, size as i32, size as i32, 1.0, 0, 0, None, None);
+                let mut p = Painter::new(
+                    &mut buf,
+                    size as i32,
+                    size as i32,
+                    1.0,
+                    0,
+                    0,
+                    FontSet::default(),
+                );
                 icon.baked
                     .draw(&mut p, Rect::new(0, 0, size as i32, size as i32));
             }
@@ -352,7 +362,15 @@ fn fidelity() {
     for icon in ICONS {
         let mut baked = vec![Color::WHITE.0; (size * size) as usize];
         {
-            let mut p = Painter::new(&mut baked, size as i32, size as i32, 1.0, 0, 0, None, None);
+            let mut p = Painter::new(
+                &mut baked,
+                size as i32,
+                size as i32,
+                1.0,
+                0,
+                0,
+                FontSet::default(),
+            );
             icon.baked
                 .draw(&mut p, Rect::new(0, 0, size as i32, size as i32));
         }
