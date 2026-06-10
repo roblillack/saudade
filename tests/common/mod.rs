@@ -27,12 +27,12 @@ use saudade::mock::{MockBackend, Snapshot};
 use saudade::{Font, Widget, WindowChrome};
 
 pub fn sans_font() -> Font {
-    Font::from_bytes(include_bytes!("../fonts/DejaVuSans.ttf").to_vec())
+    Font::from_sans_bytes(include_bytes!("../fonts/DejaVuSans.ttf").to_vec())
         .expect("bundled DejaVuSans.ttf failed to load")
 }
 
 pub fn mono_font() -> Font {
-    Font::from_bytes(include_bytes!("../fonts/DejaVuSansMono.ttf").to_vec())
+    Font::from_sans_bytes(include_bytes!("../fonts/DejaVuSansMono.ttf").to_vec())
         .expect("bundled DejaVuSansMono.ttf failed to load")
 }
 
@@ -75,7 +75,7 @@ pub fn snapshot_framed_at_all_scales<F>(
     for &scale in SCALES {
         let backend = MockBackend::new(width, height)
             .with_scale(scale)
-            .with_font(sans_font())
+            .with_sans_font(sans_font())
             .with_mono_font(mono_font());
         let snap = backend.render_framed(build().as_mut(), chrome);
         compare_snapshot(name, scale, &snap);
@@ -85,7 +85,7 @@ pub fn snapshot_framed_at_all_scales<F>(
 fn snapshot_one(name: &str, width: i32, height: i32, scale: f32, mut widget: Box<dyn Widget>) {
     let backend = MockBackend::new(width, height)
         .with_scale(scale)
-        .with_font(sans_font())
+        .with_sans_font(sans_font())
         .with_mono_font(mono_font());
     let snap = backend.render(widget.as_mut());
     compare_snapshot(name, scale, &snap);

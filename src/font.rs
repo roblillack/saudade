@@ -5,22 +5,146 @@ use std::rc::Rc;
 use crate::geometry::Color;
 use crate::painter::Painter;
 
-/// A loaded font, ready for glyph rasterization.
+/// Which face of a font to draw with.
+///
+/// saudade renders text in real OS-installed faces — when an app asks for
+/// **bold** or *italic*, the host's actual bold / italic / bold-italic face of
+/// the same family is rasterized, never a synthesized (smeared / sheared)
+/// approximation of the regular face. A style the system has no face for falls
+/// back to the nearest *real* face the family does provide (see
+/// [`Font::load_sans`] and `resolve_style`).
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Default)]
+pub enum FontStyle {
+    /// The upright, regular-weight face — what `Painter::text` uses.
+    #[default]
+    Regular = 0,
+    /// Bold weight, upright.
+    Bold = 1,
+    /// Regular weight, italic (or oblique) slant.
+    Italic = 2,
+    /// Bold weight *and* italic slant.
+    BoldItalic = 3,
+}
+
+impl FontStyle {
+    /// The style for a `(bold, italic)` flag pair — handy when a renderer tracks
+    /// the two emphases independently and needs the combined face.
+    pub fn new(bold: bool, italic: bool) -> Self {
+        match (bold, italic) {
+            (false, false) => FontStyle::Regular,
+            (true, false) => FontStyle::Bold,
+            (false, true) => FontStyle::Italic,
+            (true, true) => FontStyle::BoldItalic,
+        }
+    }
+
+    /// Whether this style carries bold weight.
+    pub fn is_bold(self) -> bool {
+        matches!(self, FontStyle::Bold | FontStyle::BoldItalic)
+    }
+
+    /// Whether this style carries an italic / oblique slant.
+    pub fn is_italic(self) -> bool {
+        matches!(self, FontStyle::Italic | FontStyle::BoldItalic)
+    }
+}
+
+/// Which family of font to draw with: a proportional sans-serif, a proportional
+/// serif, or a fixed-width monospace. The styled draw / measure entry points take
+/// one of these alongside a [`FontStyle`]; the plain `text` / `measure_text`
+/// default to [`Sans`](FontFamily::Sans).
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Default)]
+pub enum FontFamily {
+    /// Proportional sans-serif — the UI default.
+    #[default]
+    Sans,
+    /// Proportional serif.
+    Serif,
+    /// Fixed-width monospace.
+    Mono,
+}
+
+/// The set of font families a [`Painter`](crate::Painter) draws with — a
+/// sans-serif, a serif, and a monospace face, each selectable per draw via
+/// [`FontFamily`]. Any family may be absent (`None`): drawing or measuring in a
+/// missing one is a no-op / zero. The painter borrows these for a paint pass;
+/// the backend owns the `Font`s. Build it field-by-field (`FontSet { sans: ...,
+/// ..Default::default() }`) or start from [`FontSet::default`] (all empty).
+#[derive(Clone, Copy, Default)]
+pub struct FontSet<'a> {
+    /// Proportional sans-serif — the default for `text` / `measure_text`.
+    pub sans: Option<&'a Font>,
+    /// Proportional serif.
+    pub serif: Option<&'a Font>,
+    /// Fixed-width monospace — used by the text editors and by `text_styled`
+    /// with [`FontFamily::Mono`].
+    pub mono: Option<&'a Font>,
+}
+
+/// The number of distinct faces a [`Font`] can hold — one per [`FontStyle`].
+const STYLE_COUNT: usize = 4;
+
+/// Pick the [`FontStyle`] to actually draw for a requested one, given which
+/// faces are present (`present[s as usize]`). The regular face is always loaded,
+/// so this always resolves to a real, loaded face — we never fake an absent
+/// bold/italic by transforming the regular glyph. A missing bold-italic prefers
+/// to keep as much of the request as a real face allows (bold, then italic)
+/// before giving up to regular.
+fn resolve_style(present: [bool; STYLE_COUNT], style: FontStyle) -> FontStyle {
+    use FontStyle::*;
+    let has = |s: FontStyle| present[s as usize];
+    match style {
+        Regular => Regular,
+        Bold => {
+            if has(Bold) {
+                Bold
+            } else {
+                Regular
+            }
+        }
+        Italic => {
+            if has(Italic) {
+                Italic
+            } else {
+                Regular
+            }
+        }
+        BoldItalic => {
+            if has(BoldItalic) {
+                BoldItalic
+            } else if has(Bold) {
+                Bold
+            } else if has(Italic) {
+                Italic
+            } else {
+                Regular
+            }
+        }
+    }
+}
+
+/// A loaded font family, ready for glyph rasterization in any of its
+/// [`FontStyle`]s.
 ///
 /// saudade owns no bundled bitmap font: we ask the host OS via fontdb for a
 /// reasonable proportional sans-serif (MS Sans Serif on Windows, Tahoma /
 /// Liberation Sans / DejaVu Sans elsewhere) and rasterize on demand with
-/// fontdue. Glyph alpha is blended into the framebuffer.
+/// fontdue. Glyph alpha is blended into the framebuffer. For emphasis we load
+/// the family's *real* bold, italic, and bold-italic faces alongside the regular
+/// one — bold text is the system's bold face, not the regular face smeared a
+/// pixel wider. The bold/italic faces are optional: a family the host ships
+/// without them simply falls back to the regular face (see `resolve_style`).
 ///
 /// Rasterizing an outline into a coverage bitmap is expensive, and a
 /// retained-mode window repaints the *entire* visible text on every frame —
 /// every scroll notch, every drag-resize step. So both the rasterized glyph
-/// bitmaps and the per-glyph advance widths are memoized, keyed by the glyph
-/// and the exact pixel size requested. After the first frame the working set
-/// (the handful of characters actually on screen, at one or two sizes) is all
-/// cache hits, turning each subsequent frame from "rasterize N glyphs" into
-/// "blend N cached bitmaps". The caches use interior mutability so drawing can
-/// stay `&self` (the painter only ever holds a shared reference to the font).
+/// bitmaps and the per-glyph advance widths are memoized, keyed by the glyph,
+/// the exact pixel size requested, *and* the style. After the first frame the
+/// working set (the handful of characters actually on screen, at one or two
+/// sizes) is all cache hits, turning each subsequent frame from "rasterize N
+/// glyphs" into "blend N cached bitmaps". The caches use interior mutability so
+/// drawing can stay `&self` (the painter only ever holds a shared reference to
+/// the font).
 ///
 /// The glyph bitmaps are the memory-heavy half, so that cache is LRU-bounded
 /// to [`GLYPH_CACHE_CAP`] entries: an app that cycles through many sizes (a
@@ -28,21 +152,30 @@ use crate::painter::Painter;
 /// drawn glyphs instead of growing without limit. The advance cache holds a
 /// single `f32` per entry, so it stays an unbounded plain map.
 pub struct Font {
-    inner: fontdue::Font,
-    /// Rasterized glyphs, keyed by `(char, physical-size bits)`. The bitmaps
-    /// are wrapped in `Rc` so a lookup can hand back a cheap clone and release
-    /// the cache borrow before the (longer-lived) blend loop runs. LRU-bounded.
-    glyphs: RefCell<LruCache<(char, u32), Rc<Glyph>>>,
-    /// Per-glyph advance widths, keyed by `(char, size bits)`. Feeds both text
-    /// measurement and the editor's caret-offset table; far cheaper than a full
-    /// rasterize when only the advance is needed.
-    advances: RefCell<HashMap<(char, u32), f32>>,
+    /// The faces, indexed by `FontStyle as usize`. Slot 0 (`Regular`) is always
+    /// `Some`; the bold / italic / bold-italic slots are `Some` only when the
+    /// host actually provides that face.
+    faces: [Option<fontdue::Font>; STYLE_COUNT],
+    /// Rasterized glyphs, keyed by `(char, physical-size bits, style)`. The
+    /// bitmaps are wrapped in `Rc` so a lookup can hand back a cheap clone and
+    /// release the cache borrow before the (longer-lived) blend loop runs.
+    /// LRU-bounded. The `style` in the key is always a *resolved* style, so two
+    /// requests that fall back to the same real face share a cache entry.
+    glyphs: RefCell<LruCache<GlyphKey, Rc<Glyph>>>,
+    /// Per-glyph advance widths, keyed by `(char, size bits, style)`. Feeds both
+    /// text measurement and the editor's caret-offset table; far cheaper than a
+    /// full rasterize when only the advance is needed.
+    advances: RefCell<HashMap<GlyphKey, f32>>,
 }
+
+/// Cache key: a glyph at a physical size in a resolved style.
+type GlyphKey = (char, u32, FontStyle);
 
 /// Upper bound on the number of distinct rasterized glyphs kept in memory at
 /// once. The on-screen working set is a few hundred at most (printable ASCII
-/// across one or two sizes), so this leaves generous headroom while still
-/// capping memory when an app renders text at many sizes or over a wide script.
+/// across one or two sizes and styles), so this leaves generous headroom while
+/// still capping memory when an app renders text at many sizes or over a wide
+/// script.
 const GLYPH_CACHE_CAP: usize = 1024;
 
 /// One rasterized glyph: fontdue's metrics plus its coverage bitmap.
@@ -101,17 +234,21 @@ impl<K: Eq + std::hash::Hash + Copy, V: Clone> LruCache<K, V> {
 }
 
 impl Font {
-    fn new(inner: fontdue::Font) -> Self {
+    /// Build a font from just a regular face. Bold / italic slots start empty;
+    /// attach them with [`with_bold_bytes`](Self::with_bold_bytes) and friends,
+    /// or let the system loader fill them in.
+    fn from_face(regular: fontdue::Font) -> Self {
         Self {
-            inner,
+            faces: [Some(regular), None, None, None],
             glyphs: RefCell::new(LruCache::new(GLYPH_CACHE_CAP)),
             advances: RefCell::new(HashMap::new()),
         }
     }
 
-    /// Try to load a system sans-serif font. Returns `None` if no candidate
-    /// face could be loaded — text drawing then becomes a no-op.
-    pub fn load_system() -> Option<Self> {
+    /// Try to load a system sans-serif font, with its bold / italic / bold-italic
+    /// faces. Returns `None` if no candidate family could be loaded — text
+    /// drawing then becomes a no-op.
+    pub fn load_sans() -> Option<Self> {
         const SANS_FAMILIES: &[&str] = &[
             "MS Sans Serif",
             "Microsoft Sans Serif",
@@ -126,9 +263,25 @@ impl Font {
         load_family_chain(SANS_FAMILIES, false)
     }
 
-    /// Try to load a fixed-width font for plain-text editors / code displays.
-    /// Walks the same set of fallbacks Notepad and friends used through the
-    /// nineties down to modern Linux replacements.
+    /// Try to load a system serif font, with its bold / italic / bold-italic
+    /// faces. Walks the classic Win 3.1 / Office serif down to modern Linux
+    /// replacements. Returns `None` if no candidate family could be loaded.
+    pub fn load_serif() -> Option<Self> {
+        const SERIF_FAMILIES: &[&str] = &[
+            "Times New Roman",
+            "Times",
+            "MS Serif",
+            "Georgia",
+            "Liberation Serif",
+            "DejaVu Serif",
+            "Noto Serif",
+        ];
+        load_family_chain(SERIF_FAMILIES, false)
+    }
+
+    /// Try to load a fixed-width font (with its styled faces) for plain-text
+    /// editors / code displays. Walks the same set of fallbacks Notepad and
+    /// friends used through the nineties down to modern Linux replacements.
     pub fn load_monospace() -> Option<Self> {
         const MONO_FAMILIES: &[&str] = &[
             "Lucida Console",
@@ -143,80 +296,143 @@ impl Font {
         load_family_chain(MONO_FAMILIES, true)
     }
 
-    /// Load a font directly from an in-memory TTF/OTF byte buffer. Use this
-    /// when you need deterministic glyph output independent of the host's
-    /// installed fonts — for example, snapshot tests that bundle the font
-    /// they render with via `include_bytes!`.
-    pub fn from_bytes(data: Vec<u8>) -> Option<Self> {
+    /// Load a font family from an in-memory TTF/OTF byte buffer, used as its
+    /// regular (sans) face. Use this when you need deterministic glyph output
+    /// independent of the host's installed fonts — for example, snapshot tests
+    /// that bundle the font they render with via `include_bytes!`. The result
+    /// has only a regular face; attach the emphasis faces with
+    /// [`with_bold_bytes`](Self::with_bold_bytes),
+    /// [`with_italic_bytes`](Self::with_italic_bytes), and
+    /// [`with_bold_italic_bytes`](Self::with_bold_italic_bytes).
+    pub fn from_sans_bytes(data: Vec<u8>) -> Option<Self> {
         fontdue::Font::from_bytes(data, fontdue::FontSettings::default())
             .ok()
-            .map(Self::new)
+            .map(Self::from_face)
     }
 
-    /// Cached advance width of a single glyph at `size` pixels. The first call
-    /// for a `(char, size)` pair asks fontdue; the rest are map lookups.
-    fn advance(&self, ch: char, size: f32) -> f32 {
-        let key = (ch, size.to_bits());
+    /// Attach a bold face from an in-memory TTF/OTF buffer (builder style).
+    /// A buffer that fails to parse leaves the slot empty (bold then falls back
+    /// to the regular face). Pairs with [`from_sans_bytes`](Self::from_sans_bytes)
+    /// for deterministic, font-bundling snapshot tests.
+    pub fn with_bold_bytes(self, data: Vec<u8>) -> Self {
+        self.with_style_bytes(FontStyle::Bold, data)
+    }
+
+    /// Attach an italic (or oblique) face from an in-memory buffer. See
+    /// [`with_bold_bytes`](Self::with_bold_bytes).
+    pub fn with_italic_bytes(self, data: Vec<u8>) -> Self {
+        self.with_style_bytes(FontStyle::Italic, data)
+    }
+
+    /// Attach a bold-italic face from an in-memory buffer. See
+    /// [`with_bold_bytes`](Self::with_bold_bytes).
+    pub fn with_bold_italic_bytes(self, data: Vec<u8>) -> Self {
+        self.with_style_bytes(FontStyle::BoldItalic, data)
+    }
+
+    fn with_style_bytes(mut self, style: FontStyle, data: Vec<u8>) -> Self {
+        if let Ok(face) = fontdue::Font::from_bytes(data, fontdue::FontSettings::default()) {
+            self.faces[style as usize] = Some(face);
+        }
+        self
+    }
+
+    /// Which styles have a face loaded — drives [`resolve_style`].
+    fn presence(&self) -> [bool; STYLE_COUNT] {
+        std::array::from_fn(|i| self.faces[i].is_some())
+    }
+
+    /// The face to rasterize a requested `style` with. Always returns a loaded
+    /// face: an absent bold/italic resolves down to one that exists (ultimately
+    /// the always-present regular face).
+    fn face(&self, style: FontStyle) -> (&fontdue::Font, FontStyle) {
+        let resolved = resolve_style(self.presence(), style);
+        // `resolve_style` only ever returns a style whose slot is populated.
+        (
+            self.faces[resolved as usize]
+                .as_ref()
+                .expect("resolved face is loaded"),
+            resolved,
+        )
+    }
+
+    /// Cached advance width of a single glyph at `size` pixels in `style`. The
+    /// first call for a `(char, size, style)` triple asks fontdue; the rest are
+    /// map lookups.
+    fn advance(&self, ch: char, size: f32, style: FontStyle) -> f32 {
+        let (face, resolved) = self.face(style);
+        let key = (ch, size.to_bits(), resolved);
         if let Some(a) = self.advances.borrow().get(&key) {
             return *a;
         }
-        let a = self.inner.metrics(ch, size).advance_width;
+        let a = face.metrics(ch, size).advance_width;
         self.advances.borrow_mut().insert(key, a);
         a
     }
 
-    /// Cached rasterization of a single glyph at `size_phys` physical pixels.
-    /// Returns a shared handle so the caller can drop the cache borrow before
-    /// iterating the bitmap.
-    fn glyph(&self, ch: char, size_phys: f32) -> Rc<Glyph> {
-        let key = (ch, size_phys.to_bits());
+    /// Cached rasterization of a single glyph at `size_phys` physical pixels in
+    /// `style`. Returns a shared handle so the caller can drop the cache borrow
+    /// before iterating the bitmap.
+    fn glyph(&self, ch: char, size_phys: f32, style: FontStyle) -> Rc<Glyph> {
+        let (face, resolved) = self.face(style);
+        let key = (ch, size_phys.to_bits(), resolved);
         if let Some(g) = self.glyphs.borrow_mut().get(&key) {
             return g;
         }
-        let (metrics, bitmap) = self.inner.rasterize(ch, size_phys);
+        let (metrics, bitmap) = face.rasterize(ch, size_phys);
         let g = Rc::new(Glyph { metrics, bitmap });
         self.glyphs.borrow_mut().insert(key, g.clone());
         g
     }
 
-    /// Measure a single line of text at the given pixel size. Returns
-    /// (advance width, em height). The advance is summed from the per-glyph
-    /// cache, so repeated measurements of the same text cost only map lookups.
+    /// Measure a single line of regular-weight text at the given pixel size.
+    /// Returns (advance width, em height). See [`measure_styled`](Self::measure_styled).
     pub fn measure(&self, text: &str, size: f32) -> (f32, f32) {
-        let width: f32 = text.chars().map(|ch| self.advance(ch, size)).sum();
+        self.measure_styled(text, size, FontStyle::Regular)
+    }
+
+    /// Measure a single line of text drawn in `style` at the given pixel size.
+    /// Returns (advance width, em height). The advance is summed from the
+    /// per-glyph cache, so repeated measurements of the same text cost only map
+    /// lookups. Bold and italic faces have their own metrics, so measuring with
+    /// the same style the text is drawn in keeps wrapping pixel-accurate.
+    pub fn measure_styled(&self, text: &str, size: f32, style: FontStyle) -> (f32, f32) {
+        let width: f32 = text.chars().map(|ch| self.advance(ch, size, style)).sum();
         // The font's em height is more visually correct than max glyph height
         // when laying out lines of text. We use size as a proxy and pad a
         // little so descenders fit.
         (width, size * 1.2)
     }
 
-    /// Cumulative caret x-offsets for `text` at `size` pixels. `out[i]` is the
-    /// logical-pixel x where the caret sits *before* character `i`; `out[len]`
-    /// is the end of the string. A single O(n) pass over the per-glyph advance
-    /// cache — the value at each step is the running advance sum, ceiled, which
-    /// matches the pixel width [`measure`](Self::measure) reports for the
-    /// corresponding prefix. Replaces the editor's old O(n²) prefix-remeasure.
-    pub fn cumulative_widths(&self, text: &str, size: f32) -> Vec<i32> {
+    /// Cumulative caret x-offsets for `text` at `size` pixels in `style`.
+    /// `out[i]` is the logical-pixel x where the caret sits *before* character
+    /// `i`; `out[len]` is the end of the string. A single O(n) pass over the
+    /// per-glyph advance cache — the value at each step is the running advance
+    /// sum, ceiled, which matches the pixel width
+    /// [`measure_styled`](Self::measure_styled) reports for the corresponding
+    /// prefix. Replaces the editor's old O(n²) prefix-remeasure.
+    pub fn cumulative_widths(&self, text: &str, size: f32, style: FontStyle) -> Vec<i32> {
         let mut out = Vec::with_capacity(text.len() + 1);
         let mut acc = 0.0_f32;
         out.push(0);
         for ch in text.chars() {
-            acc += self.advance(ch, size);
+            acc += self.advance(ch, size, style);
             out.push(acc.ceil() as i32);
         }
         out
     }
 
-    /// Draw one line of text at *physical* pixel coordinates. The caller
-    /// (Painter::text) has already multiplied logical coords and font size by
-    /// the DPI scale, so glyphs are rasterized once at their final on-screen
-    /// pixel size — no resampling, no upscale blur.
+    /// Draw one line of text in `style` at *physical* pixel coordinates. The
+    /// caller (Painter::text) has already multiplied logical coords and font
+    /// size by the DPI scale, so glyphs are rasterized once at their final
+    /// on-screen pixel size — no resampling, no upscale blur.
     ///
     /// Glyphs are pulled from the rasterization cache, and any that fall
     /// entirely outside the painter's horizontal clip are skipped: the pen only
     /// advances rightward, so once a glyph starts past the clip's right edge the
     /// rest of the line is off-screen and the loop stops. This keeps a long line
     /// (a 500-column Markdown row) from blending hundreds of invisible glyphs.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn draw_phys(
         &self,
         painter: &mut Painter,
@@ -225,12 +441,13 @@ impl Font {
         y: f32,
         size_phys: f32,
         color: Color,
+        style: FontStyle,
     ) -> f32 {
         let baseline = y + size_phys;
         let (clip_lo, clip_hi) = painter.glyph_clip_x();
         let mut pen_x = x;
         for ch in text.chars() {
-            let glyph = self.glyph(ch, size_phys);
+            let glyph = self.glyph(ch, size_phys, style);
             let metrics = &glyph.metrics;
             let glyph_x = pen_x + metrics.xmin as f32;
             // Everything from here rightward is past the visible span.
@@ -269,11 +486,79 @@ fn load_face(db: &fontdb::Database, id: fontdb::ID) -> Option<fontdue::Font> {
     fontdue::Font::from_bytes(data, fontdue::FontSettings::default()).ok()
 }
 
+/// The weight at or above which we consider a face "bold". OS/2 weight classes
+/// put Regular at 400 and Bold at 700; SemiBold (600) and up read as bold enough
+/// to serve as the bold face, while Medium (500) does not.
+const BOLD_WEIGHT_THRESHOLD: u16 = 600;
+
+/// Query `db` for a `family` face in the requested weight/style and load it —
+/// but only if the face fontdb hands back *actually* carries that emphasis.
+///
+/// fontdb's `query` runs the CSS font-matching algorithm, which returns the
+/// closest available face even when nothing matches: ask a family with no italic
+/// for its italic and you get the upright face back. Accepting that would let a
+/// regular face masquerade as bold or italic — exactly the synthesized-looking
+/// fakery we want to avoid — so we re-read the matched face's own weight/style
+/// and reject a mismatch. The caller then leaves that slot empty and falls back
+/// to a real face at draw time.
+fn query_verified(
+    db: &fontdb::Database,
+    family: &str,
+    weight: fontdb::Weight,
+    style: fontdb::Style,
+) -> Option<fontdue::Font> {
+    let query = fontdb::Query {
+        families: &[fontdb::Family::Name(family)],
+        weight,
+        stretch: fontdb::Stretch::Normal,
+        style,
+    };
+    let id = db.query(&query)?;
+    let info = db.face(id)?;
+
+    let want_bold = weight.0 >= BOLD_WEIGHT_THRESHOLD;
+    let want_slanted = style != fontdb::Style::Normal;
+    let is_bold = info.weight.0 >= BOLD_WEIGHT_THRESHOLD;
+    let is_slanted = info.style != fontdb::Style::Normal;
+    if is_bold != want_bold || is_slanted != want_slanted {
+        return None;
+    }
+
+    load_face(db, id)
+}
+
+/// Build a [`Font`] for `family`, loading its regular face plus whichever of the
+/// bold / italic / bold-italic faces the host actually ships. Returns `None`
+/// when the family has no usable regular face.
+fn load_styled_family(db: &fontdb::Database, family: &str) -> Option<Font> {
+    let regular = query_verified(db, family, fontdb::Weight::NORMAL, fontdb::Style::Normal)?;
+    let mut font = Font::from_face(regular);
+    let mut attach = |style: FontStyle, weight, slant| {
+        if let Some(face) = query_verified(db, family, weight, slant) {
+            font.faces[style as usize] = Some(face);
+        }
+    };
+    attach(FontStyle::Bold, fontdb::Weight::BOLD, fontdb::Style::Normal);
+    attach(
+        FontStyle::Italic,
+        fontdb::Weight::NORMAL,
+        fontdb::Style::Italic,
+    );
+    attach(
+        FontStyle::BoldItalic,
+        fontdb::Weight::BOLD,
+        fontdb::Style::Italic,
+    );
+    Some(font)
+}
+
 /// Search `db` for the first family name in `families` that resolves to a
-/// loadable face. When `monospace_fallback` is true, after exhausting the
-/// named families the search also accepts any face whose face record claims
-/// monospace — useful so we don't accidentally drop into a proportional font
-/// when none of the well-known mono families are installed.
+/// loadable regular face, returning that family with all of its emphasis faces.
+/// When `monospace_fallback` is true, after exhausting the named families the
+/// search also accepts any face whose record claims monospace — useful so we
+/// don't accidentally drop into a proportional font when none of the well-known
+/// mono families are installed. The fallback faces are regular-only (no styled
+/// variants); a named family is the path that carries bold/italic.
 fn load_family_chain(families: &[&str], monospace_fallback: bool) -> Option<Font> {
     let mut db = fontdb::Database::new();
     db.load_system_fonts();
@@ -286,16 +571,8 @@ fn load_family_chain(families: &[&str], monospace_fallback: bool) -> Option<Font
     }
 
     for family in families {
-        let query = fontdb::Query {
-            families: &[fontdb::Family::Name(family)],
-            weight: fontdb::Weight::NORMAL,
-            stretch: fontdb::Stretch::Normal,
-            style: fontdb::Style::Normal,
-        };
-        if let Some(id) = db.query(&query)
-            && let Some(font) = load_face(&db, id)
-        {
-            return Some(Font::new(font));
+        if let Some(font) = load_styled_family(&db, family) {
+            return Some(font);
         }
     }
 
@@ -304,7 +581,7 @@ fn load_family_chain(families: &[&str], monospace_fallback: bool) -> Option<Font
             if face.monospaced
                 && let Some(font) = load_face(&db, face.id)
             {
-                return Some(Font::new(font));
+                return Some(Font::from_face(font));
             }
         }
     }
@@ -312,7 +589,7 @@ fn load_family_chain(families: &[&str], monospace_fallback: bool) -> Option<Font
     // Last-ditch: any face we can find. Better something than nothing.
     for face in db.faces() {
         if let Some(font) = load_face(&db, face.id) {
-            return Some(Font::new(font));
+            return Some(Font::from_face(font));
         }
     }
 
@@ -364,5 +641,60 @@ mod tests {
     fn a_miss_returns_none() {
         let mut cache: LruCache<i32, i32> = LruCache::new(4);
         assert_eq!(cache.get(&99), None);
+    }
+
+    #[test]
+    fn font_style_from_flags() {
+        assert_eq!(FontStyle::new(false, false), FontStyle::Regular);
+        assert_eq!(FontStyle::new(true, false), FontStyle::Bold);
+        assert_eq!(FontStyle::new(false, true), FontStyle::Italic);
+        assert_eq!(FontStyle::new(true, true), FontStyle::BoldItalic);
+
+        assert!(FontStyle::Bold.is_bold() && !FontStyle::Bold.is_italic());
+        assert!(FontStyle::Italic.is_italic() && !FontStyle::Italic.is_bold());
+        assert!(FontStyle::BoldItalic.is_bold() && FontStyle::BoldItalic.is_italic());
+        assert!(!FontStyle::Regular.is_bold() && !FontStyle::Regular.is_italic());
+    }
+
+    #[test]
+    fn resolve_uses_the_real_face_when_present() {
+        let all = [true, true, true, true];
+        assert_eq!(resolve_style(all, FontStyle::Bold), FontStyle::Bold);
+        assert_eq!(resolve_style(all, FontStyle::Italic), FontStyle::Italic);
+        assert_eq!(
+            resolve_style(all, FontStyle::BoldItalic),
+            FontStyle::BoldItalic
+        );
+    }
+
+    #[test]
+    fn resolve_falls_back_to_regular_when_a_face_is_missing() {
+        // Only the regular face is loaded — every request resolves to it, never
+        // to a synthesized style.
+        let only_regular = [true, false, false, false];
+        for style in [
+            FontStyle::Regular,
+            FontStyle::Bold,
+            FontStyle::Italic,
+            FontStyle::BoldItalic,
+        ] {
+            assert_eq!(resolve_style(only_regular, style), FontStyle::Regular);
+        }
+    }
+
+    #[test]
+    fn resolve_bold_italic_prefers_the_closest_real_face() {
+        // No bold-italic face, but a bold one exists: keep the weight.
+        let no_bi_has_bold = [true, true, false, false];
+        assert_eq!(
+            resolve_style(no_bi_has_bold, FontStyle::BoldItalic),
+            FontStyle::Bold
+        );
+        // No bold-italic and no bold, but an italic exists: keep the slant.
+        let no_bi_has_italic = [true, false, true, false];
+        assert_eq!(
+            resolve_style(no_bi_has_italic, FontStyle::BoldItalic),
+            FontStyle::Italic
+        );
     }
 }
