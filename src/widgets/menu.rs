@@ -1,3 +1,4 @@
+use crate::accel::{Accel, ModifierScheme};
 use crate::event::{Event, EventCtx, Key, Modifiers, MouseButton, NamedKey};
 use crate::geometry::{Color, Point, Rect};
 use crate::include_svg;
@@ -44,10 +45,12 @@ pub enum MenuItem {
     Action {
         /// Raw label as supplied; may contain `&X` to mark the mnemonic.
         label: String,
-        /// Optional accelerator hint (e.g. `"Ctrl+Enter"`) shown right-aligned
-        /// in the drop-down. Display only — the binding itself is wired by the
-        /// application; the menu never acts on it.
-        accel: Option<String>,
+        /// Optional keyboard accelerator. Shown right-aligned in the drop-down
+        /// (rendered through the bar's [`ModifierScheme`]) *and* live: a
+        /// matching chord against the closed bar fires the item directly — see
+        /// [`MenuBar::fire_accel`]. [`MenuItem::with_enabled`] gates it like
+        /// any other way of firing.
+        accel: Option<Accel>,
         callback: Box<dyn FnMut(&mut EventCtx)>,
         /// Optional predicate gating the item, evaluated live each paint / fire.
         /// `None` means always enabled; `Some(f)` greys the item and blocks
@@ -76,9 +79,12 @@ impl MenuItem {
         }
     }
 
-    /// Attach a right-aligned accelerator hint to an action item, advertising
-    /// the keyboard shortcut the application binds for it. No-op on separators.
-    pub fn with_accel(mut self, accel: impl Into<String>) -> Self {
+    /// Attach a keyboard accelerator to an action item: the chord is shown
+    /// right-aligned in the drop-down and fires the item when pressed against
+    /// the closed bar. Takes an [`Accel`] or its string form (`"Ctrl+R"`,
+    /// `"Ctrl+Enter"` — `Ctrl`/`Cmd` both mean the primary role, resolved per
+    /// platform). No-op on separators.
+    pub fn with_accel(mut self, accel: impl Into<Accel>) -> Self {
         if let MenuItem::Action { accel: slot, .. } = &mut self {
             *slot = Some(accel.into());
         }
@@ -193,9 +199,16 @@ struct Cache {
 /// mnemonic: `&File` displays "File" with **F** underlined and binds Alt+F
 /// (top-level) or just F (when the menu is already open) to that entry.
 /// Escape closes the open menu.
+///
+/// Items carrying an [`Accel`] also fire on their chord while the bar is
+/// closed — Win 3.1's accelerator table, without the `.rc` file. The chord is
+/// matched (and its hint rendered) through the bar's [`ModifierScheme`],
+/// which defaults to the build platform's; [`MenuBar::with_scheme`] pins it,
+/// e.g. for snapshot tests that must not drift between hosts.
 pub struct MenuBar {
     rect: Rect,
     menus: Vec<Menu>,
+    scheme: ModifierScheme,
     open: Option<usize>,
     hovered_item: Option<usize>,
     /// True between the press-on-the-bar that opened the current menu and
@@ -212,6 +225,7 @@ impl MenuBar {
         Self {
             rect,
             menus: Vec::new(),
+            scheme: ModifierScheme::native(),
             open: None,
             hovered_item: None,
             drag_armed: false,
@@ -221,6 +235,14 @@ impl MenuBar {
 
     pub fn add_menu(mut self, menu: Menu) -> Self {
         self.menus.push(menu);
+        self
+    }
+
+    /// Pin the [`ModifierScheme`] accelerators are matched and rendered with,
+    /// overriding the [`ModifierScheme::native`] default. Mainly for tests
+    /// that must behave identically on every host.
+    pub fn with_scheme(mut self, scheme: ModifierScheme) -> Self {
+        self.scheme = scheme;
         self
     }
 
@@ -271,7 +293,9 @@ impl MenuBar {
                     max_label = w;
                 }
                 if let Some(accel) = accel {
-                    let aw = painter.measure_text(accel, theme.font_size).w;
+                    let aw = painter
+                        .measure_text(&accel.label(self.scheme), theme.font_size)
+                        .w;
                     if aw > max_accel {
                         max_accel = aw;
                     }
@@ -491,9 +515,10 @@ impl Widget for MenuBar {
                     // Accelerator hint, right-aligned with the same inset the
                     // label carries on the left.
                     if let Some(accel) = accel {
-                        let aw = painter.measure_text(accel, theme.font_size).w;
+                        let hint = accel.label(self.scheme);
+                        let aw = painter.measure_text(&hint, theme.font_size).w;
                         let ax = row.right() - (POPUP_PADDING_X - 4) - aw;
-                        painter.text(ax, row.y + ITEM_TEXT_INSET_Y, accel, theme.font_size, fg);
+                        painter.text(ax, row.y + ITEM_TEXT_INSET_Y, &hint, theme.font_size, fg);
                     }
                     y += ITEM_HEIGHT;
                 }
@@ -597,6 +622,13 @@ impl Widget for MenuBar {
                 // keystroke (see the consume below) so it doesn't also reach the
                 // focused widget behind the bar.
                 let was_open = self.open.is_some();
+                // A closed bar first consults the accelerator table; while a
+                // menu is open it owns the keyboard outright, so chords wait.
+                // Accelerators outrank mnemonics (Win32 order), though only a
+                // chord of exactly Alt+letter could ever contest one.
+                if !was_open && self.fire_accel(*key, *modifiers, ctx) {
+                    return;
+                }
                 match key {
                     Key::Named(NamedKey::Escape) if was_open => {
                         self.open = None;
@@ -702,6 +734,42 @@ impl Widget for MenuBar {
 }
 
 impl MenuBar {
+    /// Try the pressed chord against every item's accelerator: the first
+    /// *enabled* match fires directly — without opening its menu — and the
+    /// keystroke is consumed and swallowed through its release, so it can't
+    /// also reach the focused widget (or leak into whatever the item opens).
+    /// A chord whose only matches are disabled items does **not** consume:
+    /// it falls through to the focused widget, keeping an inapplicable
+    /// accelerator's ordinary meaning intact (e.g. Ctrl+Left staying
+    /// word-jump in an editor). Returns whether an item fired.
+    fn fire_accel(&mut self, key: Key, modifiers: Modifiers, ctx: &mut EventCtx) -> bool {
+        let scheme = self.scheme;
+        for menu in &mut self.menus {
+            for item in &mut menu.items {
+                let MenuItem::Action {
+                    accel: Some(accel),
+                    enabled,
+                    callback,
+                    ..
+                } = item
+                else {
+                    continue;
+                };
+                if !accel.matches(key, modifiers, scheme)
+                    || enabled.as_ref().is_some_and(|enabled| !enabled())
+                {
+                    continue;
+                }
+                callback(ctx);
+                ctx.consume_event();
+                ctx.swallow_key_until_release();
+                ctx.request_paint();
+                return true;
+            }
+        }
+        false
+    }
+
     /// Index of the first action item in the currently open menu (skipping
     /// separators); `None` if no menu is open or it has no actions.
     fn first_action(&self) -> Option<usize> {
@@ -988,6 +1056,123 @@ mod tests {
     #[test]
     fn plain_action_is_never_checked() {
         assert!(!MenuItem::action("&Reload", |_| {}).is_checked());
+    }
+
+    fn chord(control: bool, logo: bool, ch: char) -> Event {
+        Event::KeyDown {
+            key: Key::Char(ch),
+            modifiers: Modifiers {
+                control,
+                logo,
+                ..Modifiers::default()
+            },
+        }
+    }
+
+    /// A bar with one File ▸ Rescan item bound to Ctrl+R, pinned to the PC
+    /// scheme so the tests behave identically on a macOS host.
+    fn bar_with_accel(fired: Rc<Cell<bool>>, enabled: Option<bool>) -> MenuBar {
+        let mut item =
+            MenuItem::action("&Rescan", move |_| fired.set(true)).with_accel("Ctrl+R");
+        if let Some(enabled) = enabled {
+            item = item.with_enabled(move || enabled);
+        }
+        MenuBar::new(Rect::new(0, 0, 200, 20))
+            .with_scheme(ModifierScheme::Pc)
+            .add_menu(Menu::new("&File", vec![item]))
+    }
+
+    #[test]
+    fn accel_fires_the_matching_item_against_the_closed_bar() {
+        let fired = Rc::new(Cell::new(false));
+        let mut bar = bar_with_accel(fired.clone(), None);
+        let mut ctx = EventCtx::new();
+        bar.event(&chord(true, false, 'r'), &mut ctx);
+        assert!(fired.get(), "Ctrl+R fires the item without opening the menu");
+        assert!(bar.open.is_none(), "the menu stays closed");
+        assert!(ctx.is_consumed(), "the chord must not also reach the focused widget");
+        assert!(
+            ctx.swallow_key,
+            "the press is swallowed through its release so trailing Char/KeyUp \
+             events can't leak into whatever the item opened"
+        );
+    }
+
+    #[test]
+    fn accel_on_a_disabled_item_falls_through_unconsumed() {
+        let fired = Rc::new(Cell::new(false));
+        let mut bar = bar_with_accel(fired.clone(), Some(false));
+        let mut ctx = EventCtx::new();
+        bar.event(&chord(true, false, 'r'), &mut ctx);
+        assert!(!fired.get(), "a disabled item must not fire on its accel");
+        assert!(
+            !ctx.is_consumed(),
+            "an inapplicable chord falls through to the focused widget"
+        );
+    }
+
+    #[test]
+    fn accel_skips_a_disabled_match_in_favor_of_an_enabled_one() {
+        // Two items share the chord; the disabled one must not shadow the
+        // enabled one further down.
+        let fired = Rc::new(Cell::new(false));
+        let f = fired.clone();
+        let mut bar = MenuBar::new(Rect::new(0, 0, 200, 20))
+            .with_scheme(ModifierScheme::Pc)
+            .add_menu(Menu::new(
+                "&Edit",
+                vec![
+                    MenuItem::action("&Off", |_| {})
+                        .with_accel("Ctrl+R")
+                        .with_enabled(|| false),
+                    MenuItem::action("O&n", move |_| f.set(true)).with_accel("Ctrl+R"),
+                ],
+            ));
+        let mut ctx = EventCtx::new();
+        bar.event(&chord(true, false, 'r'), &mut ctx);
+        assert!(fired.get());
+    }
+
+    #[test]
+    fn accels_wait_while_a_menu_is_open() {
+        // An open menu owns the keyboard: the chord neither fires the item nor
+        // leaks through — it's simply swallowed like any other ignored key.
+        // The accel letter deliberately differs from the item's mnemonic,
+        // which *would* fire on its bare letter while the menu is up.
+        let fired = Rc::new(Cell::new(false));
+        let f = fired.clone();
+        let mut bar = MenuBar::new(Rect::new(0, 0, 200, 20))
+            .with_scheme(ModifierScheme::Pc)
+            .add_menu(Menu::new(
+                "&File",
+                vec![MenuItem::action("&Rescan", move |_| f.set(true)).with_accel("Ctrl+T")],
+            ));
+        bar.open(0);
+        let mut ctx = EventCtx::new();
+        bar.event(&chord(true, false, 't'), &mut ctx);
+        assert!(!fired.get(), "no accel firing while a menu is up");
+        assert!(ctx.is_consumed(), "…but the open menu still swallows the key");
+    }
+
+    #[test]
+    fn mac_scheme_binds_the_logo_key_as_primary() {
+        let fired = Rc::new(Cell::new(false));
+        let f = fired.clone();
+        let mut bar = MenuBar::new(Rect::new(0, 0, 200, 20))
+            .with_scheme(ModifierScheme::Mac)
+            .add_menu(Menu::new(
+                "&File",
+                vec![MenuItem::action("&Rescan", move |_| f.set(true)).with_accel("Ctrl+R")],
+            ));
+        // On a Mac the primary role is ⌘ — the physical Ctrl key is the
+        // secondary role and must not fire a primary chord.
+        let mut ctx = EventCtx::new();
+        bar.event(&chord(true, false, 'r'), &mut ctx);
+        assert!(!fired.get(), "Ctrl+R is not the primary chord on a Mac");
+        assert!(!ctx.is_consumed());
+        let mut ctx = EventCtx::new();
+        bar.event(&chord(false, true, 'r'), &mut ctx);
+        assert!(fired.get(), "Cmd+R fires it");
     }
 
     #[test]

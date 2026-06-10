@@ -31,6 +31,7 @@
 // — also works when saudade uses it internally (e.g. the dialog icons).
 extern crate self as saudade;
 
+mod accel;
 mod app;
 mod background;
 pub mod chrome;
@@ -46,6 +47,7 @@ mod wayland;
 mod widget;
 mod widgets;
 
+pub use accel::{Accel, AccelMods, ModifierScheme};
 pub use app::{App, WindowConfig};
 pub use background::{BackgroundPattern, PATTERN_COLORS};
 pub use chrome::{WindowChrome, WindowFrame};
