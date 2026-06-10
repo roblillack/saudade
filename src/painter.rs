@@ -629,6 +629,52 @@ impl<'a> Painter<'a> {
         self.fill_rect(Rect::new(x, y, 1, h), color);
     }
 
+    /// Blit a block of pre-composited, **opaque** ARGB pixels with its top-left
+    /// at logical `(x, y)`. `src` is row-major and exactly `w`×`h` logical
+    /// pixels (`src.len() == w * h`); each logical pixel is snapped to physical
+    /// coordinates and written as a solid block — the same result a grid of
+    /// per-pixel [`pixel`](Self::pixel) calls would produce, but far cheaper:
+    /// the logical→physical snap runs once per column and row instead of twice
+    /// per pixel, the clip is resolved once, and no per-pixel `Rect` is built.
+    ///
+    /// Alpha is ignored (the source is assumed already flattened to opaque), so
+    /// this performs no blending — it is the bulk path for drawing a decoded /
+    /// composed image, where per-pixel `pixel()` calls are the bottleneck.
+    pub fn blit_argb(&mut self, x: i32, y: i32, w: u32, h: u32, src: &[u32]) {
+        if w == 0 || h == 0 {
+            return;
+        }
+        debug_assert_eq!(src.len(), (w * h) as usize, "src must hold w*h pixels");
+        let (cx0, cy0, cx1, cy1) = self.clip_bounds();
+        // Snapped physical x of every logical column edge (w + 1 of them), so
+        // the inner loop indexes them instead of snapping per pixel.
+        let xs: Vec<i32> = (0..=w as i32)
+            .map(|i| self.origin_x + self.snap(x + i))
+            .collect();
+        for j in 0..h as i32 {
+            let py0 = (self.origin_y + self.snap(y + j)).max(cy0);
+            let py1 = (self.origin_y + self.snap(y + j + 1)).min(cy1);
+            if py1 <= py0 {
+                continue;
+            }
+            let src_row = (j as u32 * w) as usize;
+            for i in 0..w as usize {
+                let px0 = xs[i].max(cx0);
+                let px1 = xs[i + 1].min(cx1);
+                if px1 <= px0 {
+                    continue;
+                }
+                let color = src[src_row + i];
+                for yy in py0..py1 {
+                    let base = (yy * self.width) as usize;
+                    for xx in px0..px1 {
+                        self.pixels[base + xx as usize] = color;
+                    }
+                }
+            }
+        }
+    }
+
     pub fn stroke_rect(&mut self, rect: Rect, color: Color) {
         if rect.w <= 0 || rect.h <= 0 {
             return;
@@ -1018,5 +1064,70 @@ mod tests {
         assert_eq!(at(4, 0), Color::BLACK.0); // x+y == 4
         assert_eq!(at(2, 2), Color::BLACK.0); // x+y == 4
         assert_eq!(at(1, 0), Color::WHITE.0); // x+y == 1
+    }
+
+    #[test]
+    fn blit_argb_copies_pixels_at_an_offset_scale_1() {
+        let (w, h) = (8, 8);
+        let mut pixels = vec![0u32; (w * h) as usize];
+        // A 2×2 source: red, green / blue, white (already opaque ARGB).
+        let src = [0xFFFF0000, 0xFF00FF00, 0xFF0000FF, 0xFFFFFFFF];
+        {
+            let mut p = Painter::new(&mut pixels, w, h, 1.0, 0, 0, None, None);
+            p.blit_argb(3, 2, 2, 2, &src);
+        }
+        let at = |x: i32, y: i32| pixels[(y * w + x) as usize];
+        // At scale 1 the block lands one device pixel per source pixel at (3,2).
+        assert_eq!(at(3, 2), 0xFFFF0000);
+        assert_eq!(at(4, 2), 0xFF00FF00);
+        assert_eq!(at(3, 3), 0xFF0000FF);
+        assert_eq!(at(4, 3), 0xFFFFFFFF);
+        // Nothing leaks around it.
+        assert_eq!(at(2, 2), 0);
+        assert_eq!(at(5, 3), 0);
+        assert_eq!(at(3, 4), 0);
+    }
+
+    #[test]
+    fn blit_argb_snaps_each_source_pixel_to_a_block_at_scale_2() {
+        let (w, h) = (12, 12);
+        let mut pixels = vec![0u32; (w * h) as usize];
+        let src = [0xFFFF0000, 0xFF00FF00, 0xFF0000FF, 0xFFFFFFFF];
+        {
+            let mut p = Painter::new(&mut pixels, w, h, 2.0, 0, 0, None, None);
+            // Logical (1,1): the top-left source pixel maps to the 2×2 device
+            // block anchored at (2,2).
+            p.blit_argb(1, 1, 2, 2, &src);
+        }
+        let at = |x: i32, y: i32| pixels[(y * w + x) as usize];
+        // Top-left source pixel → 2×2 red block at (2,2)..(4,4).
+        assert_eq!(at(2, 2), 0xFFFF0000);
+        assert_eq!(at(3, 3), 0xFFFF0000);
+        // Top-right source pixel → green block at x in 4..6.
+        assert_eq!(at(4, 2), 0xFF00FF00);
+        assert_eq!(at(5, 3), 0xFF00FF00);
+        // Bottom-left → blue block at y in 4..6.
+        assert_eq!(at(2, 4), 0xFF0000FF);
+        assert_eq!(at(3, 5), 0xFF0000FF);
+        // Nothing above-left of the block.
+        assert_eq!(at(1, 1), 0);
+    }
+
+    #[test]
+    fn blit_argb_is_clipped() {
+        let (w, h) = (8, 8);
+        let mut pixels = vec![0u32; (w * h) as usize];
+        let src = vec![0xFFFFFFFFu32; 16]; // 4×4 opaque white
+        {
+            let mut p = Painter::new(&mut pixels, w, h, 1.0, 0, 0, None, None);
+            // Clip to a 2×2 window; only that corner of the 4×4 blit survives.
+            p.set_clip_phys(1, 1, 2, 2);
+            p.blit_argb(0, 0, 4, 4, &src);
+        }
+        let at = |x: i32, y: i32| pixels[(y * w + x) as usize];
+        assert_eq!(at(1, 1), 0xFFFFFFFF, "inside the clip is painted");
+        assert_eq!(at(2, 2), 0xFFFFFFFF, "inside the clip is painted");
+        assert_eq!(at(0, 0), 0, "outside the clip stays untouched");
+        assert_eq!(at(3, 3), 0, "outside the clip stays untouched");
     }
 }
