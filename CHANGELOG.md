@@ -63,7 +63,15 @@ While pre-1.0, the minor version is bumped for breaking changes.
   (renamed from `from_bytes`) gains `with_bold_bytes`, `with_italic_bytes`, and
   `with_bold_italic_bytes` builders to attach the emphasis faces from in-memory
   buffers, and `MockBackend` gains `with_serif_font` alongside `with_sans_font`
-  (renamed from `with_font`) / `with_mono_font`. (#44)
+  (renamed from `with_font`) / `with_mono_font`.
+- `Painter::blit_argb` blits a block of pre-composited, opaque ARGB pixels in
+  one call — the bulk path for drawing a decoded or composed image, where a
+  grid of per-pixel `pixel()` calls is the bottleneck. Each source pixel still
+  snaps to the same physical block `pixel()` would produce and the physical
+  clip rect is honored, but the logical→physical snap runs once per row and
+  column instead of twice per pixel and the clip is resolved once for the whole
+  blit. Alpha is ignored: the source is assumed already flattened to opaque, so
+  no per-pixel blending happens. (#45)
 
 ### Changed
 
