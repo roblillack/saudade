@@ -31,6 +31,11 @@ pub enum MenuItem {
         /// application; the menu never acts on it.
         accel: Option<String>,
         callback: Box<dyn FnMut(&mut EventCtx)>,
+        /// Optional predicate gating the item, evaluated live each paint / fire.
+        /// `None` means always enabled; `Some(f)` greys the item and blocks
+        /// firing (mouse and keyboard) and keyboard navigation when `f()` is
+        /// false. See [`MenuItem::with_enabled`].
+        enabled: Option<Box<dyn Fn() -> bool>>,
     },
     Separator,
 }
@@ -44,6 +49,7 @@ impl MenuItem {
             label: label.into(),
             accel: None,
             callback: Box::new(callback),
+            enabled: None,
         }
     }
 
@@ -56,12 +62,44 @@ impl MenuItem {
         self
     }
 
+    /// Gate the item on a predicate evaluated live (each paint and each attempt
+    /// to fire it). A disabled item renders greyed, can't be clicked or
+    /// keyboard-selected, and never fires. No-op on separators. The predicate
+    /// typically reads shared application state (an `Rc<RefCell<…>>`), letting a
+    /// menu built once reflect changing context.
+    pub fn with_enabled<F>(mut self, predicate: F) -> Self
+    where
+        F: Fn() -> bool + 'static,
+    {
+        if let MenuItem::Action { enabled, .. } = &mut self {
+            *enabled = Some(Box::new(predicate));
+        }
+        self
+    }
+
     pub fn separator() -> Self {
         MenuItem::Separator
     }
 
     fn is_action(&self) -> bool {
         matches!(self, MenuItem::Action { .. })
+    }
+
+    /// Whether the item is currently enabled (separators count as enabled but
+    /// are never selectable). An action with no predicate is always enabled.
+    fn is_enabled(&self) -> bool {
+        match self {
+            MenuItem::Action {
+                enabled: Some(pred),
+                ..
+            } => pred(),
+            _ => true,
+        }
+    }
+
+    /// Whether the item can be hovered / fired: an action that is also enabled.
+    fn is_selectable(&self) -> bool {
+        self.is_action() && self.is_enabled()
     }
 
     fn height(&self) -> i32 {
@@ -224,7 +262,7 @@ impl MenuBar {
         for (i, item) in self.menus[menu_idx].items.iter().enumerate() {
             let h = item.height();
             if pos.y >= y && pos.y < y + h {
-                return if item.is_action() { Some(i) } else { None };
+                return if item.is_selectable() { Some(i) } else { None };
             }
             y += h;
         }
@@ -233,6 +271,14 @@ impl MenuBar {
 
     fn fire(&mut self, item_idx: usize, ctx: &mut EventCtx) {
         let Some(menu_idx) = self.open else { return };
+        // A disabled item never fires, even if reached by a stale hover/index.
+        if self.menus[menu_idx]
+            .items
+            .get(item_idx)
+            .is_some_and(|item| !item.is_enabled())
+        {
+            return;
+        }
         if let Some(MenuItem::Action { callback, .. }) =
             self.menus[menu_idx].items.get_mut(item_idx)
         {
@@ -257,6 +303,7 @@ impl MenuBar {
         let target = ch.to_ascii_lowercase();
         for (i, item) in self.menus[menu_idx].items.iter().enumerate() {
             if let MenuItem::Action { label, .. } = item
+                && item.is_enabled()
                 && parse_label(label).mnemonic_char == Some(target)
             {
                 return Some(i);
@@ -358,7 +405,11 @@ impl Widget for MenuBar {
                 MenuItem::Action { label, accel, .. } => {
                     let row = Rect::new(popup.x + 1, y, popup.w - 2, ITEM_HEIGHT);
                     let parsed = parse_label(label);
-                    let (bg, fg) = if self.hovered_item == Some(i) {
+                    // A disabled item is greyed and never shows the hover band
+                    // (it can't be hovered — `hit_item` skips it).
+                    let (bg, fg) = if !item.is_enabled() {
+                        (theme.background, theme.disabled_text)
+                    } else if self.hovered_item == Some(i) {
                         (theme.highlight_bg, theme.highlight_text)
                     } else {
                         (theme.background, theme.text)
@@ -594,7 +645,7 @@ impl MenuBar {
         self.menus[menu_idx]
             .items
             .iter()
-            .position(|item| item.is_action())
+            .position(|item| item.is_selectable())
     }
 
     fn last_action(&self) -> Option<usize> {
@@ -604,7 +655,7 @@ impl MenuBar {
             .iter()
             .enumerate()
             .rev()
-            .find_map(|(i, item)| item.is_action().then_some(i))
+            .find_map(|(i, item)| item.is_selectable().then_some(i))
     }
 
     /// Step hovered_item by ±1, skipping separators, wrapping at the ends.
@@ -619,7 +670,7 @@ impl MenuBar {
             .items
             .iter()
             .enumerate()
-            .filter(|(_, item)| item.is_action())
+            .filter(|(_, item)| item.is_selectable())
             .map(|(i, _)| i)
             .collect();
         if actions.is_empty() {
@@ -804,6 +855,55 @@ mod tests {
         assert!(
             !ctx.swallow_key,
             "opening a menu must not swallow the key press"
+        );
+    }
+
+    #[test]
+    fn disabled_item_does_not_fire_by_mnemonic() {
+        let fired = Rc::new(Cell::new(false));
+        let f = fired.clone();
+        let mut bar = MenuBar::new(Rect::new(0, 0, 200, 20)).add_menu(Menu::new(
+            "&Edit",
+            vec![MenuItem::action("&Paste", move |_| f.set(true)).with_enabled(|| false)],
+        ));
+        bar.open(0);
+        let mut ctx = EventCtx::new();
+        bar.event(&keydown(Key::Char('p')), &mut ctx); // &Paste mnemonic
+        assert!(!fired.get(), "a disabled item must not fire");
+    }
+
+    #[test]
+    fn enabled_predicate_item_fires_by_mnemonic() {
+        let fired = Rc::new(Cell::new(false));
+        let f = fired.clone();
+        let mut bar = MenuBar::new(Rect::new(0, 0, 200, 20)).add_menu(Menu::new(
+            "&Edit",
+            vec![MenuItem::action("&Paste", move |_| f.set(true)).with_enabled(|| true)],
+        ));
+        bar.open(0);
+        let mut ctx = EventCtx::new();
+        bar.event(&keydown(Key::Char('p')), &mut ctx);
+        assert!(fired.get(), "an enabled item fires normally");
+    }
+
+    #[test]
+    fn down_nav_skips_a_disabled_item() {
+        // A disabled first item, an enabled second one: Down lands on the
+        // enabled item, never highlighting the disabled one.
+        let mut bar = MenuBar::new(Rect::new(0, 0, 200, 20)).add_menu(Menu::new(
+            "&Edit",
+            vec![
+                MenuItem::action("&Cut", |_| {}).with_enabled(|| false),
+                MenuItem::action("C&opy", |_| {}),
+            ],
+        ));
+        bar.open(0);
+        let mut ctx = EventCtx::new();
+        bar.event(&keydown(Key::Named(NamedKey::Down)), &mut ctx);
+        assert_eq!(
+            bar.hovered_item,
+            Some(1),
+            "Down skips the disabled first item"
         );
     }
 
