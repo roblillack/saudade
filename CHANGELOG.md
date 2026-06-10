@@ -10,6 +10,37 @@ While pre-1.0, the minor version is bumped for breaking changes.
 
 ## [Unreleased] - ReleaseDate
 
+### Added
+
+- Menu items can be disabled. `MenuItem::with_enabled` attaches a predicate
+  that is evaluated live on every paint and every attempt to fire, so a menu
+  built once tracks changing application state (typically read through an
+  `Rc<RefCell<…>>`). A disabled item renders greyed, shows no hover band, is
+  skipped by arrow-key navigation and mnemonics, and never fires — by mouse,
+  keyboard, or accelerator. (#46)
+- Menu items can show a checkmark. `MenuItem::with_checked` attaches a
+  predicate, also read live each paint, that draws a tick in the item's left
+  gutter while true — for toggles and radio-style groups. The glyph is the
+  same one `Checkbox` uses, tinted to the item's current text color, and it
+  rides inside the existing label inset, so the layout never shifts between
+  checked and unchecked. The mark is display-only: a checked item still fires
+  its callback normally when picked. (#46)
+- Menu accelerators are now live, not just decorative. `MenuItem::with_accel`
+  takes the new `Accel` type (or its conventional string form: `"Ctrl+R"`,
+  `"Ctrl+Shift+Enter"`), and pressing a matching chord while the bar is closed
+  fires the item directly. `Accel` names its modifiers as platform-independent
+  *roles* (`AccelMods`): `Accel::primary('r')` means ⌘R on macOS and Ctrl+R
+  everywhere else, resolved through a `ModifierScheme` both when matching
+  input and when rendering the right-aligned hint. The scheme defaults to the
+  build platform's; `MenuBar::with_scheme` pins it, e.g. for snapshot tests
+  that must not drift between hosts. A chord whose only matches are disabled
+  items falls through unconsumed, keeping its ordinary meaning in the focused
+  widget (Ctrl+Left stays word-jump in an editor); while a menu is open it owns
+  the keyboard, so chords wait. Breaking: `MenuItem::Action`'s `accel` field is
+  now `Option<Accel>` instead of `Option<String>` — `with_accel("Ctrl+R")`
+  call sites keep compiling via `From<&str>`, which panics on a malformed
+  chord so a typo fails loudly at first use. (#46)
+
 ### Fixed
 
 - `TextEditor` and `List` no longer jump their scroll position back to the
