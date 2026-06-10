@@ -1,6 +1,9 @@
+use crate::accel::{Accel, ModifierScheme};
 use crate::event::{Event, EventCtx, Key, Modifiers, MouseButton, NamedKey};
 use crate::geometry::{Color, Point, Rect};
+use crate::include_svg;
 use crate::painter::Painter;
+use crate::svg::SvgImage;
 use crate::theme::Theme;
 use crate::widget::{PopupKind, PopupRequest, Widget};
 use crate::widgets::mnemonic::{draw_label_with_mnemonic, parse_label};
@@ -20,17 +23,44 @@ const SHADOW_SIZE: i32 = 2;
 /// L-shape drop shadow color: a dark gray with no alpha trickery so it
 /// renders crisply on every backend.
 const SHADOW_COLOR: Color = Color::rgb(0x40, 0x40, 0x40);
+/// Footprint of the checkmark drawn in a checked item's left gutter. Kept a few
+/// pixels smaller than the label inset (`POPUP_PADDING_X - 4`) and centered in
+/// it, so the tick has breathing room on both sides and never crowds the text —
+/// and so unchecked / uncheckable menus keep their exact layout.
+const CHECK_SIZE: i32 = 9;
+/// A tiny nudge applied to the centered checkmark so it reads as aligned with
+/// the label rather than sitting a hair high and left of it.
+const CHECK_NUDGE_X: i32 = 1;
+const CHECK_NUDGE_Y: i32 = 1;
+
+/// The checkmark glyph for a checked item, shared with the [`Checkbox`] widget
+/// so both read identically. Baked black is a placeholder, tinted to the item's
+/// text color via [`SvgImage::draw_tinted`].
+///
+/// [`Checkbox`]: crate::widgets::Checkbox
+const CHECK: SvgImage = include_svg!("assets/checkbox/check.svg");
 
 /// One entry inside a drop-down [`Menu`].
 pub enum MenuItem {
     Action {
         /// Raw label as supplied; may contain `&X` to mark the mnemonic.
         label: String,
-        /// Optional accelerator hint (e.g. `"Ctrl+Enter"`) shown right-aligned
-        /// in the drop-down. Display only — the binding itself is wired by the
-        /// application; the menu never acts on it.
-        accel: Option<String>,
+        /// Optional keyboard accelerator. Shown right-aligned in the drop-down
+        /// (rendered through the bar's [`ModifierScheme`]) *and* live: a
+        /// matching chord against the closed bar fires the item directly — see
+        /// [`MenuBar::fire_accel`]. [`MenuItem::with_enabled`] gates it like
+        /// any other way of firing.
+        accel: Option<Accel>,
         callback: Box<dyn FnMut(&mut EventCtx)>,
+        /// Optional predicate gating the item, evaluated live each paint / fire.
+        /// `None` means always enabled; `Some(f)` greys the item and blocks
+        /// firing (mouse and keyboard) and keyboard navigation when `f()` is
+        /// false. See [`MenuItem::with_enabled`].
+        enabled: Option<Box<dyn Fn() -> bool>>,
+        /// Optional predicate evaluated live each paint: when `Some(f)` and
+        /// `f()` is true, a checkmark is drawn in the item's left gutter. `None`
+        /// is an ordinary (never-checked) item. See [`MenuItem::with_checked`].
+        checked: Option<Box<dyn Fn() -> bool>>,
     },
     Separator,
 }
@@ -44,14 +74,50 @@ impl MenuItem {
             label: label.into(),
             accel: None,
             callback: Box::new(callback),
+            enabled: None,
+            checked: None,
         }
     }
 
-    /// Attach a right-aligned accelerator hint to an action item, advertising
-    /// the keyboard shortcut the application binds for it. No-op on separators.
-    pub fn with_accel(mut self, accel: impl Into<String>) -> Self {
+    /// Attach a keyboard accelerator to an action item: the chord is shown
+    /// right-aligned in the drop-down and fires the item when pressed against
+    /// the closed bar. Takes an [`Accel`] or its string form (`"Ctrl+R"`,
+    /// `"Ctrl+Enter"` — `Ctrl`/`Cmd` both mean the primary role, resolved per
+    /// platform). No-op on separators.
+    pub fn with_accel(mut self, accel: impl Into<Accel>) -> Self {
         if let MenuItem::Action { accel: slot, .. } = &mut self {
             *slot = Some(accel.into());
+        }
+        self
+    }
+
+    /// Gate the item on a predicate evaluated live (each paint and each attempt
+    /// to fire it). A disabled item renders greyed, can't be clicked or
+    /// keyboard-selected, and never fires. No-op on separators. The predicate
+    /// typically reads shared application state (an `Rc<RefCell<…>>`), letting a
+    /// menu built once reflect changing context.
+    pub fn with_enabled<F>(mut self, predicate: F) -> Self
+    where
+        F: Fn() -> bool + 'static,
+    {
+        if let MenuItem::Action { enabled, .. } = &mut self {
+            *enabled = Some(Box::new(predicate));
+        }
+        self
+    }
+
+    /// Mark the item as checkable: when `predicate` evaluates true a checkmark
+    /// is drawn in its left gutter, leaving the label where it is. The predicate
+    /// is read live each paint, so a menu built once tracks changing state (e.g.
+    /// which mode is active). Use this for toggles and radio-style groups. No-op
+    /// on separators. The checkmark is purely a display affordance — the item
+    /// still fires its callback when picked, regardless of checked state.
+    pub fn with_checked<F>(mut self, predicate: F) -> Self
+    where
+        F: Fn() -> bool + 'static,
+    {
+        if let MenuItem::Action { checked, .. } = &mut self {
+            *checked = Some(Box::new(predicate));
         }
         self
     }
@@ -62,6 +128,35 @@ impl MenuItem {
 
     fn is_action(&self) -> bool {
         matches!(self, MenuItem::Action { .. })
+    }
+
+    /// Whether the item is currently enabled (separators count as enabled but
+    /// are never selectable). An action with no predicate is always enabled.
+    fn is_enabled(&self) -> bool {
+        match self {
+            MenuItem::Action {
+                enabled: Some(pred),
+                ..
+            } => pred(),
+            _ => true,
+        }
+    }
+
+    /// Whether the item can be hovered / fired: an action that is also enabled.
+    fn is_selectable(&self) -> bool {
+        self.is_action() && self.is_enabled()
+    }
+
+    /// Whether a checkmark should be drawn for this item right now. Only a
+    /// checkable action with a live-true predicate is checked.
+    fn is_checked(&self) -> bool {
+        matches!(
+            self,
+            MenuItem::Action {
+                checked: Some(pred),
+                ..
+            } if pred()
+        )
     }
 
     fn height(&self) -> i32 {
@@ -104,9 +199,16 @@ struct Cache {
 /// mnemonic: `&File` displays "File" with **F** underlined and binds Alt+F
 /// (top-level) or just F (when the menu is already open) to that entry.
 /// Escape closes the open menu.
+///
+/// Items carrying an [`Accel`] also fire on their chord while the bar is
+/// closed — Win 3.1's accelerator table, without the `.rc` file. The chord is
+/// matched (and its hint rendered) through the bar's [`ModifierScheme`],
+/// which defaults to the build platform's; [`MenuBar::with_scheme`] pins it,
+/// e.g. for snapshot tests that must not drift between hosts.
 pub struct MenuBar {
     rect: Rect,
     menus: Vec<Menu>,
+    scheme: ModifierScheme,
     open: Option<usize>,
     hovered_item: Option<usize>,
     /// True between the press-on-the-bar that opened the current menu and
@@ -123,6 +225,7 @@ impl MenuBar {
         Self {
             rect,
             menus: Vec::new(),
+            scheme: ModifierScheme::native(),
             open: None,
             hovered_item: None,
             drag_armed: false,
@@ -132,6 +235,14 @@ impl MenuBar {
 
     pub fn add_menu(mut self, menu: Menu) -> Self {
         self.menus.push(menu);
+        self
+    }
+
+    /// Pin the [`ModifierScheme`] accelerators are matched and rendered with,
+    /// overriding the [`ModifierScheme::native`] default. Mainly for tests
+    /// that must behave identically on every host.
+    pub fn with_scheme(mut self, scheme: ModifierScheme) -> Self {
+        self.scheme = scheme;
         self
     }
 
@@ -182,7 +293,9 @@ impl MenuBar {
                     max_label = w;
                 }
                 if let Some(accel) = accel {
-                    let aw = painter.measure_text(accel, theme.font_size).w;
+                    let aw = painter
+                        .measure_text(&accel.label(self.scheme), theme.font_size)
+                        .w;
                     if aw > max_accel {
                         max_accel = aw;
                     }
@@ -224,7 +337,7 @@ impl MenuBar {
         for (i, item) in self.menus[menu_idx].items.iter().enumerate() {
             let h = item.height();
             if pos.y >= y && pos.y < y + h {
-                return if item.is_action() { Some(i) } else { None };
+                return if item.is_selectable() { Some(i) } else { None };
             }
             y += h;
         }
@@ -233,6 +346,14 @@ impl MenuBar {
 
     fn fire(&mut self, item_idx: usize, ctx: &mut EventCtx) {
         let Some(menu_idx) = self.open else { return };
+        // A disabled item never fires, even if reached by a stale hover/index.
+        if self.menus[menu_idx]
+            .items
+            .get(item_idx)
+            .is_some_and(|item| !item.is_enabled())
+        {
+            return;
+        }
         if let Some(MenuItem::Action { callback, .. }) =
             self.menus[menu_idx].items.get_mut(item_idx)
         {
@@ -257,6 +378,7 @@ impl MenuBar {
         let target = ch.to_ascii_lowercase();
         for (i, item) in self.menus[menu_idx].items.iter().enumerate() {
             if let MenuItem::Action { label, .. } = item
+                && item.is_enabled()
                 && parse_label(label).mnemonic_char == Some(target)
             {
                 return Some(i);
@@ -358,12 +480,29 @@ impl Widget for MenuBar {
                 MenuItem::Action { label, accel, .. } => {
                     let row = Rect::new(popup.x + 1, y, popup.w - 2, ITEM_HEIGHT);
                     let parsed = parse_label(label);
-                    let (bg, fg) = if self.hovered_item == Some(i) {
+                    // A disabled item is greyed and never shows the hover band
+                    // (it can't be hovered — `hit_item` skips it).
+                    let (bg, fg) = if !item.is_enabled() {
+                        (theme.background, theme.disabled_text)
+                    } else if self.hovered_item == Some(i) {
                         (theme.highlight_bg, theme.highlight_text)
                     } else {
                         (theme.background, theme.text)
                     };
                     painter.fill_rect(row, bg);
+                    // A checked item gets a tick centered in the left gutter,
+                    // tinted to match the (possibly greyed / highlighted) label
+                    // color. It rides inside the existing label inset, so the
+                    // text never shifts whether or not the item is checked. A
+                    // 1px nudge down/right sits it more squarely against the
+                    // label's optical baseline.
+                    if item.is_checked() {
+                        let gutter = POPUP_PADDING_X - 4;
+                        let cx = row.x + (gutter - CHECK_SIZE) / 2 + CHECK_NUDGE_X;
+                        let cy = row.y + (ITEM_HEIGHT - CHECK_SIZE) / 2 + CHECK_NUDGE_Y;
+                        let check = Rect::new(cx, cy, CHECK_SIZE, CHECK_SIZE);
+                        CHECK.draw_tinted(painter, check, fg);
+                    }
                     draw_label_with_mnemonic(
                         painter,
                         row.x + POPUP_PADDING_X - 4,
@@ -376,9 +515,10 @@ impl Widget for MenuBar {
                     // Accelerator hint, right-aligned with the same inset the
                     // label carries on the left.
                     if let Some(accel) = accel {
-                        let aw = painter.measure_text(accel, theme.font_size).w;
+                        let hint = accel.label(self.scheme);
+                        let aw = painter.measure_text(&hint, theme.font_size).w;
                         let ax = row.right() - (POPUP_PADDING_X - 4) - aw;
-                        painter.text(ax, row.y + ITEM_TEXT_INSET_Y, accel, theme.font_size, fg);
+                        painter.text(ax, row.y + ITEM_TEXT_INSET_Y, &hint, theme.font_size, fg);
                     }
                     y += ITEM_HEIGHT;
                 }
@@ -482,6 +622,13 @@ impl Widget for MenuBar {
                 // keystroke (see the consume below) so it doesn't also reach the
                 // focused widget behind the bar.
                 let was_open = self.open.is_some();
+                // A closed bar first consults the accelerator table; while a
+                // menu is open it owns the keyboard outright, so chords wait.
+                // Accelerators outrank mnemonics (Win32 order), though only a
+                // chord of exactly Alt+letter could ever contest one.
+                if !was_open && self.fire_accel(*key, *modifiers, ctx) {
+                    return;
+                }
                 match key {
                     Key::Named(NamedKey::Escape) if was_open => {
                         self.open = None;
@@ -587,6 +734,42 @@ impl Widget for MenuBar {
 }
 
 impl MenuBar {
+    /// Try the pressed chord against every item's accelerator: the first
+    /// *enabled* match fires directly — without opening its menu — and the
+    /// keystroke is consumed and swallowed through its release, so it can't
+    /// also reach the focused widget (or leak into whatever the item opens).
+    /// A chord whose only matches are disabled items does **not** consume:
+    /// it falls through to the focused widget, keeping an inapplicable
+    /// accelerator's ordinary meaning intact (e.g. Ctrl+Left staying
+    /// word-jump in an editor). Returns whether an item fired.
+    fn fire_accel(&mut self, key: Key, modifiers: Modifiers, ctx: &mut EventCtx) -> bool {
+        let scheme = self.scheme;
+        for menu in &mut self.menus {
+            for item in &mut menu.items {
+                let MenuItem::Action {
+                    accel: Some(accel),
+                    enabled,
+                    callback,
+                    ..
+                } = item
+                else {
+                    continue;
+                };
+                if !accel.matches(key, modifiers, scheme)
+                    || enabled.as_ref().is_some_and(|enabled| !enabled())
+                {
+                    continue;
+                }
+                callback(ctx);
+                ctx.consume_event();
+                ctx.swallow_key_until_release();
+                ctx.request_paint();
+                return true;
+            }
+        }
+        false
+    }
+
     /// Index of the first action item in the currently open menu (skipping
     /// separators); `None` if no menu is open or it has no actions.
     fn first_action(&self) -> Option<usize> {
@@ -594,7 +777,7 @@ impl MenuBar {
         self.menus[menu_idx]
             .items
             .iter()
-            .position(|item| item.is_action())
+            .position(|item| item.is_selectable())
     }
 
     fn last_action(&self) -> Option<usize> {
@@ -604,7 +787,7 @@ impl MenuBar {
             .iter()
             .enumerate()
             .rev()
-            .find_map(|(i, item)| item.is_action().then_some(i))
+            .find_map(|(i, item)| item.is_selectable().then_some(i))
     }
 
     /// Step hovered_item by ±1, skipping separators, wrapping at the ends.
@@ -619,7 +802,7 @@ impl MenuBar {
             .items
             .iter()
             .enumerate()
-            .filter(|(_, item)| item.is_action())
+            .filter(|(_, item)| item.is_selectable())
             .map(|(i, _)| i)
             .collect();
         if actions.is_empty() {
@@ -805,6 +988,202 @@ mod tests {
             !ctx.swallow_key,
             "opening a menu must not swallow the key press"
         );
+    }
+
+    #[test]
+    fn disabled_item_does_not_fire_by_mnemonic() {
+        let fired = Rc::new(Cell::new(false));
+        let f = fired.clone();
+        let mut bar = MenuBar::new(Rect::new(0, 0, 200, 20)).add_menu(Menu::new(
+            "&Edit",
+            vec![MenuItem::action("&Paste", move |_| f.set(true)).with_enabled(|| false)],
+        ));
+        bar.open(0);
+        let mut ctx = EventCtx::new();
+        bar.event(&keydown(Key::Char('p')), &mut ctx); // &Paste mnemonic
+        assert!(!fired.get(), "a disabled item must not fire");
+    }
+
+    #[test]
+    fn enabled_predicate_item_fires_by_mnemonic() {
+        let fired = Rc::new(Cell::new(false));
+        let f = fired.clone();
+        let mut bar = MenuBar::new(Rect::new(0, 0, 200, 20)).add_menu(Menu::new(
+            "&Edit",
+            vec![MenuItem::action("&Paste", move |_| f.set(true)).with_enabled(|| true)],
+        ));
+        bar.open(0);
+        let mut ctx = EventCtx::new();
+        bar.event(&keydown(Key::Char('p')), &mut ctx);
+        assert!(fired.get(), "an enabled item fires normally");
+    }
+
+    #[test]
+    fn down_nav_skips_a_disabled_item() {
+        // A disabled first item, an enabled second one: Down lands on the
+        // enabled item, never highlighting the disabled one.
+        let mut bar = MenuBar::new(Rect::new(0, 0, 200, 20)).add_menu(Menu::new(
+            "&Edit",
+            vec![
+                MenuItem::action("&Cut", |_| {}).with_enabled(|| false),
+                MenuItem::action("C&opy", |_| {}),
+            ],
+        ));
+        bar.open(0);
+        let mut ctx = EventCtx::new();
+        bar.event(&keydown(Key::Named(NamedKey::Down)), &mut ctx);
+        assert_eq!(
+            bar.hovered_item,
+            Some(1),
+            "Down skips the disabled first item"
+        );
+    }
+
+    #[test]
+    fn checked_predicate_tracks_live_state() {
+        // A checkable item reflects its predicate live: flipping the shared cell
+        // flips whether a checkmark would be drawn, without rebuilding the menu.
+        let on = Rc::new(Cell::new(false));
+        let c = on.clone();
+        let item = MenuItem::action("&Commit Changes", |_| {}).with_checked(move || c.get());
+        assert!(!item.is_checked(), "starts unchecked");
+        on.set(true);
+        assert!(
+            item.is_checked(),
+            "follows the predicate once it turns true"
+        );
+        // A checkmark is display-only: it never blocks selection / firing.
+        assert!(item.is_selectable());
+    }
+
+    #[test]
+    fn plain_action_is_never_checked() {
+        assert!(!MenuItem::action("&Reload", |_| {}).is_checked());
+    }
+
+    fn chord(control: bool, logo: bool, ch: char) -> Event {
+        Event::KeyDown {
+            key: Key::Char(ch),
+            modifiers: Modifiers {
+                control,
+                logo,
+                ..Modifiers::default()
+            },
+        }
+    }
+
+    /// A bar with one File ▸ Rescan item bound to Ctrl+R, pinned to the PC
+    /// scheme so the tests behave identically on a macOS host.
+    fn bar_with_accel(fired: Rc<Cell<bool>>, enabled: Option<bool>) -> MenuBar {
+        let mut item = MenuItem::action("&Rescan", move |_| fired.set(true)).with_accel("Ctrl+R");
+        if let Some(enabled) = enabled {
+            item = item.with_enabled(move || enabled);
+        }
+        MenuBar::new(Rect::new(0, 0, 200, 20))
+            .with_scheme(ModifierScheme::Pc)
+            .add_menu(Menu::new("&File", vec![item]))
+    }
+
+    #[test]
+    fn accel_fires_the_matching_item_against_the_closed_bar() {
+        let fired = Rc::new(Cell::new(false));
+        let mut bar = bar_with_accel(fired.clone(), None);
+        let mut ctx = EventCtx::new();
+        bar.event(&chord(true, false, 'r'), &mut ctx);
+        assert!(
+            fired.get(),
+            "Ctrl+R fires the item without opening the menu"
+        );
+        assert!(bar.open.is_none(), "the menu stays closed");
+        assert!(
+            ctx.is_consumed(),
+            "the chord must not also reach the focused widget"
+        );
+        assert!(
+            ctx.swallow_key,
+            "the press is swallowed through its release so trailing Char/KeyUp \
+             events can't leak into whatever the item opened"
+        );
+    }
+
+    #[test]
+    fn accel_on_a_disabled_item_falls_through_unconsumed() {
+        let fired = Rc::new(Cell::new(false));
+        let mut bar = bar_with_accel(fired.clone(), Some(false));
+        let mut ctx = EventCtx::new();
+        bar.event(&chord(true, false, 'r'), &mut ctx);
+        assert!(!fired.get(), "a disabled item must not fire on its accel");
+        assert!(
+            !ctx.is_consumed(),
+            "an inapplicable chord falls through to the focused widget"
+        );
+    }
+
+    #[test]
+    fn accel_skips_a_disabled_match_in_favor_of_an_enabled_one() {
+        // Two items share the chord; the disabled one must not shadow the
+        // enabled one further down.
+        let fired = Rc::new(Cell::new(false));
+        let f = fired.clone();
+        let mut bar = MenuBar::new(Rect::new(0, 0, 200, 20))
+            .with_scheme(ModifierScheme::Pc)
+            .add_menu(Menu::new(
+                "&Edit",
+                vec![
+                    MenuItem::action("&Off", |_| {})
+                        .with_accel("Ctrl+R")
+                        .with_enabled(|| false),
+                    MenuItem::action("O&n", move |_| f.set(true)).with_accel("Ctrl+R"),
+                ],
+            ));
+        let mut ctx = EventCtx::new();
+        bar.event(&chord(true, false, 'r'), &mut ctx);
+        assert!(fired.get());
+    }
+
+    #[test]
+    fn accels_wait_while_a_menu_is_open() {
+        // An open menu owns the keyboard: the chord neither fires the item nor
+        // leaks through — it's simply swallowed like any other ignored key.
+        // The accel letter deliberately differs from the item's mnemonic,
+        // which *would* fire on its bare letter while the menu is up.
+        let fired = Rc::new(Cell::new(false));
+        let f = fired.clone();
+        let mut bar = MenuBar::new(Rect::new(0, 0, 200, 20))
+            .with_scheme(ModifierScheme::Pc)
+            .add_menu(Menu::new(
+                "&File",
+                vec![MenuItem::action("&Rescan", move |_| f.set(true)).with_accel("Ctrl+T")],
+            ));
+        bar.open(0);
+        let mut ctx = EventCtx::new();
+        bar.event(&chord(true, false, 't'), &mut ctx);
+        assert!(!fired.get(), "no accel firing while a menu is up");
+        assert!(
+            ctx.is_consumed(),
+            "…but the open menu still swallows the key"
+        );
+    }
+
+    #[test]
+    fn mac_scheme_binds_the_logo_key_as_primary() {
+        let fired = Rc::new(Cell::new(false));
+        let f = fired.clone();
+        let mut bar = MenuBar::new(Rect::new(0, 0, 200, 20))
+            .with_scheme(ModifierScheme::Mac)
+            .add_menu(Menu::new(
+                "&File",
+                vec![MenuItem::action("&Rescan", move |_| f.set(true)).with_accel("Ctrl+R")],
+            ));
+        // On a Mac the primary role is ⌘ — the physical Ctrl key is the
+        // secondary role and must not fire a primary chord.
+        let mut ctx = EventCtx::new();
+        bar.event(&chord(true, false, 'r'), &mut ctx);
+        assert!(!fired.get(), "Ctrl+R is not the primary chord on a Mac");
+        assert!(!ctx.is_consumed());
+        let mut ctx = EventCtx::new();
+        bar.event(&chord(false, true, 'r'), &mut ctx);
+        assert!(fired.get(), "Cmd+R fires it");
     }
 
     #[test]
