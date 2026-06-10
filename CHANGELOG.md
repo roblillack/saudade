@@ -47,7 +47,7 @@ While pre-1.0, the minor version is bumped for breaking changes.
   `Mono`) and `FontStyle` (`Regular` / `Bold` / `Italic` / `BoldItalic`). Draw
   with `Painter::text_styled(.., family, style)` and measure with
   `Painter::measure_text_styled(.., family, style)`; the existing `text` /
-  `measure_text` stay sans-serif regular, so nothing already on screen moves. (#45)
+  `measure_text` stay sans-serif regular, so nothing already on screen moves. (#44)
 - `Font::load_sans` (renamed from `load_system`), `Font::load_serif`, and
   `Font::load_monospace` load the three families, walking — for the serif — the
   classic Win 3.1 / Office serif families (Times New Roman, Georgia, …) down to
@@ -58,12 +58,12 @@ While pre-1.0, the minor version is bumped for breaking changes.
   family the host ships without a given face falls back to the nearest *real*
   face it does have (ultimately the regular face), and the loader verifies
   fontdb's match actually carries the requested weight/slant so a regular face is
-  never passed off as bold or italic. (#45)
+  never passed off as bold or italic. (#44)
 - For deterministic, font-bundling snapshot tests, `Font::from_sans_bytes`
   (renamed from `from_bytes`) gains `with_bold_bytes`, `with_italic_bytes`, and
   `with_bold_italic_bytes` builders to attach the emphasis faces from in-memory
   buffers, and `MockBackend` gains `with_serif_font` alongside `with_sans_font`
-  (renamed from `with_font`) / `with_mono_font`. (#45)
+  (renamed from `with_font`) / `with_mono_font`. (#44)
 
 ### Changed
 
@@ -72,17 +72,17 @@ While pre-1.0, the minor version is bumped for breaking changes.
   arguments. A backend builds one `FontSet` from the fonts it owns; offscreen
   painters with no text pass `FontSet::default()`. This replaces three
   same-typed positional font arguments (easy to transpose) with one named bundle
-  and makes room for the serif family. (#45)
+  and makes room for the serif family. (#44)
 - **Breaking renames:** `Font::load_system` → `Font::load_sans`,
   `Font::from_bytes` → `Font::from_sans_bytes`, and `MockBackend::with_font` →
-  `MockBackend::with_sans_font`, so each name states the family it loads. (#45)
+  `MockBackend::with_sans_font`, so each name states the family it loads. (#44)
 - **Breaking:** the monospace-specific painter methods `mono_text`,
   `measure_mono_text`, and `mono_cumulative_widths` are removed in favor of the
   general family+style API: draw with `text_styled(.., FontFamily::Mono,
   FontStyle::Regular)`, measure with `measure_text_styled(.., FontFamily::Mono,
   FontStyle::Regular)`, and get caret offsets with the new
   `Painter::cumulative_widths(text, size, family, style)`. `Font::cumulative_widths`
-  likewise gains a `FontStyle` argument. (#45)
+  likewise gains a `FontStyle` argument. (#44)
 
 ### Fixed
 
