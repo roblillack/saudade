@@ -1,6 +1,8 @@
 use crate::event::{Event, EventCtx, Key, Modifiers, MouseButton, NamedKey};
 use crate::geometry::{Color, Point, Rect};
+use crate::include_svg;
 use crate::painter::Painter;
+use crate::svg::SvgImage;
 use crate::theme::Theme;
 use crate::widget::{PopupKind, PopupRequest, Widget};
 use crate::widgets::mnemonic::{draw_label_with_mnemonic, parse_label};
@@ -20,6 +22,22 @@ const SHADOW_SIZE: i32 = 2;
 /// L-shape drop shadow color: a dark gray with no alpha trickery so it
 /// renders crisply on every backend.
 const SHADOW_COLOR: Color = Color::rgb(0x40, 0x40, 0x40);
+/// Footprint of the checkmark drawn in a checked item's left gutter. Kept a few
+/// pixels smaller than the label inset (`POPUP_PADDING_X - 4`) and centered in
+/// it, so the tick has breathing room on both sides and never crowds the text —
+/// and so unchecked / uncheckable menus keep their exact layout.
+const CHECK_SIZE: i32 = 9;
+/// A tiny nudge applied to the centered checkmark so it reads as aligned with
+/// the label rather than sitting a hair high and left of it.
+const CHECK_NUDGE_X: i32 = 1;
+const CHECK_NUDGE_Y: i32 = 1;
+
+/// The checkmark glyph for a checked item, shared with the [`Checkbox`] widget
+/// so both read identically. Baked black is a placeholder, tinted to the item's
+/// text color via [`SvgImage::draw_tinted`].
+///
+/// [`Checkbox`]: crate::widgets::Checkbox
+const CHECK: SvgImage = include_svg!("assets/checkbox/check.svg");
 
 /// One entry inside a drop-down [`Menu`].
 pub enum MenuItem {
@@ -36,6 +54,10 @@ pub enum MenuItem {
         /// firing (mouse and keyboard) and keyboard navigation when `f()` is
         /// false. See [`MenuItem::with_enabled`].
         enabled: Option<Box<dyn Fn() -> bool>>,
+        /// Optional predicate evaluated live each paint: when `Some(f)` and
+        /// `f()` is true, a checkmark is drawn in the item's left gutter. `None`
+        /// is an ordinary (never-checked) item. See [`MenuItem::with_checked`].
+        checked: Option<Box<dyn Fn() -> bool>>,
     },
     Separator,
 }
@@ -50,6 +72,7 @@ impl MenuItem {
             accel: None,
             callback: Box::new(callback),
             enabled: None,
+            checked: None,
         }
     }
 
@@ -77,6 +100,22 @@ impl MenuItem {
         self
     }
 
+    /// Mark the item as checkable: when `predicate` evaluates true a checkmark
+    /// is drawn in its left gutter, leaving the label where it is. The predicate
+    /// is read live each paint, so a menu built once tracks changing state (e.g.
+    /// which mode is active). Use this for toggles and radio-style groups. No-op
+    /// on separators. The checkmark is purely a display affordance — the item
+    /// still fires its callback when picked, regardless of checked state.
+    pub fn with_checked<F>(mut self, predicate: F) -> Self
+    where
+        F: Fn() -> bool + 'static,
+    {
+        if let MenuItem::Action { checked, .. } = &mut self {
+            *checked = Some(Box::new(predicate));
+        }
+        self
+    }
+
     pub fn separator() -> Self {
         MenuItem::Separator
     }
@@ -100,6 +139,18 @@ impl MenuItem {
     /// Whether the item can be hovered / fired: an action that is also enabled.
     fn is_selectable(&self) -> bool {
         self.is_action() && self.is_enabled()
+    }
+
+    /// Whether a checkmark should be drawn for this item right now. Only a
+    /// checkable action with a live-true predicate is checked.
+    fn is_checked(&self) -> bool {
+        matches!(
+            self,
+            MenuItem::Action {
+                checked: Some(pred),
+                ..
+            } if pred()
+        )
     }
 
     fn height(&self) -> i32 {
@@ -415,6 +466,19 @@ impl Widget for MenuBar {
                         (theme.background, theme.text)
                     };
                     painter.fill_rect(row, bg);
+                    // A checked item gets a tick centered in the left gutter,
+                    // tinted to match the (possibly greyed / highlighted) label
+                    // color. It rides inside the existing label inset, so the
+                    // text never shifts whether or not the item is checked. A
+                    // 1px nudge down/right sits it more squarely against the
+                    // label's optical baseline.
+                    if item.is_checked() {
+                        let gutter = POPUP_PADDING_X - 4;
+                        let cx = row.x + (gutter - CHECK_SIZE) / 2 + CHECK_NUDGE_X;
+                        let cy = row.y + (ITEM_HEIGHT - CHECK_SIZE) / 2 + CHECK_NUDGE_Y;
+                        let check = Rect::new(cx, cy, CHECK_SIZE, CHECK_SIZE);
+                        CHECK.draw_tinted(painter, check, fg);
+                    }
                     draw_label_with_mnemonic(
                         painter,
                         row.x + POPUP_PADDING_X - 4,
@@ -905,6 +969,25 @@ mod tests {
             Some(1),
             "Down skips the disabled first item"
         );
+    }
+
+    #[test]
+    fn checked_predicate_tracks_live_state() {
+        // A checkable item reflects its predicate live: flipping the shared cell
+        // flips whether a checkmark would be drawn, without rebuilding the menu.
+        let on = Rc::new(Cell::new(false));
+        let c = on.clone();
+        let item = MenuItem::action("&Commit Changes", |_| {}).with_checked(move || c.get());
+        assert!(!item.is_checked(), "starts unchecked");
+        on.set(true);
+        assert!(item.is_checked(), "follows the predicate once it turns true");
+        // A checkmark is display-only: it never blocks selection / firing.
+        assert!(item.is_selectable());
+    }
+
+    #[test]
+    fn plain_action_is_never_checked() {
+        assert!(!MenuItem::action("&Reload", |_| {}).is_checked());
     }
 
     #[test]
