@@ -31,6 +31,18 @@ pub enum Key {
     Char(char),
 }
 
+impl From<char> for Key {
+    fn from(c: char) -> Self {
+        Key::Char(c)
+    }
+}
+
+impl From<NamedKey> for Key {
+    fn from(named: NamedKey) -> Self {
+        Key::Named(named)
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum NamedKey {
     Enter,

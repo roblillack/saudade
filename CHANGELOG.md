@@ -12,6 +12,34 @@ While pre-1.0, the minor version is bumped for breaking changes.
 
 ### Added
 
+- Menu items can be disabled. `MenuItem::with_enabled` attaches a predicate
+  that is evaluated live on every paint and every attempt to fire, so a menu
+  built once tracks changing application state (typically read through an
+  `Rc<RefCell<…>>`). A disabled item renders greyed, shows no hover band, is
+  skipped by arrow-key navigation and mnemonics, and never fires — by mouse,
+  keyboard, or accelerator. (#46)
+- Menu items can show a checkmark. `MenuItem::with_checked` attaches a
+  predicate, also read live each paint, that draws a tick in the item's left
+  gutter while true — for toggles and radio-style groups. The glyph is the
+  same one `Checkbox` uses, tinted to the item's current text color, and it
+  rides inside the existing label inset, so the layout never shifts between
+  checked and unchecked. The mark is display-only: a checked item still fires
+  its callback normally when picked. (#46)
+- Menu accelerators are now live, not just decorative. `MenuItem::with_accel`
+  takes the new `Accel` type (or its conventional string form: `"Ctrl+R"`,
+  `"Ctrl+Shift+Enter"`), and pressing a matching chord while the bar is closed
+  fires the item directly. `Accel` names its modifiers as platform-independent
+  *roles* (`AccelMods`): `Accel::primary('r')` means ⌘R on macOS and Ctrl+R
+  everywhere else, resolved through a `ModifierScheme` both when matching
+  input and when rendering the right-aligned hint. The scheme defaults to the
+  build platform's; `MenuBar::with_scheme` pins it, e.g. for snapshot tests
+  that must not drift between hosts. A chord whose only matches are disabled
+  items falls through unconsumed, keeping its ordinary meaning in the focused
+  widget (Ctrl+Left stays word-jump in an editor); while a menu is open it owns
+  the keyboard, so chords wait. Breaking: `MenuItem::Action`'s `accel` field is
+  now `Option<Accel>` instead of `Option<String>` — `with_accel("Ctrl+R")`
+  call sites keep compiling via `From<&str>`, which panics on a malformed
+  chord so a typo fails loudly at first use. (#46)
 - Text can now be drawn in three font families — **sans-serif**, **serif**, and
   **monospace** — each in **bold**, *italic*, and ***bold-italic***, all using
   the host's real installed faces rather than a synthesized smear or shear of the
@@ -19,7 +47,7 @@ While pre-1.0, the minor version is bumped for breaking changes.
   `Mono`) and `FontStyle` (`Regular` / `Bold` / `Italic` / `BoldItalic`). Draw
   with `Painter::text_styled(.., family, style)` and measure with
   `Painter::measure_text_styled(.., family, style)`; the existing `text` /
-  `measure_text` stay sans-serif regular, so nothing already on screen moves.
+  `measure_text` stay sans-serif regular, so nothing already on screen moves. (#44)
 - `Font::load_sans` (renamed from `load_system`), `Font::load_serif`, and
   `Font::load_monospace` load the three families, walking — for the serif — the
   classic Win 3.1 / Office serif families (Times New Roman, Georgia, …) down to
@@ -30,12 +58,12 @@ While pre-1.0, the minor version is bumped for breaking changes.
   family the host ships without a given face falls back to the nearest *real*
   face it does have (ultimately the regular face), and the loader verifies
   fontdb's match actually carries the requested weight/slant so a regular face is
-  never passed off as bold or italic.
+  never passed off as bold or italic. (#44)
 - For deterministic, font-bundling snapshot tests, `Font::from_sans_bytes`
   (renamed from `from_bytes`) gains `with_bold_bytes`, `with_italic_bytes`, and
   `with_bold_italic_bytes` builders to attach the emphasis faces from in-memory
   buffers, and `MockBackend` gains `with_serif_font` alongside `with_sans_font`
-  (renamed from `with_font`) / `with_mono_font`.
+  (renamed from `with_font`) / `with_mono_font`. (#44)
 
 ### Changed
 
@@ -44,17 +72,17 @@ While pre-1.0, the minor version is bumped for breaking changes.
   arguments. A backend builds one `FontSet` from the fonts it owns; offscreen
   painters with no text pass `FontSet::default()`. This replaces three
   same-typed positional font arguments (easy to transpose) with one named bundle
-  and makes room for the serif family.
+  and makes room for the serif family. (#44)
 - **Breaking renames:** `Font::load_system` → `Font::load_sans`,
   `Font::from_bytes` → `Font::from_sans_bytes`, and `MockBackend::with_font` →
-  `MockBackend::with_sans_font`, so each name states the family it loads.
+  `MockBackend::with_sans_font`, so each name states the family it loads. (#44)
 - **Breaking:** the monospace-specific painter methods `mono_text`,
   `measure_mono_text`, and `mono_cumulative_widths` are removed in favor of the
   general family+style API: draw with `text_styled(.., FontFamily::Mono,
   FontStyle::Regular)`, measure with `measure_text_styled(.., FontFamily::Mono,
   FontStyle::Regular)`, and get caret offsets with the new
   `Painter::cumulative_widths(text, size, family, style)`. `Font::cumulative_widths`
-  likewise gains a `FontStyle` argument.
+  likewise gains a `FontStyle` argument. (#44)
 
 ### Fixed
 
