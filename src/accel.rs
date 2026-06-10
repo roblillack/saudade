@@ -287,29 +287,61 @@ mod tests {
     fn secondary_resolves_to_super_on_pc_and_ctrl_on_mac() {
         let accel = Accel::primary('r').secondary();
         // PC: Ctrl+Super+R; Mac: Ctrl+Cmd+R.
-        assert!(accel.matches(Key::Char('r'), mods(true, true, false, false), ModifierScheme::Pc));
-        assert!(accel.matches(Key::Char('r'), mods(true, true, false, false), ModifierScheme::Mac));
+        assert!(accel.matches(
+            Key::Char('r'),
+            mods(true, true, false, false),
+            ModifierScheme::Pc
+        ));
+        assert!(accel.matches(
+            Key::Char('r'),
+            mods(true, true, false, false),
+            ModifierScheme::Mac
+        ));
         // Plain primary input must not satisfy the bigger chord.
-        assert!(!accel.matches(Key::Char('r'), mods(true, false, false, false), ModifierScheme::Pc));
+        assert!(!accel.matches(
+            Key::Char('r'),
+            mods(true, false, false, false),
+            ModifierScheme::Pc
+        ));
     }
 
     #[test]
     fn modifiers_must_match_exactly() {
         let accel = Accel::primary('r');
         // Ctrl+Shift+R is a different chord than Ctrl+R.
-        assert!(!accel.matches(Key::Char('r'), mods(true, false, false, true), ModifierScheme::Pc));
+        assert!(!accel.matches(
+            Key::Char('r'),
+            mods(true, false, false, true),
+            ModifierScheme::Pc
+        ));
         // …and so is Ctrl+Alt+R.
-        assert!(!accel.matches(Key::Char('r'), mods(true, false, true, false), ModifierScheme::Pc));
+        assert!(!accel.matches(
+            Key::Char('r'),
+            mods(true, false, true, false),
+            ModifierScheme::Pc
+        ));
         // The declared chord requires every declared modifier.
         let shifted = Accel::primary('r').shift();
-        assert!(shifted.matches(Key::Char('r'), mods(true, false, false, true), ModifierScheme::Pc));
-        assert!(!shifted.matches(Key::Char('r'), mods(true, false, false, false), ModifierScheme::Pc));
+        assert!(shifted.matches(
+            Key::Char('r'),
+            mods(true, false, false, true),
+            ModifierScheme::Pc
+        ));
+        assert!(!shifted.matches(
+            Key::Char('r'),
+            mods(true, false, false, false),
+            ModifierScheme::Pc
+        ));
     }
 
     #[test]
     fn char_keys_match_case_insensitively() {
         let accel = Accel::primary('r');
-        assert!(accel.matches(Key::Char('R'), mods(true, false, false, false), ModifierScheme::Pc));
+        assert!(accel.matches(
+            Key::Char('R'),
+            mods(true, false, false, false),
+            ModifierScheme::Pc
+        ));
         assert!(Accel::from("Ctrl+R").matches(
             Key::Char('r'),
             mods(true, false, false, false),
@@ -338,10 +370,7 @@ mod tests {
         assert_eq!(Accel::from("Cmd+R"), Accel::primary('r'));
         assert_eq!(Accel::from("Primary+R"), Accel::primary('r'));
         assert_eq!(Accel::from("Ctrl+Shift+T"), Accel::primary('t').shift());
-        assert_eq!(
-            Accel::from("Ctrl+Enter"),
-            Accel::primary(NamedKey::Enter)
-        );
+        assert_eq!(Accel::from("Ctrl+Enter"), Accel::primary(NamedKey::Enter));
         assert_eq!(Accel::from("Ctrl+Left"), Accel::primary(NamedKey::Left));
         assert_eq!(
             Accel::from("Ctrl+Super+Alt+R"),

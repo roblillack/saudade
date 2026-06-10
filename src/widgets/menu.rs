@@ -1048,7 +1048,10 @@ mod tests {
         let item = MenuItem::action("&Commit Changes", |_| {}).with_checked(move || c.get());
         assert!(!item.is_checked(), "starts unchecked");
         on.set(true);
-        assert!(item.is_checked(), "follows the predicate once it turns true");
+        assert!(
+            item.is_checked(),
+            "follows the predicate once it turns true"
+        );
         // A checkmark is display-only: it never blocks selection / firing.
         assert!(item.is_selectable());
     }
@@ -1072,8 +1075,7 @@ mod tests {
     /// A bar with one File ▸ Rescan item bound to Ctrl+R, pinned to the PC
     /// scheme so the tests behave identically on a macOS host.
     fn bar_with_accel(fired: Rc<Cell<bool>>, enabled: Option<bool>) -> MenuBar {
-        let mut item =
-            MenuItem::action("&Rescan", move |_| fired.set(true)).with_accel("Ctrl+R");
+        let mut item = MenuItem::action("&Rescan", move |_| fired.set(true)).with_accel("Ctrl+R");
         if let Some(enabled) = enabled {
             item = item.with_enabled(move || enabled);
         }
@@ -1088,9 +1090,15 @@ mod tests {
         let mut bar = bar_with_accel(fired.clone(), None);
         let mut ctx = EventCtx::new();
         bar.event(&chord(true, false, 'r'), &mut ctx);
-        assert!(fired.get(), "Ctrl+R fires the item without opening the menu");
+        assert!(
+            fired.get(),
+            "Ctrl+R fires the item without opening the menu"
+        );
         assert!(bar.open.is_none(), "the menu stays closed");
-        assert!(ctx.is_consumed(), "the chord must not also reach the focused widget");
+        assert!(
+            ctx.is_consumed(),
+            "the chord must not also reach the focused widget"
+        );
         assert!(
             ctx.swallow_key,
             "the press is swallowed through its release so trailing Char/KeyUp \
@@ -1151,7 +1159,10 @@ mod tests {
         let mut ctx = EventCtx::new();
         bar.event(&chord(true, false, 't'), &mut ctx);
         assert!(!fired.get(), "no accel firing while a menu is up");
-        assert!(ctx.is_consumed(), "…but the open menu still swallows the key");
+        assert!(
+            ctx.is_consumed(),
+            "…but the open menu still swallows the key"
+        );
     }
 
     #[test]
