@@ -20,6 +20,8 @@ Applications built with Saudade pair exceptionally well with my Wayland
 window manager [Canoe](https://github.com/roblillack/canoe), but will work
 on any UNIX (Wayland/X11) or Mac system.
 
+These are some apps using Saudade: [Git Journey](https://github.com/roblillack/gitj), [retrocalc](https://github.com/roblillack/retrocalc), [retrofetch](https://github.com/roblillack/retrofetch), and [RetroSaurus](https://github.com/roblillack/RetroSaurus)
+
 ## Status
 
 Pre-1.0, intentionally small. The current widget set is enough to
