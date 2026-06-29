@@ -1339,30 +1339,33 @@ A more complete version, including Open/Save against a path passed as
 
 ## Non-goals
 
-The library does **not**:
+Saudade deliberately does **not** aim to:
 
-- emulate HTML/CSS
-- embed a browser engine
-- provide immediate-mode-only APIs
-- rely on heavy procedural-macro DSLs
-- hide ownership semantics
-- support GPU rendering, animation, or accessibility yet
+* target mobile platforms
+* support declarative UI definitions
+* embed or target a full browser engine
+* provide an immediate-mode API
+* rely on heavy procedural-macro DSLs
+* hide Rust's ownership model
 
-It is meant to stay small enough that you can hold the whole codebase in
-your head.
+## Probably out of scope
+
+The following features currently don't seem like a good fit for a small toolkit such as Saudade, so don't expect them anytime soon:
+
+* GPU rendering
+* right-to-left (RTL) text support
+* accessibility features
 
 ## Roadmap
 
-Things that would fit Saudade's spirit but aren't there yet:
+Features that fit Saudade's philosophy but haven't been implemented yet:
 
-- `Grid` container (the horizontal `Row` sibling of `Column` now exists)
-- `RadioButton` (single-line `TextInput`, `Checkbox` and `List` now exist)
-- Horizontal scrolling in `TextEditor` (a horizontal `ScrollBar` is
-  already implemented; the editor just doesn't ride it yet)
-- Undo / redo in `TextEditor`
-- Save-As / Open file dialogs
-- Multi-window support
-- Native menu bars where the platform offers them
+* `Grid` container (`Row` is already available alongside `Column`)
+* `RadioButton` (`TextInput`, `Checkbox`, and `List` already exist)
+* Horizontal scrolling in `TextEditor` (the horizontal `ScrollBar` is already implemented; the editor just needs to use it)
+* Undo/redo in `TextEditor`
+* Multi-window support
+* Native menu bars on platforms that provide them
 
 ## License
 
