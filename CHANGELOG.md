@@ -24,7 +24,7 @@ While pre-1.0, the minor version is bumped for breaking changes.
   or a click on either end's arrow. Items are usually built per opening
   (`set_items` then `open_at`); `open_within` bounds the panel by a rect of the
   caller's choosing instead. Apps that had hand-rolled a context menu can drop
-  it; the `circle_drawer` example did.
+  it; the `circle_drawer` example did. (#47)
 - `Painter::screen_area` tells a widget where the display is, in the root
   widget's own coordinates — what a widget placing its own top-level window
   needs, since a popup is not bounded by the app's window and the display is the
@@ -96,13 +96,14 @@ While pre-1.0, the minor version is bumped for breaking changes.
   the dismissal goes through Escape, which the widget owning the popup consumes,
   so a dropdown open inside a dialog closes without taking the dialog with it.
   X11 popups are override-redirect and never hold focus, so nothing there
-  changes.
+  changes. (#47)
 - On macOS a popup window — every `MenuBar` drop-down, `Dropdown` list and
   `ContextMenu` panel — no longer arrives with the system's window chrome around
   it. `NSWindow`'s drop shadow is off, so the soft grey halo that read as a
   second, blurry frame outside the popup's black border is gone; and its
   `animationBehavior` is `None`, so a menu is on screen the instant it is asked
   for instead of fading in. Real dialog windows (`PopupKind::Dialog`) keep both.
+  (#47)
 
 - Bold and italic text now actually renders in the host's bold and italic
   faces. Two things stood in the way. A font *collection* (`.ttc`) packs
