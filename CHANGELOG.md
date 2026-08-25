@@ -10,6 +10,18 @@ While pre-1.0, the minor version is bumped for breaking changes.
 
 ## [Unreleased] - ReleaseDate
 
+### Fixed
+
+- `ScrollBar` now honors its `line_step` when scrolled by wheel or trackpad,
+  not just by the arrow buttons. A line has always been `line_step` document
+  units everywhere else in the bar; the wheel path added raw line counts to
+  `value`, so a bar whose unit is a *pixel* of content — the shape a pane with
+  unequal row heights needs — crept a single pixel per line instead of a row.
+  The sub-step remainder is now banked in document units too, so a
+  high-resolution trackpad still moves such a bar smoothly rather than a whole
+  row at a time. Bars that count rows (`line_step` left at its default 1) are
+  unaffected.
+
 ## [0.5.0] - 2026-06-10
 
 ### Added
