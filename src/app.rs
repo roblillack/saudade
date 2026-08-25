@@ -8,7 +8,7 @@ use winit::dpi::{LogicalSize, PhysicalPosition, PhysicalSize};
 use winit::event::{ElementState, MouseButton as WinitMouseButton, MouseScrollDelta, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{Key as WKey, ModifiersKeyState, NamedKey as WNamedKey};
-use winit::window::{CursorIcon, Window, WindowAttributes, WindowButtons, WindowId};
+use winit::window::{CursorIcon, Window, WindowAttributes, WindowButtons, WindowId, WindowLevel};
 
 // X11 platform extensions. winit 0.30's generic `with_parent_window` is
 // not enough on X11 (it reparents into the main window, which then clips
@@ -19,6 +19,9 @@ use winit::window::{CursorIcon, Window, WindowAttributes, WindowButtons, WindowI
 // until winit adds real popup support.
 #[cfg(all(unix, not(target_os = "macos")))]
 use winit::platform::x11::{WindowAttributesExtX11, WindowType as XWindowType};
+// macOS: `with_has_shadow` lives on the same kind of platform extension trait.
+#[cfg(target_os = "macos")]
+use winit::platform::macos::WindowAttributesExtMacOS;
 
 use crate::background::BackgroundState;
 use crate::event::{
@@ -165,6 +168,11 @@ struct AppHandler {
     /// Background pattern + color for the main window, toggled with the
     /// `p` / `c` debug keys. Popups/dialogs ignore it and stay white.
     bg: BackgroundState,
+    /// Where the display is, in the root widget's logical coordinates —
+    /// [`Painter::screen_area`], handed to every paint pass. Recomputed only
+    /// when the window moves, resizes or changes DPI, since asking the platform
+    /// costs a round trip and the answer is stable in between.
+    screen: Option<Rect>,
     /// Stack of popup windows, outermost first. Usually empty or one entry (a
     /// menu / dropdown / dialog); a dropdown opened *inside* a dialog nests a
     /// second entry on top.
@@ -296,6 +304,7 @@ impl AppHandler {
             modifiers: Modifiers::default(),
             needs_redraw: true,
             bg: BackgroundState::from_env(),
+            screen: None,
             popups: Vec::new(),
             last_tick: None,
             tick_requested: false,
@@ -346,6 +355,7 @@ impl ApplicationHandler for AppHandler {
         self.main_id = Some(id);
         self.context = Some(context);
         self.main_surface = Some(surface);
+        self.refresh_screen();
         self.needs_redraw = true;
     }
 
@@ -416,6 +426,16 @@ impl AppHandler {
                 // their "parent", so we have to reposition them manually
                 // each time the main window moves.
                 self.reposition_popup();
+                // The screen rect is relative to the window, and the window may
+                // even have crossed onto another display.
+                self.refresh_screen();
+            }
+            // The main window took the keyboard back while a menu was up, so
+            // something outside the menu was clicked — the title bar, most
+            // often, on the way to dragging the window. Native menus don't
+            // survive that.
+            WindowEvent::Focused(true) => {
+                self.dismiss_transient_popup(event_loop);
             }
             WindowEvent::Resized(new_size) => {
                 self.physical = new_size;
@@ -423,6 +443,8 @@ impl AppHandler {
                     resize_surface(s, self.physical);
                 }
                 relayout(&mut self.root, self.physical, self.scale, self.design_size);
+                // Dragging the top or left edge resizes *and* moves the window.
+                self.refresh_screen();
                 self.needs_redraw = true;
             }
             WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
@@ -434,6 +456,9 @@ impl AppHandler {
                     resize_surface(s, self.physical);
                 }
                 relayout(&mut self.root, self.physical, self.scale, self.design_size);
+                // The screen rect is in logical units, so a new scale rescales
+                // it even when the display is the same one.
+                self.refresh_screen();
                 self.needs_redraw = true;
             }
             WindowEvent::CursorMoved { position, .. } => {
@@ -552,6 +577,26 @@ impl AppHandler {
         match event {
             WindowEvent::CloseRequested => {
                 self.dismiss_via_escape(event_loop);
+            }
+            // The menu itself lost the keyboard: the user switched to another
+            // app, or to another window of this one. Only the popup on top of
+            // the stack speaks for the stack — a *parent* popup loses focus for
+            // an innocent reason, namely a nested popup of its own opening
+            // above it (a dropdown inside a dialog).
+            WindowEvent::Focused(focused) => {
+                let Some(p) = self.popups.get_mut(idx) else {
+                    return;
+                };
+                if focused {
+                    p.was_focused = true;
+                    return;
+                }
+                // A brand-new popup window reports one unfocused *before* it is
+                // given the keyboard, so a loss only means anything once it has
+                // actually held it.
+                if p.was_focused && idx + 1 == self.popups.len() {
+                    self.dismiss_transient_popup(event_loop);
+                }
             }
             WindowEvent::Moved(_) => {
                 // A managed popup (typically a dialog) was dragged by the
@@ -862,6 +907,27 @@ impl AppHandler {
         }
     }
 
+    /// Fold away a transient popup — a menu, a dropdown list — because
+    /// something outside it took over the keyboard. A menu is a modal gesture
+    /// that belongs to the click that opened it; clicking a title bar or
+    /// switching apps ends the gesture, and every desktop's own menus close on
+    /// it.
+    ///
+    /// A [`PopupKind::Dialog`] is *not* transient — it is a window in its own
+    /// right and stays put — so this only acts while a [`PopupKind::Popup`] is
+    /// on top. It dismisses by way of Escape, which the widget owning that
+    /// popup consumes: that is what lets a dropdown open inside a dialog close
+    /// without taking the dialog with it.
+    fn dismiss_transient_popup(&mut self, event_loop: &ActiveEventLoop) {
+        if self
+            .popups
+            .last()
+            .is_some_and(|p| p.kind == PopupKind::Popup)
+        {
+            self.dismiss_via_escape(event_loop);
+        }
+    }
+
     fn dismiss_via_escape(&mut self, event_loop: &ActiveEventLoop) {
         let mods = self.modifiers;
         self.dispatch(
@@ -895,7 +961,8 @@ impl AppHandler {
                 mono: self.mono_font.as_ref(),
             },
             None,
-        );
+        )
+        .with_screen(self.screen);
         // A root that paints its own background covers the pattern anyway, so
         // only the letterbox around it is worth laying down — usually nothing.
         if self.root.paints_own_background() {
@@ -923,6 +990,7 @@ impl AppHandler {
         let popup_phys_w = (p.anchor.w as f32 * p.scale).round() as i32;
         let popup_phys_h = (p.anchor.h as f32 * p.scale).round() as i32;
         let anchor = p.anchor;
+        let screen = self.screen;
         let mut surface_buf = p
             .surface
             .buffer_mut()
@@ -940,7 +1008,8 @@ impl AppHandler {
                 mono: self.mono_font.as_ref(),
             },
             Some(anchor),
-        );
+        )
+        .with_screen(screen);
         painter.fill(self.theme.background);
         painter.set_clip_phys(0, 0, popup_phys_w, popup_phys_h);
         self.root.paint(&mut painter, &self.theme);
@@ -948,6 +1017,35 @@ impl AppHandler {
         surface_buf
             .present()
             .expect("saudade: failed to present popup buffer");
+    }
+
+    /// Recompute [`Self::screen`]: the usable area of the display the window is
+    /// on, expressed in the root widget's logical coordinates — the same space
+    /// a [`PopupRequest`] is in, i.e. measured from the window's inner top-left
+    /// corner. Widgets that open a top-level window of their own read it back
+    /// through [`Painter::screen_area`] to keep that window on screen.
+    fn refresh_screen(&mut self) {
+        self.screen = self.compute_screen();
+    }
+
+    fn compute_screen(&self) -> Option<Rect> {
+        let win = self.main_win.as_ref()?;
+        let monitor = win.current_monitor()?;
+        let inner = win.inner_position().ok()?;
+        let origin = monitor.position();
+        let size = monitor.size();
+        let s = self.scale.max(0.01);
+        let logical = |v: i32| (v as f32 / s).round() as i32;
+        // The desktop reserves some of the display for its own furniture — the
+        // macOS menu bar and Dock. A menu clamped over the Dock would hide its
+        // own last row, and with it the arrow saying there is more.
+        let (left, top, right, bottom) = desktop_insets(win);
+        Some(Rect::new(
+            logical(origin.x - inner.x) + left,
+            logical(origin.y - inner.y) + top,
+            logical(size.width as i32) - left - right,
+            logical(size.height as i32) - top - bottom,
+        ))
     }
 
     /// Re-anchor every override-redirect popup to follow the window above
@@ -1036,7 +1134,20 @@ impl AppHandler {
 
         match request.kind {
             PopupKind::Popup => {
-                attrs = attrs.with_title("saudade popup").with_decorations(false);
+                attrs = attrs
+                    .with_title("saudade popup")
+                    .with_decorations(false)
+                    .with_transparent(true)
+                    .with_window_level(WindowLevel::AlwaysOnTop);
+
+                // macOS: no system drop shadow. A menu panel draws its own
+                // sharp L-shape shadow, and the compositor's soft halo around
+                // the window reads as a second, blurry frame outside the
+                // popup's black border.
+                #[cfg(target_os = "macos")]
+                {
+                    attrs = attrs.with_has_shadow(false)
+                }
 
                 // X11: take the WM completely out of the loop.
                 // override-redirect makes this an unmanaged window — it
@@ -1104,6 +1215,13 @@ impl AppHandler {
         }
 
         let win = event_loop.create_window(attrs).ok()?;
+        // Before the first `set_visible` below, while the window is still
+        // off-screen: the behavior applies to the animation that showing it
+        // would otherwise play.
+        #[cfg(target_os = "macos")]
+        if request.kind == PopupKind::Popup {
+            suppress_show_animation(&win);
+        }
         let win = Rc::new(win);
         let id = win.id();
         let mut surface = softbuffer::Surface::new(context, win.clone()).ok()?;
@@ -1121,6 +1239,7 @@ impl AppHandler {
             scale: self.scale,
             cursor: None,
             cursor_icon: Cursor::Default,
+            was_focused: false,
             needs_redraw: true,
         })
     }
@@ -1141,7 +1260,73 @@ struct PopupWindow {
     /// Pointer shape currently applied to this popup window — see the same
     /// field on [`AppHandler`].
     cursor_icon: Cursor,
+    /// Whether this window has ever held the keyboard. winit reports a fresh
+    /// popup as unfocused before focusing it, and that first loss must not be
+    /// read as the user clicking away — see the `Focused` arm in
+    /// [`AppHandler::handle_popup_event`].
+    was_focused: bool,
     needs_redraw: bool,
+}
+
+/// The logical-pixel margins the desktop keeps for itself along each edge of
+/// the display a window is on — `(left, top, right, bottom)`. A window may be
+/// dragged over them, but nothing the app *places* should land there.
+///
+/// macOS reports them (the menu bar, and the Dock along whichever edge it
+/// lives on) as the difference between an `NSScreen`'s full frame and its
+/// visible frame. X11 has `_NET_WORKAREA` and Windows `SPI_GETWORKAREA`, but
+/// winit surfaces neither, so those return zeroes and a popup near the bottom
+/// of the screen may sit under a panel or the taskbar.
+#[cfg(target_os = "macos")]
+fn desktop_insets(win: &Window) -> (i32, i32, i32, i32) {
+    let Some(screen) = ns_window(win).and_then(|window| window.screen()) else {
+        return (0, 0, 0, 0);
+    };
+    let full = screen.frame();
+    let visible = screen.visibleFrame();
+    // `NSRect`s are in points — logical pixels — with y growing upwards, so the
+    // *top* inset is the gap above the visible frame's far edge. Both frames
+    // describe the same screen, so the differences are the four margins.
+    let round = |v: f64| v.round().max(0.0) as i32;
+    (
+        round(visible.origin.x - full.origin.x),
+        round((full.origin.y + full.size.height) - (visible.origin.y + visible.size.height)),
+        round((full.origin.x + full.size.width) - (visible.origin.x + visible.size.width)),
+        round(visible.origin.y - full.origin.y),
+    )
+}
+
+#[cfg(not(target_os = "macos"))]
+fn desktop_insets(_win: &Window) -> (i32, i32, i32, i32) {
+    (0, 0, 0, 0)
+}
+
+/// The `NSWindow` behind a winit window, or `None` if its view can't be
+/// reached.
+#[cfg(target_os = "macos")]
+fn ns_window(win: &Window) -> Option<objc2::rc::Retained<objc2_app_kit::NSWindow>> {
+    use objc2_app_kit::NSView;
+    use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
+
+    let RawWindowHandle::AppKit(handle) = win.window_handle().ok()?.as_raw() else {
+        return None;
+    };
+    // SAFETY: winit owns this `NSView` for as long as the window lives, which
+    // is past the end of this borrow — `win` is still holding it.
+    let view: &NSView = unsafe { handle.ns_view.cast().as_ref() };
+    view.window()
+}
+
+/// Take a macOS popup window out of the system's window choreography: a menu
+/// must be on screen the instant it is asked for, not faded in over a few
+/// frames. winit has no API for `NSWindow.animationBehavior`, so it is set on
+/// the window itself — before it is first shown, since that is the appearance
+/// being suppressed. A window whose view we can't reach is left alone.
+#[cfg(target_os = "macos")]
+fn suppress_show_animation(win: &Window) {
+    if let Some(window) = ns_window(win) {
+        window.setAnimationBehavior(objc2_app_kit::NSWindowAnimationBehavior::None);
+    }
 }
 
 fn popup_position_to_widget(pos: PhysicalPosition<f64>, popup: &PopupWindow) -> Point {

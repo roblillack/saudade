@@ -66,7 +66,8 @@ pub use svg::{FillRule, SvgImage, SvgPolygon};
 pub use theme::Theme;
 pub use widget::{PopupKind, PopupRequest, Widget};
 pub use widgets::{
-    Bevel, Button, Checkbox, Column, Container, Dialog, DialogIcon, Dropdown, FileDialog,
-    FileFilter, FocusLabel, Image, Label, List, ListIcon, ListItem, Menu, MenuBar, MenuItem, Modal,
-    Orientation, ProgressBar, Row, SCROLLBAR_THICKNESS, ScrollBar, Slider, TextEditor, TextInput,
+    Bevel, Button, Checkbox, Column, Container, ContextMenu, Dialog, DialogIcon, Dropdown,
+    FileDialog, FileFilter, FocusLabel, Image, Label, List, ListIcon, ListItem, Menu, MenuBar,
+    MenuItem, Modal, Orientation, ProgressBar, Row, SCROLLBAR_THICKNESS, ScrollBar, Slider,
+    TextEditor, TextInput,
 };

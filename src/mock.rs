@@ -44,6 +44,10 @@ pub struct MockBackend {
     /// honors it (and only for non-dialog frames); the bare [`Self::render`]
     /// client-area pass stays plain.
     bg: BackgroundState,
+    /// What [`Painter::screen_area`] reports, for widgets that place a popup
+    /// against the display. `None` — the default — is the honest answer for an
+    /// offscreen render; [`Self::with_screen_area`] fakes one.
+    screen: Option<Rect>,
 }
 
 /// Which backdrop the content pass fills behind the widget tree, mirroring the
@@ -74,7 +78,20 @@ impl MockBackend {
                 pattern: BackgroundPattern::DiagonalForward,
                 color: PATTERN_COLORS[0].1,
             },
+            screen: None,
         }
+    }
+
+    /// Pretend the window sits on a display whose usable area is `area`, in the
+    /// root widget's coordinates — what the live runtime works out from the
+    /// monitor and the window's position. Widgets that keep a popup on screen
+    /// (a [`ContextMenu`](crate::ContextMenu) panel) read it back through
+    /// [`Painter::screen_area`], so this is how a test exercises that placement
+    /// without a window server. Unset by default, which reads as "no screen to
+    /// speak of" and leaves such a widget unbounded.
+    pub fn with_screen_area(mut self, area: Rect) -> Self {
+        self.screen = Some(area);
+        self
     }
 
     /// Set the logical→physical scale factor. Defaults to 1.0. Use this
@@ -183,7 +200,8 @@ impl MockBackend {
                     mono: self.mono_font.as_ref(),
                 },
                 None,
-            );
+            )
+            .with_screen(self.screen);
             match backdrop {
                 Backdrop::Plain => painter.fill(self.theme.background),
                 // Mirrors the live runtime: a root that paints its own
@@ -224,7 +242,8 @@ impl MockBackend {
                     mono: self.mono_font.as_ref(),
                 },
                 Some(req.rect),
-            );
+            )
+            .with_screen(self.screen);
             painter.set_clip_phys(popup_phys_x, popup_phys_y, popup_phys_w, popup_phys_h);
             root.paint(&mut painter, &self.theme);
             painter.clear_clip();

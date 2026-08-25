@@ -11,9 +11,10 @@ mod common;
 use common::{snapshot_at_all_scales, snapshot_framed_at_all_scales};
 
 use saudade::{
-    Bevel, Button, Checkbox, Color, Column, Container, Dialog, Dropdown, Event, Image, Key, Label,
-    List, ListIcon, ListItem, Menu, MenuBar, MenuItem, Modifiers, NamedKey, Orientation,
-    ProgressBar, Rect, Row, ScrollBar, Slider, TextEditor, TextInput, Widget, WindowChrome,
+    Bevel, Button, Checkbox, Color, Column, Container, ContextMenu, Dialog, Dropdown, Event, Image,
+    Key, Label, List, ListIcon, ListItem, Menu, MenuBar, MenuItem, ModifierScheme, Modifiers,
+    NamedKey, Orientation, Point, ProgressBar, Rect, Row, ScrollBar, Slider, TextEditor, TextInput,
+    Widget, WindowChrome,
 };
 
 // ---------------------------------------------------------------- Bevel
@@ -517,6 +518,51 @@ fn menubar_file_open() {
             Container::new(220, 120)
                 .with_background(Color::WHITE)
                 .add(bar),
+        )
+    });
+}
+
+// ------------------------------------------------------------ ContextMenu
+
+#[test]
+fn context_menu_open() {
+    // Anchored short of the right/bottom edges so the whole panel — and its
+    // drop shadow — lands inside the window and the snapshot stays one image.
+    // The scheme is pinned so the accelerator hint reads `Ctrl+D` on every host.
+    snapshot_at_all_scales("context_menu_open", 200, 130, || {
+        let mut menu = ContextMenu::new()
+            .with_scheme(ModifierScheme::Pc)
+            .with_items(vec![
+                MenuItem::action("&Edit", |_| {}),
+                MenuItem::action("D&uplicate", |_| {}).with_accel("Ctrl+D"),
+                MenuItem::separator(),
+                MenuItem::action("De&lete", |_| {}).with_enabled(|| false),
+            ]);
+        menu.open_at(Point::new(20, 18));
+        Box::new(
+            Container::new(200, 130)
+                .with_background(Color::LIGHT_GRAY)
+                .add(menu),
+        )
+    });
+}
+
+#[test]
+fn context_menu_scrolled() {
+    // More items than the region can hold: the panel is capped to it and the
+    // arrows at either end mark what is off-panel above and below.
+    snapshot_at_all_scales("context_menu_scrolled", 160, 100, || {
+        let region = Rect::new(0, 0, 160, 100);
+        let mut menu = ContextMenu::new().with_items(
+            (1..=12)
+                .map(|i| MenuItem::action(format!("Move to Area {i}"), |_| {}))
+                .collect(),
+        );
+        menu.open_within(Point::new(8, 8), region);
+        Box::new(
+            Container::new(region.w, region.h)
+                .with_background(Color::LIGHT_GRAY)
+                .add(menu),
         )
     });
 }

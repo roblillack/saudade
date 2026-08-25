@@ -12,6 +12,19 @@ While pre-1.0, the minor version is bumped for breaking changes.
 
 ### Added
 
+- `ContextMenu` — a right-click menu, anchored at a point rather than hanging
+  off a bar label. It is the same panel a `MenuBar` drops open, built from the
+  same `MenuItem`s and drawn by the same code, so mnemonics, accelerator hints,
+  checkmarks, separators and `with_enabled` predicates all behave identically,
+  and it gets its own borderless window so it is never clipped by the widget it
+  belongs to — a menu right-clicked near a window border hangs off the edge
+  rather than being folded back inside it. What bounds it is the *screen*: the
+  panel flips rather than crossing an edge of the display, and a menu taller
+  than the display is capped to it and scrolls — with the wheel, the arrow keys,
+  or a click on either end's arrow. Items are usually built per opening
+  (`set_items` then `open_at`); `open_within` bounds the panel by a rect of the
+  caller's choosing instead. Apps that had hand-rolled a context menu can drop
+  it; the `circle_drawer` example did. (#47)
 - On macOS the *system* fonts now come from Core Text rather than from a font
   file picked out of a database. `Font::load_sans` and `load_monospace` ask for
   the interface font and the user's fixed-pitch font by role, `load_serif` by
@@ -42,7 +55,17 @@ While pre-1.0, the minor version is bumped for breaking changes.
   answers yes when it was given a background color; anything else has to opt in
   (and must mean it — the skipped pixels keep whatever the surface buffer held,
   which on most platforms is neither the last frame nor blank). (#49)
-
+- `Painter::screen_area` tells a widget where the display is, in the root
+  widget's own coordinates — what a widget placing its own top-level window
+  needs, since a popup is not bounded by the app's window and the display is the
+  only thing that is. It excludes the space the desktop reserves for itself
+  (on macOS the menu bar and the Dock, via `NSScreen.visibleFrame`; X11 and
+  Windows report no reservation, which winit does not surface). The runtime works
+  it out once per window move / resize / DPI change rather than per frame.
+  `MockBackend::with_screen_area` fakes one so the placement is testable
+  offscreen; an ordinary offscreen render reports `None`, meaning unbounded.
+  (#47)
+  
 ### Changed
 
 - The candidate font families are now chosen per platform, each chain leading
@@ -65,6 +88,22 @@ While pre-1.0, the minor version is bumped for breaking changes.
 
 ### Fixed
 
+- A menu or dropdown now folds away when the keyboard moves out of it: clicking
+  the window's title bar (on the way to dragging it), switching to another app,
+  or activating another window of this one. A menu is a modal gesture belonging
+  to the click that opened it, and every desktop's own menus end it there. Only
+  a `PopupKind::Popup` is treated as transient — a dialog window stays put — and
+  the dismissal goes through Escape, which the widget owning the popup consumes,
+  so a dropdown open inside a dialog closes without taking the dialog with it.
+  X11 popups are override-redirect and never hold focus, so nothing there
+  changes. (#47)
+- On macOS a popup window — every `MenuBar` drop-down, `Dropdown` list and
+  `ContextMenu` panel — no longer arrives with the system's window chrome around
+  it. `NSWindow`'s drop shadow is off, so the soft grey halo that read as a
+  second, blurry frame outside the popup's black border is gone; and its
+  `animationBehavior` is `None`, so a menu is on screen the instant it is asked
+  for instead of fading in. Real dialog windows (`PopupKind::Dialog`) keep both.
+  (#47)
 - Bold and italic text now actually renders in the host's bold and italic
   faces. Two things stood in the way. A font *collection* (`.ttc`) packs
   several faces into one file and fontdb reports which one it matched, but that

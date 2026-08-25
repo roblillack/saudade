@@ -58,6 +58,9 @@ pub struct Painter<'a> {
     /// pixels inside this rect. The runtime uses this to keep the popup
     /// pass from leaking widget content past the popup's footprint.
     clip: Option<(i32, i32, i32, i32)>,
+    /// Where the screen is, in this painter's logical coordinates — see
+    /// [`Self::screen_area`].
+    screen: Option<Rect>,
 }
 
 impl<'a> Painter<'a> {
@@ -104,7 +107,16 @@ impl<'a> Painter<'a> {
             fonts,
             popup_anchor,
             clip: None,
+            screen: None,
         }
+    }
+
+    /// Record where the screen is, for widgets that place something on it —
+    /// see [`Self::screen_area`]. Only the runtime has the answer, so only the
+    /// runtime calls this; an offscreen render leaves it unset.
+    pub fn with_screen(mut self, area: Option<Rect>) -> Self {
+        self.screen = area;
+        self
     }
 
     pub fn is_popup_pass(&self) -> bool {
@@ -118,6 +130,28 @@ impl<'a> Painter<'a> {
     /// — only then should they draw their popup body.
     pub fn popup_anchor(&self) -> Option<Rect> {
         self.popup_anchor
+    }
+
+    /// The part of the display a window may occupy, in the *root widget's*
+    /// logical coordinates — the same space [`Widget::bounds`] and
+    /// [`PopupRequest::rect`] live in, so it is usually largely negative in x/y
+    /// and much bigger than the window.
+    ///
+    /// Widgets that place something in a top-level window of their own — a menu
+    /// panel, a tooltip — use this to keep it on screen: a popup is not bounded
+    /// by the app's window, so the display is the only thing that does bound
+    /// it. It excludes the space the desktop reserves for its own furniture
+    /// (the macOS menu bar and Dock) where the platform reports it.
+    ///
+    /// `None` when the runtime has no answer: an offscreen
+    /// [`MockBackend`](crate::mock::MockBackend) render, or a window the
+    /// platform has not placed on a display yet. Treat that as "unbounded"
+    /// rather than "nothing fits".
+    ///
+    /// [`Widget::bounds`]: crate::Widget::bounds
+    /// [`PopupRequest::rect`]: crate::PopupRequest::rect
+    pub fn screen_area(&self) -> Option<Rect> {
+        self.screen
     }
 
     /// Restrict all subsequent drawing to a physical-pixel rectangle. Used
@@ -299,12 +333,17 @@ impl<'a> Painter<'a> {
         let origin_y = self.origin_y + self.snap(area.y);
         let saved_scale = self.scale;
         let saved_origin = (self.origin_x, self.origin_y);
+        // The nested coordinate space is `area`-local at another scale, so the
+        // window's screen rect no longer describes it — drop it rather than
+        // hand `f` a rect in the wrong space.
+        let saved_screen = self.screen.take();
         self.scale = scale.max(0.01);
         self.origin_x = origin_x;
         self.origin_y = origin_y;
         f(self);
         self.scale = saved_scale;
         (self.origin_x, self.origin_y) = saved_origin;
+        self.screen = saved_screen;
         self.restore_clip(saved_clip);
     }
 
