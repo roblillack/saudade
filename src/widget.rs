@@ -161,6 +161,24 @@ pub trait Widget {
         }
     }
 
+    /// `true` if this widget paints every pixel of its own
+    /// [`bounds`](Widget::bounds) opaquely.
+    ///
+    /// The runtime asks the *root* widget this before each frame. When the
+    /// answer is yes it lays the window background — the desktop pattern behind
+    /// the widget tree — only in the letterbox around those bounds instead of
+    /// across the whole surface, because the rest of it would be covered again
+    /// before the frame is presented. On a HiDPI window that backdrop is the
+    /// most expensive thing in the frame, and overdrawing it is the easiest
+    /// thing in the frame to skip.
+    ///
+    /// Only say yes if it is true: the pixels the backdrop skips are left
+    /// holding whatever the surface buffer happened to contain, which on most
+    /// platforms is not the previous frame and not blank either. Default: no.
+    fn paints_own_background(&self) -> bool {
+        false
+    }
+
     /// `true` if this widget needs periodic [`Event::Tick`](crate::event::Event::Tick)
     /// events to drive an animation. The runtime polls this after every
     /// dispatch and, while any widget in the tree wants ticks, fires

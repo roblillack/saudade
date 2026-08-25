@@ -35,6 +35,13 @@ While pre-1.0, the minor version is bumped for breaking changes.
   instead for 13 points magnified 2x keeps the variant a native app would use,
   keeps advances exactly proportional to the DPI, and keeps a layout the same on
   every display. (#48)
+- `Widget::paints_own_background` lets a root widget tell the runtime it fills
+  every pixel of its own bounds. The window background pattern is then laid
+  down only in the letterbox around those bounds instead of across the whole
+  surface, where the widget tree would immediately cover it again. `Container`
+  answers yes when it was given a background color; anything else has to opt in
+  (and must mean it — the skipped pixels keep whatever the surface buffer held,
+  which on most platforms is neither the last frame nor blank). (#49)
 
 ### Changed
 
@@ -49,6 +56,12 @@ While pre-1.0, the minor version is bumped for breaking changes.
   A variable-weight system font (macOS's San Francisco) offers no bold face to
   load, so it is listed first but passed over until it can carry emphasis — see
   the bold-preference rule above. (#48)
+- `Painter::fill_pattern` no longer walks the window pixel by pixel. Every
+  background pattern repeats after a handful of rows, so only the first period
+  is computed and the rest of the surface is filled by copying whole rows —
+  around 9x faster on a 2x HiDPI window (2.75 ms → 0.32 ms for 1800×1240),
+  which had made the backdrop cost more per frame than the entire widget tree.
+  The output is unchanged, pixel for pixel, at every scale and origin. (#49)
 
 ### Fixed
 

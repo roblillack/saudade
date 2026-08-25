@@ -464,21 +464,82 @@ impl<'a> Painter<'a> {
     /// texture keeps its proportions. [`BackgroundPattern::None`] is a plain
     /// `base` fill; [`BackgroundPattern::Solid`] is a plain `fg` fill.
     pub fn fill_pattern(&mut self, base: Color, pattern: BackgroundPattern, fg: Color) {
-        self.fill(base);
-        match pattern {
-            BackgroundPattern::None => return,
-            BackgroundPattern::Solid => {
-                self.fill(fg);
-                return;
-            }
-            _ => {}
+        self.stamp_pattern(base, pattern, fg, None);
+    }
+
+    /// [`fill_pattern`](Self::fill_pattern) for a window whose root widget
+    /// paints every pixel of `covered` itself: the pattern is laid down only in
+    /// the letterbox around that rect, since anything inside it would be
+    /// overdrawn before the frame ever reaches the screen. A root that fills its
+    /// whole bounds — which most do — leaves nothing to paint at all.
+    ///
+    /// `covered` is a logical rect, and its edges are snapped to device pixels
+    /// the way [`fill_rect`](Self::fill_rect) snaps its own, so the pattern and
+    /// the widget meet exactly with no seam and no double-painted column.
+    pub fn fill_pattern_around(
+        &mut self,
+        base: Color,
+        pattern: BackgroundPattern,
+        fg: Color,
+        covered: Rect,
+    ) {
+        self.stamp_pattern(base, pattern, fg, Some(covered));
+    }
+
+    /// Body of both `fill_pattern` entry points. `covered`, when given, is left
+    /// untouched — see [`fill_pattern_around`](Self::fill_pattern_around).
+    ///
+    /// Every one of these patterns repeats after a handful of rows, so only the
+    /// first period is computed pixel by pixel and the rest of the buffer is
+    /// filled by copying whole rows. That turns a `rem_euclid` per pixel of the
+    /// window into a memcpy per row — which is worth having on a HiDPI surface,
+    /// where the same window is four times as many pixels.
+    ///
+    /// Like the other whole-surface fills, this ignores the clip rect: it runs
+    /// before the widget tree, as the ground everything else is painted onto.
+    fn stamp_pattern(
+        &mut self,
+        base: Color,
+        pattern: BackgroundPattern,
+        fg: Color,
+        covered: Option<Rect>,
+    ) {
+        // The gap the caller fills itself, in physical pixels. An empty or
+        // absent rect degenerates to "no gap", i.e. paint everything.
+        let gap = covered.and_then(|r| {
+            let x0 = (self.origin_x + self.snap(r.x)).clamp(0, self.width);
+            let y0 = (self.origin_y + self.snap(r.y)).clamp(0, self.height);
+            let x1 = (self.origin_x + self.snap(r.x + r.w)).clamp(0, self.width);
+            let y1 = (self.origin_y + self.snap(r.y + r.h)).clamp(0, self.height);
+            (x1 > x0 && y1 > y0).then_some((x0, y0, x1, y1))
+        });
+        let (gx0, gy0, gx1, gy1) = gap.unwrap_or((0, 0, 0, 0));
+        // The whole surface belongs to the caller: nothing to do.
+        if gx0 == 0 && gy0 == 0 && gx1 >= self.width && gy1 >= self.height {
+            return;
         }
+
         // Grid spacing + feature thickness in physical pixels. `near` is the
         // tight 4px grid (lines, diagonal hatching); `wide` is the looser 6px
         // grid used by the staggered dots and the cross-stitch weave.
         let near = (4.0 * self.scale).round().max(1.0) as i32;
         let wide = (6.0 * self.scale).round().max(1.0) as i32;
         let thick = self.scale.round().max(1.0) as i32;
+        // How many rows until the pattern comes back into phase: the dot field
+        // staggers alternate rows, so it takes two grid steps to repeat; the
+        // diagonals and lines are back in phase after one.
+        let period = match pattern {
+            BackgroundPattern::Dots => wide * 2,
+            BackgroundPattern::CrossStitch => wide,
+            _ => near,
+        };
+        // The flat ground under the pattern, and whether there is a pattern to
+        // stamp on it at all.
+        let ground = match pattern {
+            BackgroundPattern::Solid => fg.0,
+            _ => base.0,
+        };
+        let stamped = !matches!(pattern, BackgroundPattern::None | BackgroundPattern::Solid);
         // A staggered dot field: dots sit on a `step` grid, but every other
         // row is shifted half a step so each dot falls in the gap of the row
         // above — the quincunx of the classic Mac desktop, not a square grid.
@@ -495,24 +556,57 @@ impl<'a> Painter<'a> {
         };
         let fg = fg.0;
         for y in 0..self.height {
-            // Offset by the logical origin so the grid stays put regardless of
-            // letterboxing; `rem_euclid` keeps it stable for negative offsets.
-            let ay = y - self.origin_y;
+            // The x-spans this row paints: the whole row, or the strips either
+            // side of the caller's gap.
+            let in_gap = y >= gy0 && y < gy1;
+            let spans = if in_gap {
+                [(0, gx0), (gx1, self.width)]
+            } else {
+                [(0, self.width), (0, 0)]
+            };
             let row = (y * self.width) as usize;
-            for x in 0..self.width {
-                let ax = x - self.origin_x;
-                let on = match pattern {
-                    BackgroundPattern::Dots => dotted(ax, ay, wide),
-                    BackgroundPattern::Lines => ay.rem_euclid(near) < thick,
-                    BackgroundPattern::DiagonalForward => (ax + ay).rem_euclid(near) < thick,
-                    BackgroundPattern::CrossStitch => {
-                        (ax + ay).rem_euclid(wide) < thick || (ax - ay).rem_euclid(wide) < thick
+            // A row `period` back carries the same pattern phase; when it also
+            // paints the same spans, copy it rather than recompute it.
+            let src = y - period;
+            if src >= 0 && (src >= gy0 && src < gy1) == in_gap {
+                let src_row = (src * self.width) as usize;
+                for (x0, x1) in spans {
+                    if x1 > x0 {
+                        self.pixels.copy_within(
+                            src_row + x0 as usize..src_row + x1 as usize,
+                            row + x0 as usize,
+                        );
                     }
-                    // Handled above with an early return.
-                    BackgroundPattern::None | BackgroundPattern::Solid => false,
-                };
-                if on {
-                    self.pixels[row + x as usize] = fg;
+                }
+                continue;
+            }
+            let ay = y - self.origin_y;
+            for (x0, x1) in spans {
+                if x1 <= x0 {
+                    continue;
+                }
+                self.pixels[row + x0 as usize..row + x1 as usize].fill(ground);
+                if !stamped {
+                    continue;
+                }
+                // Offset by the logical origin so the grid stays put regardless
+                // of letterboxing; `rem_euclid` keeps it stable for negative
+                // offsets.
+                for x in x0..x1 {
+                    let ax = x - self.origin_x;
+                    let on = match pattern {
+                        BackgroundPattern::Dots => dotted(ax, ay, wide),
+                        BackgroundPattern::Lines => ay.rem_euclid(near) < thick,
+                        BackgroundPattern::DiagonalForward => (ax + ay).rem_euclid(near) < thick,
+                        BackgroundPattern::CrossStitch => {
+                            (ax + ay).rem_euclid(wide) < thick || (ax - ay).rem_euclid(wide) < thick
+                        }
+                        // Handled by `stamped` above.
+                        BackgroundPattern::None | BackgroundPattern::Solid => false,
+                    };
+                    if on {
+                        self.pixels[row + x as usize] = fg;
+                    }
                 }
             }
         }
@@ -977,6 +1071,147 @@ mod tests {
             p.fill_pattern(Color::WHITE, pattern, fg);
         }
         pixels
+    }
+
+    /// The straightforward per-pixel version of `stamp_pattern`, kept here as
+    /// the thing the row-copying implementation has to agree with exactly.
+    fn reference(
+        w: i32,
+        h: i32,
+        scale: f32,
+        origin: (i32, i32),
+        pattern: BackgroundPattern,
+        base: Color,
+        fg: Color,
+    ) -> Vec<u32> {
+        let (origin_x, origin_y) = origin;
+        let near = (4.0 * scale).round().max(1.0) as i32;
+        let wide = (6.0 * scale).round().max(1.0) as i32;
+        let thick = scale.round().max(1.0) as i32;
+        let ground = match pattern {
+            BackgroundPattern::Solid => fg.0,
+            _ => base.0,
+        };
+        let mut px = vec![ground; (w * h) as usize];
+        if matches!(pattern, BackgroundPattern::None | BackgroundPattern::Solid) {
+            return px;
+        }
+        let dotted = |ax: i32, ay: i32, step: i32| -> bool {
+            if ay.rem_euclid(step) >= thick {
+                return false;
+            }
+            let shift = if ay.div_euclid(step).rem_euclid(2) == 1 {
+                step / 2
+            } else {
+                0
+            };
+            (ax - shift).rem_euclid(step) < thick
+        };
+        for y in 0..h {
+            let ay = y - origin_y;
+            for x in 0..w {
+                let ax = x - origin_x;
+                let on = match pattern {
+                    BackgroundPattern::Dots => dotted(ax, ay, wide),
+                    BackgroundPattern::Lines => ay.rem_euclid(near) < thick,
+                    BackgroundPattern::DiagonalForward => (ax + ay).rem_euclid(near) < thick,
+                    BackgroundPattern::CrossStitch => {
+                        (ax + ay).rem_euclid(wide) < thick || (ax - ay).rem_euclid(wide) < thick
+                    }
+                    BackgroundPattern::None | BackgroundPattern::Solid => false,
+                };
+                if on {
+                    px[(y * w + x) as usize] = fg.0;
+                }
+            }
+        }
+        px
+    }
+
+    const PATTERNS: [BackgroundPattern; 6] = [
+        BackgroundPattern::None,
+        BackgroundPattern::Solid,
+        BackgroundPattern::Dots,
+        BackgroundPattern::Lines,
+        BackgroundPattern::DiagonalForward,
+        BackgroundPattern::CrossStitch,
+    ];
+
+    #[test]
+    fn copying_rows_paints_exactly_what_the_per_pixel_loop_would() {
+        // Sizes that are deliberately not multiples of either grid step, so a
+        // partial final period would show up as a mismatch.
+        for (w, h) in [(37, 41), (12, 12), (1, 1), (64, 3)] {
+            for scale in [1.0f32, 1.25, 1.5, 2.0, 3.0] {
+                for origin in [(0, 0), (7, 3), (-5, -11)] {
+                    for pattern in PATTERNS {
+                        let mut pixels = vec![0u32; (w * h) as usize];
+                        {
+                            let mut p = Painter::new(
+                                &mut pixels,
+                                w,
+                                h,
+                                scale,
+                                origin.0,
+                                origin.1,
+                                FontSet::default(),
+                            );
+                            p.fill_pattern(Color::WHITE, pattern, Color::BLACK);
+                        }
+                        assert_eq!(
+                            pixels,
+                            reference(w, h, scale, origin, pattern, Color::WHITE, Color::BLACK),
+                            "{pattern:?} at {w}x{h}, scale {scale}, origin {origin:?}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_covered_rect_is_left_untouched_and_its_surroundings_are_not() {
+        let (w, h) = (24, 24);
+        let mut pixels = vec![0xdeadbeef_u32; (w * h) as usize];
+        {
+            let mut p = Painter::new(&mut pixels, w, h, 1.0, 0, 0, FontSet::default());
+            p.fill_pattern_around(
+                Color::WHITE,
+                BackgroundPattern::Lines,
+                Color::BLACK,
+                Rect::new(8, 8, 8, 8),
+            );
+        }
+        let at = |x: i32, y: i32| pixels[(y * w + x) as usize];
+        // The gap still holds what the buffer had: the caller paints it.
+        assert_eq!(at(8, 8), 0xdeadbeef, "the covered rect is not painted");
+        assert_eq!(at(15, 15), 0xdeadbeef, "right up to its last pixel");
+        // Everything around it is patterned, on both sides of the gap and on
+        // the rows above and below it.
+        assert_eq!(at(7, 8), Color::BLACK.0, "the strip left of the gap");
+        assert_eq!(at(16, 8), Color::BLACK.0, "the strip right of it");
+        assert_eq!(at(8, 4), Color::BLACK.0, "the band above it");
+        assert_eq!(at(8, 20), Color::BLACK.0, "the band below it");
+        assert_eq!(at(8, 5), Color::WHITE.0, "and the ground between lines");
+    }
+
+    #[test]
+    fn a_root_covering_the_whole_surface_leaves_the_backdrop_unpainted() {
+        let (w, h) = (16, 16);
+        let mut pixels = vec![0xdeadbeef_u32; (w * h) as usize];
+        {
+            let mut p = Painter::new(&mut pixels, w, h, 1.0, 0, 0, FontSet::default());
+            p.fill_pattern_around(
+                Color::WHITE,
+                BackgroundPattern::Dots,
+                Color::BLACK,
+                Rect::new(0, 0, 16, 16),
+            );
+        }
+        assert!(
+            pixels.iter().all(|&c| c == 0xdeadbeef),
+            "not a single pixel is touched when the root covers the window"
+        );
     }
 
     #[test]
