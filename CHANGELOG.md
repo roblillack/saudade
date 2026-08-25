@@ -88,6 +88,15 @@ While pre-1.0, the minor version is bumped for breaking changes.
 
 ### Fixed
 
+- A menu or dropdown now folds away when the keyboard moves out of it: clicking
+  the window's title bar (on the way to dragging it), switching to another app,
+  or activating another window of this one. A menu is a modal gesture belonging
+  to the click that opened it, and every desktop's own menus end it there. Only
+  a `PopupKind::Popup` is treated as transient — a dialog window stays put — and
+  the dismissal goes through Escape, which the widget owning the popup consumes,
+  so a dropdown open inside a dialog closes without taking the dialog with it.
+  X11 popups are override-redirect and never hold focus, so nothing there
+  changes.
 - On macOS a popup window — every `MenuBar` drop-down, `Dropdown` list and
   `ContextMenu` panel — no longer arrives with the system's window chrome around
   it. `NSWindow`'s drop shadow is off, so the soft grey halo that read as a

@@ -434,11 +434,8 @@ impl AppHandler {
             // something outside the menu was clicked — the title bar, most
             // often, on the way to dragging the window. Native menus don't
             // survive that.
-            WindowEvent::Focused(f) => {
-                eprintln!("PROBE main Focused({f}) popups={}", self.popups.len());
-                if f {
+            WindowEvent::Focused(true) => {
                 self.dismiss_transient_popup(event_loop);
-                }
             }
             WindowEvent::Resized(new_size) => {
                 self.physical = new_size;
@@ -586,10 +583,19 @@ impl AppHandler {
             // the stack speaks for the stack — a *parent* popup loses focus for
             // an innocent reason, namely a nested popup of its own opening
             // above it (a dropdown inside a dialog).
-            WindowEvent::Focused(f) => {
-                eprintln!("PROBE popup[{idx}] Focused({f}) popups={}", self.popups.len());
-                if !f && idx + 1 == self.popups.len() {
-                self.dismiss_transient_popup(event_loop);
+            WindowEvent::Focused(focused) => {
+                let Some(p) = self.popups.get_mut(idx) else {
+                    return;
+                };
+                if focused {
+                    p.was_focused = true;
+                    return;
+                }
+                // A brand-new popup window reports one unfocused *before* it is
+                // given the keyboard, so a loss only means anything once it has
+                // actually held it.
+                if p.was_focused && idx + 1 == self.popups.len() {
+                    self.dismiss_transient_popup(event_loop);
                 }
             }
             WindowEvent::Moved(_) => {
@@ -1233,6 +1239,7 @@ impl AppHandler {
             scale: self.scale,
             cursor: None,
             cursor_icon: Cursor::Default,
+            was_focused: false,
             needs_redraw: true,
         })
     }
@@ -1253,6 +1260,11 @@ struct PopupWindow {
     /// Pointer shape currently applied to this popup window — see the same
     /// field on [`AppHandler`].
     cursor_icon: Cursor,
+    /// Whether this window has ever held the keyboard. winit reports a fresh
+    /// popup as unfocused before focusing it, and that first loss must not be
+    /// read as the user clicking away — see the `Focused` arm in
+    /// [`AppHandler::handle_popup_event`].
+    was_focused: bool,
     needs_redraw: bool,
 }
 

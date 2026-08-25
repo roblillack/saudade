@@ -644,7 +644,10 @@ contents and behaving like Chrome / Firefox menus on each backend:
 
 The popup is dismissed by clicking outside it (the main window
 receives the click and the menu folds up), pressing Escape, or firing
-an item.
+an item — and, like a native menu, by the keyboard moving out of it
+altogether: clicking the title bar to drag the window, or switching to
+another app. A `Dialog` popup is a window in its own right and is not
+dismissed that way.
 
 `MenuBar::open(idx)` programmatically opens a menu — handy for custom
 application-level keybindings.
