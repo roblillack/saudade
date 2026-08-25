@@ -1,6 +1,6 @@
 [package]
 name = "saudade"
-version = "0.5.0"
+version = "0.6.0"
 edition = "2024"
 rust-version = "1.88"
 description = "Classic looking retained-mode, cross-platform Rust GUI library"

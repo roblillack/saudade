@@ -10,6 +10,8 @@ While pre-1.0, the minor version is bumped for breaking changes.
 
 ## [Unreleased] - ReleaseDate
 
+## [0.6.0] - 2026-08-25
+
 ### Added
 
 - `ContextMenu` — a right-click menu, anchored at a point rather than hanging
@@ -437,7 +439,8 @@ While pre-1.0, the minor version is bumped for breaking changes.
 Initial release.
 
 <!-- next-url -->
-[Unreleased]: https://github.com/roblillack/saudade/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/roblillack/saudade/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/roblillack/saudade/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/roblillack/saudade/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/roblillack/saudade/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/roblillack/saudade/compare/v0.2.0...v0.3.0

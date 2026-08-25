@@ -95,7 +95,7 @@ or list it directly in your `Cargo.toml`:
 ```toml
 # Cargo.toml
 [dependencies]
-saudade = "0.5.0"
+saudade = "0.6.0"
 ```
 
 The reference apps under `examples/` are plain Cargo examples built against
