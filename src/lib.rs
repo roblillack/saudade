@@ -35,6 +35,8 @@ mod accel;
 mod app;
 mod background;
 pub mod chrome;
+#[cfg(target_os = "macos")]
+mod coretext;
 mod event;
 mod font;
 mod geometry;
