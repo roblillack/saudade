@@ -53,7 +53,7 @@ members = ["macros"]
 # features drops `wayland-csd-adwaita` and `wayland-dlopen` from the
 # tree as a side benefit. The `x11` feature is a harmless no-op off
 # free-unix (winit's X11 platform crates are themselves target-gated).
-winit = { version = "0.30", default-features = false, features = ["rwh_06", "x11"] }
+winit = { version = "0.30.12", default-features = false, features = ["rwh_06", "x11"] }
 softbuffer = "0.4"
 fontdue = "0.8"
 fontdb = "0.16"

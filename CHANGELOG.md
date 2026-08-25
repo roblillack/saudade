@@ -10,6 +10,19 @@ While pre-1.0, the minor version is bumped for breaking changes.
 
 ## [Unreleased] - ReleaseDate
 
+### Fixed
+
+- Raised the `winit` floor to 0.30.12 so a macOS build cannot resolve a version
+  that aborts on startup. Earlier 0.30.x releases leave
+  `objc2/relax-sign-encoding` off, and on macOS 26 `NSScreen.screens` hands back
+  a Swift-native array whose `countByEnumeratingWithState:` returns `Int` where
+  objc2-foundation declares `NSUInteger`; objc2 0.5's debug-only encoding check
+  turns that mismatch into a panic inside winit's `extern "C"` app delegate,
+  which cannot unwind, so a debug binary died with `SIGABRT` before showing a
+  window. The Core Text font path added in 0.6.0 is what pulls the Swift-backed
+  AppKit machinery into the process, so 0.6.0 is where a stale lockfile started
+  to bite.
+
 ## [0.6.0] - 2026-08-25
 
 ### Added
