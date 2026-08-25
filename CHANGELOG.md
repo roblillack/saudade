@@ -20,7 +20,7 @@ While pre-1.0, the minor version is bumped for breaking changes.
   The sub-step remainder is now banked in document units too, so a
   high-resolution trackpad still moves such a bar smoothly rather than a whole
   row at a time. Bars that count rows (`line_step` left at its default 1) are
-  unaffected.
+  unaffected. (#50)
 
 ## [0.5.0] - 2026-06-10
 
