@@ -1080,6 +1080,59 @@ impl AppHandler {
         }
     }
 
+    /// Re-point the popup at `idx` at a new anchor rect, reusing its window
+    /// rather than tearing it down and opening another one — see the caller in
+    /// [`Self::sync_popup`]. Returns whether the move went through; on failure
+    /// the popup is left untouched for the caller to rebuild as before.
+    ///
+    /// The geometry is [`Self::reposition_popup`]'s, plus a resize: a different
+    /// menu is a different size.
+    fn move_popup(&mut self, idx: usize, rect: Rect) -> bool {
+        // Outermost popup anchors to the main window; a nested one to the popup
+        // directly above it.
+        let parent_inner = if idx == 0 {
+            let Some(main_win) = self.main_win.as_ref() else {
+                return false;
+            };
+            main_win.inner_position()
+        } else {
+            self.popups[idx - 1].win.inner_position()
+        };
+        let Ok(inner) = parent_inner else {
+            return false;
+        };
+        let parent_origin = if idx == 0 {
+            Rect::new(0, 0, 0, 0)
+        } else {
+            self.popups[idx - 1].anchor
+        };
+
+        let dx = (rect.x - parent_origin.x) as f32;
+        let dy = (rect.y - parent_origin.y) as f32;
+        let px = inner.x + (dx * self.scale).round() as i32;
+        let py = inner.y + (dy * self.scale).round() as i32;
+        let size = PhysicalSize::new(
+            ((rect.w as f32) * self.scale).round().max(1.0) as u32,
+            ((rect.h as f32) * self.scale).round().max(1.0) as u32,
+        );
+
+        let p = &mut self.popups[idx];
+        p.win.set_outer_position(PhysicalPosition::new(px, py));
+        // `None` means the platform will report the new size later, in a
+        // `Resized` event — take the requested size for now, as opening a popup
+        // does, so this frame is painted at the right size.
+        let actual = p.win.request_inner_size(size).unwrap_or(size);
+        p.physical = actual;
+        resize_surface(&mut p.surface, actual);
+        p.anchor = rect;
+        // The cached pointer position pointed at a row of the menu we just
+        // replaced, so it now means nothing. The platform sends a fresh motion
+        // event if the pointer really is inside the panel at its new place.
+        p.cursor = None;
+        p.needs_redraw = true;
+        true
+    }
+
     fn sync_popup(&mut self, event_loop: &ActiveEventLoop) {
         let mut requests = Vec::new();
         self.root.collect_popups(&mut requests);
@@ -1087,14 +1140,32 @@ impl AppHandler {
         // Keep the longest prefix of existing popup windows that still matches
         // the requested stack (same anchor + kind). The first mismatch — and
         // everything above it — is torn down and rebuilt, so opening a nested
-        // dropdown adds a window without disturbing the dialog beneath it, and a
-        // menu sliding to a new anchor rebuilds just that one.
-        let keep = self
+        // dropdown adds a window without disturbing the dialog beneath it.
+        let mut keep = self
             .popups
             .iter()
             .zip(requests.iter())
             .take_while(|(p, req)| p.anchor == req.rect && p.kind == req.kind)
             .count();
+
+        // A menu walking along the bar — the cursor keys, or the pointer
+        // dragged across the labels with the button held — asks for the same
+        // kind of popup at a new anchor. Rebuilding the window for that would
+        // destroy the one holding the keyboard, and the main window taking the
+        // focus back mid-swap is indistinguishable from the user clicking
+        // outside: the menu would fold itself away on the first step. Slide the
+        // window we already have instead, which is what the swap looks like
+        // anyway. Only the topmost popup qualifies, so nothing nested is left
+        // anchored to a window that moved out from under it.
+        if keep + 1 == self.popups.len()
+            && keep < requests.len()
+            && self.popups[keep].kind == PopupKind::Popup
+            && requests[keep].kind == PopupKind::Popup
+            && self.move_popup(keep, requests[keep].rect)
+        {
+            keep += 1;
+        }
+
         self.popups.truncate(keep);
         for req in requests.into_iter().skip(keep) {
             // Nested popups anchor against the popup *above* them in the

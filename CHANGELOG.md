@@ -12,6 +12,14 @@ While pre-1.0, the minor version is bumped for breaking changes.
 
 ### Fixed
 
+- Walking a `MenuBar` from one menu to the next — the Left / Right cursor keys,
+  or the pointer dragged across the labels with the button held — no longer
+  closes the menu on the first step. A menu moving along the bar asks for a
+  popup window at a new anchor, and that used to tear the open window down and
+  build another one: the keyboard went back to the main window in between, and
+  0.6.0's new "a menu folds away when the focus leaves it" rule could not tell
+  that apart from the user clicking outside. The window is now moved and
+  resized in place instead, so the walk never gives the focus up at all.
 - Raised the `winit` floor to 0.30.12 so a macOS build cannot resolve a version
   that aborts on startup. Earlier 0.30.x releases leave
   `objc2/relax-sign-encoding` off, and on macOS 26 `NSScreen.screens` hands back
