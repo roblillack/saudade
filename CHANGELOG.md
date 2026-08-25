@@ -25,16 +25,6 @@ While pre-1.0, the minor version is bumped for breaking changes.
   (`set_items` then `open_at`); `open_within` bounds the panel by a rect of the
   caller's choosing instead. Apps that had hand-rolled a context menu can drop
   it; the `circle_drawer` example did. (#47)
-- `Painter::screen_area` tells a widget where the display is, in the root
-  widget's own coordinates — what a widget placing its own top-level window
-  needs, since a popup is not bounded by the app's window and the display is the
-  only thing that is. It excludes the space the desktop reserves for itself
-  (on macOS the menu bar and the Dock, via `NSScreen.visibleFrame`; X11 and
-  Windows report no reservation, which winit does not surface). The runtime works
-  it out once per window move / resize / DPI change rather than per frame.
-  `MockBackend::with_screen_area` fakes one so the placement is testable
-  offscreen; an ordinary offscreen render reports `None`, meaning unbounded.
-
 - On macOS the *system* fonts now come from Core Text rather than from a font
   file picked out of a database. `Font::load_sans` and `load_monospace` ask for
   the interface font and the user's fixed-pitch font by role, `load_serif` by
@@ -65,7 +55,17 @@ While pre-1.0, the minor version is bumped for breaking changes.
   answers yes when it was given a background color; anything else has to opt in
   (and must mean it — the skipped pixels keep whatever the surface buffer held,
   which on most platforms is neither the last frame nor blank). (#49)
-
+- `Painter::screen_area` tells a widget where the display is, in the root
+  widget's own coordinates — what a widget placing its own top-level window
+  needs, since a popup is not bounded by the app's window and the display is the
+  only thing that is. It excludes the space the desktop reserves for itself
+  (on macOS the menu bar and the Dock, via `NSScreen.visibleFrame`; X11 and
+  Windows report no reservation, which winit does not surface). The runtime works
+  it out once per window move / resize / DPI change rather than per frame.
+  `MockBackend::with_screen_area` fakes one so the placement is testable
+  offscreen; an ordinary offscreen render reports `None`, meaning unbounded.
+  (#47)
+  
 ### Changed
 
 - The candidate font families are now chosen per platform, each chain leading
@@ -104,7 +104,6 @@ While pre-1.0, the minor version is bumped for breaking changes.
   `animationBehavior` is `None`, so a menu is on screen the instant it is asked
   for instead of fading in. Real dialog windows (`PopupKind::Dialog`) keep both.
   (#47)
-
 - Bold and italic text now actually renders in the host's bold and italic
   faces. Two things stood in the way. A font *collection* (`.ttc`) packs
   several faces into one file and fontdb reports which one it matched, but that
