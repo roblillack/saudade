@@ -186,6 +186,14 @@ impl MockBackend {
             );
             match backdrop {
                 Backdrop::Plain => painter.fill(self.theme.background),
+                // Mirrors the live runtime: a root that paints its own
+                // background gets only the letterbox around it.
+                Backdrop::Pattern if root.paints_own_background() => painter.fill_pattern_around(
+                    self.theme.background,
+                    self.bg.pattern,
+                    self.bg.color,
+                    root.bounds(),
+                ),
                 Backdrop::Pattern => {
                     painter.fill_pattern(self.theme.background, self.bg.pattern, self.bg.color)
                 }

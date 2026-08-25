@@ -227,6 +227,12 @@ impl Widget for Container {
         self.origin = Point::new(bounds.x, bounds.y);
     }
 
+    /// A container with an explicit background fills its whole bounds before
+    /// its children draw, so a window rooted in one needs no backdrop under it.
+    fn paints_own_background(&self) -> bool {
+        self.background.is_some()
+    }
+
     fn paint(&mut self, painter: &mut Painter, theme: &Theme) {
         if let Some(bg) = self.background {
             painter.fill_rect(self.bounds(), bg);

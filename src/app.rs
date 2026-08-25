@@ -896,7 +896,18 @@ impl AppHandler {
             },
             None,
         );
-        painter.fill_pattern(self.theme.background, self.bg.pattern, self.bg.color);
+        // A root that paints its own background covers the pattern anyway, so
+        // only the letterbox around it is worth laying down — usually nothing.
+        if self.root.paints_own_background() {
+            painter.fill_pattern_around(
+                self.theme.background,
+                self.bg.pattern,
+                self.bg.color,
+                self.root.bounds(),
+            );
+        } else {
+            painter.fill_pattern(self.theme.background, self.bg.pattern, self.bg.color);
+        }
         self.root.paint(&mut painter, &self.theme);
         surface_buf
             .present()
