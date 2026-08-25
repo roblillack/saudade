@@ -968,8 +968,8 @@ impl<'a> Painter<'a> {
         };
         let x_phys = self.snap(x) as f32;
         let y_phys = self.snap(y) as f32;
-        let size_phys = size * self.scale;
-        font.draw_phys(self, text, x_phys, y_phys, size_phys, color, style);
+        let scale = self.scale;
+        font.draw_phys(self, text, x_phys, y_phys, size, scale, color, style);
     }
 
     /// Draw text with an additional physical-pixel offset applied *after*
@@ -992,13 +992,14 @@ impl<'a> Painter<'a> {
         };
         let x_phys = (self.snap(x) + dx_phys) as f32;
         let y_phys = (self.snap(y) + dy_phys) as f32;
-        let size_phys = size * self.scale;
+        let scale = self.scale;
         font.draw_phys(
             self,
             text,
             x_phys,
             y_phys,
-            size_phys,
+            size,
+            scale,
             color,
             FontStyle::Regular,
         );

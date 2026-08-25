@@ -12,6 +12,29 @@ While pre-1.0, the minor version is bumped for breaking changes.
 
 ### Added
 
+- On macOS the *system* fonts now come from Core Text rather than from a font
+  file picked out of a database. `Font::load_sans` and `load_monospace` ask for
+  the interface font and the user's fixed-pitch font by role, `load_serif` by
+  family name, and glyphs are rasterized by the same text stack every other app
+  on the desktop draws with. Three things follow: San Francisco can finally be
+  emphasized (Core Text instantiates the weight axis a font database cannot see,
+  so a heading is a real bold rather than a fallback to regular); text is
+  antialiased the way the rest of the desktop is; and a character the interface
+  font has no glyph for — an emoji, a CJK ideograph — is drawn by whichever
+  installed face does have it instead of silently dropped.
+
+  Fonts an app supplies as bytes (`Font::from_sans_bytes` and the
+  `with_*_bytes` builders) stay on the portable fontdue path on every platform,
+  so a bundled face renders identically everywhere and snapshot tests are
+  unaffected.
+
+  The DPI arrives as a scale matrix rather than as a bigger point size. macOS
+  re-picks San Francisco's optical variant on every size change, so asking for a
+  26-pixel font on a Retina screen would quietly switch a 13-point label to
+  display metrics — around 10% narrower than the same app on a 1x screen. Asking
+  instead for 13 points magnified 2x keeps the variant a native app would use,
+  keeps advances exactly proportional to the DPI, and keeps a layout the same on
+  every display. (#48)
 - `Widget::paints_own_background` lets a root widget tell the runtime it fills
   every pixel of its own bounds. The window background pattern is then laid
   down only in the letterbox around those bounds instead of across the whole
@@ -22,12 +45,45 @@ While pre-1.0, the minor version is bumped for breaking changes.
 
 ### Changed
 
+- The candidate font families are now chosen per platform, each chain leading
+  with the host's own UI font so an app looks like it belongs on the desktop it
+  was opened on: Segoe UI / Tahoma / MS Sans Serif on Windows, the San Francisco
+  lineage down through Helvetica Neue and Lucida Grande on macOS, Cantarell /
+  Ubuntu / Noto Sans on everything else, each ending in the near-universal
+  DejaVu and Liberation faces. Previously one Windows-flavored list served every
+  platform, which on macOS meant the Microsoft faces bundled in
+  `/System/Library/Fonts/Supplemental` rather than anything Apple ships.
+  A variable-weight system font (macOS's San Francisco) offers no bold face to
+  load, so it is listed first but passed over until it can carry emphasis — see
+  the bold-preference rule above. (#48)
 - `Painter::fill_pattern` no longer walks the window pixel by pixel. Every
   background pattern repeats after a handful of rows, so only the first period
   is computed and the rest of the surface is filled by copying whole rows —
   around 9x faster on a 2x HiDPI window (2.75 ms → 0.32 ms for 1800×1240),
   which had made the backdrop cost more per frame than the entire widget tree.
   The output is unchanged, pixel for pixel, at every scale and origin. (#49)
+
+### Fixed
+
+- Bold and italic text now actually renders in the host's bold and italic
+  faces. Two things stood in the way. A font *collection* (`.ttc`) packs
+  several faces into one file and fontdb reports which one it matched, but that
+  index was dropped on the way to fontdue, so every emphasis face of a
+  collection — which on macOS is most of them, Helvetica included — rasterized
+  as its regular face. And the family search took the first candidate with a
+  usable regular face, even when that family shipped no bold at all: on macOS
+  that is Microsoft Sans Serif, one line above Tahoma, which does have a real
+  bold. The family chain now prefers a family that can do bold, falling back to
+  a regular-only one only when no candidate offers better. (#48)
+- `ScrollBar` now honors its `line_step` when scrolled by wheel or trackpad,
+  not just by the arrow buttons. A line has always been `line_step` document
+  units everywhere else in the bar; the wheel path added raw line counts to
+  `value`, so a bar whose unit is a *pixel* of content — the shape a pane with
+  unequal row heights needs — crept a single pixel per line instead of a row.
+  The sub-step remainder is now banked in document units too, so a
+  high-resolution trackpad still moves such a bar smoothly rather than a whole
+  row at a time. Bars that count rows (`line_step` left at its default 1) are
+  unaffected. (#50)
 
 ## [0.5.0] - 2026-06-10
 
