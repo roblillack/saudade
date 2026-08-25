@@ -12,6 +12,19 @@ While pre-1.0, the minor version is bumped for breaking changes.
 
 ### Added
 
+- `ContextMenu` — a right-click menu, anchored at a point rather than hanging
+  off a bar label. It is the same panel a `MenuBar` drops open, built from the
+  same `MenuItem`s and drawn by the same code, so mnemonics, accelerator hints,
+  checkmarks, separators and `with_enabled` predicates all behave identically,
+  and it gets its own borderless window so it is never clipped by the widget it
+  belongs to — a menu right-clicked near a window border hangs off the edge
+  rather than being folded back inside it. Items are usually built per opening
+  (`set_items` then `open_at`). `open_within` keeps the panel inside a rect the
+  caller names instead, flipping rather than crossing an edge and capping and
+  scrolling a menu taller than that rect — with the wheel, the arrow keys, or a
+  click on either end's arrow. Apps that had hand-rolled a context menu can drop
+  it; the `circle_drawer` example did.
+
 - On macOS the *system* fonts now come from Core Text rather than from a font
   file picked out of a database. `Font::load_sans` and `load_monospace` ask for
   the interface font and the user's fixed-pitch font by role, `load_serif` by
@@ -64,6 +77,13 @@ While pre-1.0, the minor version is bumped for breaking changes.
   The output is unchanged, pixel for pixel, at every scale and origin. (#49)
 
 ### Fixed
+
+- On macOS a popup window — every `MenuBar` drop-down, `Dropdown` list and
+  `ContextMenu` panel — no longer arrives with the system's window chrome around
+  it. `NSWindow`'s drop shadow is off, so the soft grey halo that read as a
+  second, blurry frame outside the popup's black border is gone; and its
+  `animationBehavior` is `None`, so a menu is on screen the instant it is asked
+  for instead of fading in. Real dialog windows (`PopupKind::Dialog`) keep both.
 
 - Bold and italic text now actually renders in the host's bold and italic
   faces. Two things stood in the way. A font *collection* (`.ttc`) packs

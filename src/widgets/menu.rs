@@ -1,44 +1,16 @@
 use crate::accel::{Accel, ModifierScheme};
 use crate::event::{Event, EventCtx, Key, Modifiers, MouseButton, NamedKey};
-use crate::geometry::{Color, Point, Rect};
-use crate::include_svg;
+use crate::geometry::{Point, Rect};
 use crate::painter::Painter;
-use crate::svg::SvgImage;
 use crate::theme::Theme;
 use crate::widget::{PopupKind, PopupRequest, Widget};
+use crate::widgets::menu_popup::{self, ITEM_HEIGHT, MenuPopup, SEPARATOR_HEIGHT};
 use crate::widgets::mnemonic::{draw_label_with_mnemonic, parse_label};
 
 const BAR_PADDING: i32 = 8;
 /// Top inset for the label baseline inside the bar. Tight enough that the
 /// 13-pt menu font fits in a 20-px bar without growing it.
 const BAR_LABEL_INSET_Y: i32 = 1;
-const POPUP_PADDING_X: i32 = 18;
-const POPUP_PADDING_Y: i32 = 3;
-const ITEM_HEIGHT: i32 = 18;
-/// Gap between an item's label and its right-aligned accelerator hint.
-const ACCEL_GAP: i32 = 24;
-const ITEM_TEXT_INSET_Y: i32 = 1;
-const SEPARATOR_HEIGHT: i32 = 6;
-const SHADOW_SIZE: i32 = 2;
-/// L-shape drop shadow color: a dark gray with no alpha trickery so it
-/// renders crisply on every backend.
-const SHADOW_COLOR: Color = Color::rgb(0x40, 0x40, 0x40);
-/// Footprint of the checkmark drawn in a checked item's left gutter. Kept a few
-/// pixels smaller than the label inset (`POPUP_PADDING_X - 4`) and centered in
-/// it, so the tick has breathing room on both sides and never crowds the text —
-/// and so unchecked / uncheckable menus keep their exact layout.
-const CHECK_SIZE: i32 = 9;
-/// A tiny nudge applied to the centered checkmark so it reads as aligned with
-/// the label rather than sitting a hair high and left of it.
-const CHECK_NUDGE_X: i32 = 1;
-const CHECK_NUDGE_Y: i32 = 1;
-
-/// The checkmark glyph for a checked item, shared with the [`Checkbox`] widget
-/// so both read identically. Baked black is a placeholder, tinted to the item's
-/// text color via [`SvgImage::draw_tinted`].
-///
-/// [`Checkbox`]: crate::widgets::Checkbox
-const CHECK: SvgImage = include_svg!("assets/checkbox/check.svg");
 
 /// One entry inside a drop-down [`Menu`].
 pub enum MenuItem {
@@ -126,13 +98,13 @@ impl MenuItem {
         MenuItem::Separator
     }
 
-    fn is_action(&self) -> bool {
+    pub(crate) fn is_action(&self) -> bool {
         matches!(self, MenuItem::Action { .. })
     }
 
     /// Whether the item is currently enabled (separators count as enabled but
     /// are never selectable). An action with no predicate is always enabled.
-    fn is_enabled(&self) -> bool {
+    pub(crate) fn is_enabled(&self) -> bool {
         match self {
             MenuItem::Action {
                 enabled: Some(pred),
@@ -143,13 +115,13 @@ impl MenuItem {
     }
 
     /// Whether the item can be hovered / fired: an action that is also enabled.
-    fn is_selectable(&self) -> bool {
+    pub(crate) fn is_selectable(&self) -> bool {
         self.is_action() && self.is_enabled()
     }
 
     /// Whether a checkmark should be drawn for this item right now. Only a
     /// checkable action with a live-true predicate is checked.
-    fn is_checked(&self) -> bool {
+    pub(crate) fn is_checked(&self) -> bool {
         matches!(
             self,
             MenuItem::Action {
@@ -159,7 +131,7 @@ impl MenuItem {
         )
     }
 
-    fn height(&self) -> i32 {
+    pub(crate) fn height(&self) -> i32 {
         match self {
             MenuItem::Action { .. } => ITEM_HEIGHT,
             MenuItem::Separator => SEPARATOR_HEIGHT,
@@ -274,6 +246,8 @@ impl MenuBar {
         }
     }
 
+    /// Where the drop-down for menu `menu_idx` lands: flush under the bar,
+    /// left edge aligned with its label, sized by the shared panel code.
     fn compute_popup(&self, menu_idx: usize, painter: &Painter, theme: &Theme) -> Rect {
         let (lx, _lw) = self
             .cache
@@ -281,40 +255,13 @@ impl MenuBar {
             .get(menu_idx)
             .copied()
             .unwrap_or((self.rect.x, 0));
-        let menu = &self.menus[menu_idx];
+        let size = self.popup(menu_idx).measure(painter, theme);
+        Rect::new(lx, self.rect.y + self.rect.h, size.w, size.h)
+    }
 
-        let mut max_label = 0;
-        let mut max_accel = 0;
-        for item in &menu.items {
-            if let MenuItem::Action { label, accel, .. } = item {
-                let parsed = parse_label(label);
-                let w = painter.measure_text(&parsed.display, theme.font_size).w;
-                if w > max_label {
-                    max_label = w;
-                }
-                if let Some(accel) = accel {
-                    let aw = painter
-                        .measure_text(&accel.label(self.scheme), theme.font_size)
-                        .w;
-                    if aw > max_accel {
-                        max_accel = aw;
-                    }
-                }
-            }
-        }
-        // The accelerator column only widens the popup when some item carries
-        // one, so accelerator-free menus keep their original width.
-        let accel_col = if max_accel > 0 {
-            ACCEL_GAP + max_accel
-        } else {
-            0
-        };
-        let width = max_label + accel_col + POPUP_PADDING_X * 2;
-        let mut height = POPUP_PADDING_Y * 2;
-        for item in &menu.items {
-            height += item.height();
-        }
-        Rect::new(lx, self.rect.y + self.rect.h, width, height)
+    /// The shared panel view over the items of menu `menu_idx`.
+    fn popup(&self, menu_idx: usize) -> MenuPopup<'_> {
+        MenuPopup::new(&self.menus[menu_idx].items, self.scheme)
     }
 
     fn hit_label(&self, pos: Point) -> Option<usize> {
@@ -329,19 +276,10 @@ impl MenuBar {
 
     fn hit_item(&self, pos: Point) -> Option<usize> {
         let popup = self.cache.popup?;
-        if !popup.contains(pos) {
-            return None;
-        }
         let menu_idx = self.open?;
-        let mut y = popup.y + POPUP_PADDING_Y;
-        for (i, item) in self.menus[menu_idx].items.iter().enumerate() {
-            let h = item.height();
-            if pos.y >= y && pos.y < y + h {
-                return if item.is_selectable() { Some(i) } else { None };
-            }
-            y += h;
-        }
-        None
+        // A bar drop-down is always measured at its natural height, so it never
+        // scrolls: the whole menu is on screen from offset zero.
+        self.popup(menu_idx).hit(popup, 0, pos)
     }
 
     fn fire(&mut self, item_idx: usize, ctx: &mut EventCtx) {
@@ -375,16 +313,7 @@ impl MenuBar {
     /// Find an action item in the currently-open menu whose mnemonic matches.
     fn item_mnemonic(&self, ch: char) -> Option<usize> {
         let menu_idx = self.open?;
-        let target = ch.to_ascii_lowercase();
-        for (i, item) in self.menus[menu_idx].items.iter().enumerate() {
-            if let MenuItem::Action { label, .. } = item
-                && item.is_enabled()
-                && parse_label(label).mnemonic_char == Some(target)
-            {
-                return Some(i);
-            }
-        }
-        None
+        self.popup(menu_idx).mnemonic(ch)
     }
 }
 
@@ -458,77 +387,8 @@ impl Widget for MenuBar {
             return;
         }
 
-        // L-shape drop shadow drawn first so the popup overlays it on the
-        // top/left edges.
-        painter.fill_rect(
-            Rect::new(popup.x + SHADOW_SIZE, popup.bottom(), popup.w, SHADOW_SIZE),
-            SHADOW_COLOR,
-        );
-        painter.fill_rect(
-            Rect::new(popup.right(), popup.y + SHADOW_SIZE, SHADOW_SIZE, popup.h),
-            SHADOW_COLOR,
-        );
-
-        // White interior + thin black border. No raised bevel — Win 3.1
-        // drop-downs are flat panels, the bar holds the chrome.
-        painter.fill_rect(popup, theme.background);
-        painter.stroke_rect(popup, theme.border);
-
-        let mut y = popup.y + POPUP_PADDING_Y;
-        for (i, item) in self.menus[menu_idx].items.iter().enumerate() {
-            match item {
-                MenuItem::Action { label, accel, .. } => {
-                    let row = Rect::new(popup.x + 1, y, popup.w - 2, ITEM_HEIGHT);
-                    let parsed = parse_label(label);
-                    // A disabled item is greyed and never shows the hover band
-                    // (it can't be hovered — `hit_item` skips it).
-                    let (bg, fg) = if !item.is_enabled() {
-                        (theme.background, theme.disabled_text)
-                    } else if self.hovered_item == Some(i) {
-                        (theme.highlight_bg, theme.highlight_text)
-                    } else {
-                        (theme.background, theme.text)
-                    };
-                    painter.fill_rect(row, bg);
-                    // A checked item gets a tick centered in the left gutter,
-                    // tinted to match the (possibly greyed / highlighted) label
-                    // color. It rides inside the existing label inset, so the
-                    // text never shifts whether or not the item is checked. A
-                    // 1px nudge down/right sits it more squarely against the
-                    // label's optical baseline.
-                    if item.is_checked() {
-                        let gutter = POPUP_PADDING_X - 4;
-                        let cx = row.x + (gutter - CHECK_SIZE) / 2 + CHECK_NUDGE_X;
-                        let cy = row.y + (ITEM_HEIGHT - CHECK_SIZE) / 2 + CHECK_NUDGE_Y;
-                        let check = Rect::new(cx, cy, CHECK_SIZE, CHECK_SIZE);
-                        CHECK.draw_tinted(painter, check, fg);
-                    }
-                    draw_label_with_mnemonic(
-                        painter,
-                        row.x + POPUP_PADDING_X - 4,
-                        row.y + ITEM_TEXT_INSET_Y,
-                        0,
-                        &parsed,
-                        theme.font_size,
-                        fg,
-                    );
-                    // Accelerator hint, right-aligned with the same inset the
-                    // label carries on the left.
-                    if let Some(accel) = accel {
-                        let hint = accel.label(self.scheme);
-                        let aw = painter.measure_text(&hint, theme.font_size).w;
-                        let ax = row.right() - (POPUP_PADDING_X - 4) - aw;
-                        painter.text(ax, row.y + ITEM_TEXT_INSET_Y, &hint, theme.font_size, fg);
-                    }
-                    y += ITEM_HEIGHT;
-                }
-                MenuItem::Separator => {
-                    let mid = y + SEPARATOR_HEIGHT / 2;
-                    painter.etched_h_line(popup.x + 4, mid, popup.w - 8, theme);
-                    y += SEPARATOR_HEIGHT;
-                }
-            }
-        }
+        self.popup(menu_idx)
+            .paint(painter, theme, popup, 0, self.hovered_item);
     }
 
     fn event(&mut self, event: &Event, ctx: &mut EventCtx) {
@@ -721,12 +581,7 @@ impl Widget for MenuBar {
         // Include the L-shape drop shadow inside the popup window's bounds
         // so it doesn't clip at the right/bottom edges.
         Some(PopupRequest {
-            rect: Rect::new(
-                popup.x,
-                popup.y,
-                popup.w + SHADOW_SIZE,
-                popup.h + SHADOW_SIZE,
-            ),
+            rect: menu_popup::with_shadow(popup),
             kind: PopupKind::Popup,
             title: None,
         })
@@ -770,56 +625,26 @@ impl MenuBar {
         false
     }
 
-    /// Index of the first action item in the currently open menu (skipping
-    /// separators); `None` if no menu is open or it has no actions.
+    /// Index of the first selectable item in the currently open menu (skipping
+    /// separators and disabled rows); `None` if no menu is open or it has none.
     fn first_action(&self) -> Option<usize> {
         let menu_idx = self.open?;
-        self.menus[menu_idx]
-            .items
-            .iter()
-            .position(|item| item.is_selectable())
+        self.popup(menu_idx).first_action()
     }
 
     fn last_action(&self) -> Option<usize> {
         let menu_idx = self.open?;
-        self.menus[menu_idx]
-            .items
-            .iter()
-            .enumerate()
-            .rev()
-            .find_map(|(i, item)| item.is_selectable().then_some(i))
+        self.popup(menu_idx).last_action()
     }
 
     /// Step hovered_item by ±1, skipping separators, wrapping at the ends.
     /// `delta` should be +1 (Down) or -1 (Up).
     fn move_selection(&mut self, delta: i32, ctx: &mut EventCtx) {
         let Some(menu_idx) = self.open else { return };
-        let n = self.menus[menu_idx].items.len();
-        if n == 0 {
+        let Some(next) = self.popup(menu_idx).step(self.hovered_item, delta) else {
             return;
-        }
-        let actions: Vec<usize> = self.menus[menu_idx]
-            .items
-            .iter()
-            .enumerate()
-            .filter(|(_, item)| item.is_selectable())
-            .map(|(i, _)| i)
-            .collect();
-        if actions.is_empty() {
-            return;
-        }
-        let current = self
-            .hovered_item
-            .and_then(|h| actions.iter().position(|&a| a == h));
-        let next = match (current, delta) {
-            (None, 1) => 0,
-            (None, _) => actions.len() - 1,
-            (Some(i), d) => {
-                let len = actions.len() as i32;
-                ((i as i32 + d).rem_euclid(len)) as usize
-            }
         };
-        self.hovered_item = Some(actions[next]);
+        self.hovered_item = Some(next);
         ctx.request_paint();
     }
 

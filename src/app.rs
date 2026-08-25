@@ -8,7 +8,7 @@ use winit::dpi::{LogicalSize, PhysicalPosition, PhysicalSize};
 use winit::event::{ElementState, MouseButton as WinitMouseButton, MouseScrollDelta, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{Key as WKey, ModifiersKeyState, NamedKey as WNamedKey};
-use winit::window::{CursorIcon, Window, WindowAttributes, WindowButtons, WindowId};
+use winit::window::{CursorIcon, Window, WindowAttributes, WindowButtons, WindowId, WindowLevel};
 
 // X11 platform extensions. winit 0.30's generic `with_parent_window` is
 // not enough on X11 (it reparents into the main window, which then clips
@@ -19,6 +19,9 @@ use winit::window::{CursorIcon, Window, WindowAttributes, WindowButtons, WindowI
 // until winit adds real popup support.
 #[cfg(all(unix, not(target_os = "macos")))]
 use winit::platform::x11::{WindowAttributesExtX11, WindowType as XWindowType};
+// macOS: `with_has_shadow` lives on the same kind of platform extension trait.
+#[cfg(target_os = "macos")]
+use winit::platform::macos::WindowAttributesExtMacOS;
 
 use crate::background::BackgroundState;
 use crate::event::{
@@ -1036,7 +1039,20 @@ impl AppHandler {
 
         match request.kind {
             PopupKind::Popup => {
-                attrs = attrs.with_title("saudade popup").with_decorations(false);
+                attrs = attrs
+                    .with_title("saudade popup")
+                    .with_decorations(false)
+                    .with_transparent(true)
+                    .with_window_level(WindowLevel::AlwaysOnTop);
+
+                // macOS: no system drop shadow. A menu panel draws its own
+                // sharp L-shape shadow, and the compositor's soft halo around
+                // the window reads as a second, blurry frame outside the
+                // popup's black border.
+                #[cfg(target_os = "macos")]
+                {
+                    attrs = attrs.with_has_shadow(false)
+                }
 
                 // X11: take the WM completely out of the loop.
                 // override-redirect makes this an unmanaged window — it
@@ -1104,6 +1120,13 @@ impl AppHandler {
         }
 
         let win = event_loop.create_window(attrs).ok()?;
+        // Before the first `set_visible` below, while the window is still
+        // off-screen: the behavior applies to the animation that showing it
+        // would otherwise play.
+        #[cfg(target_os = "macos")]
+        if request.kind == PopupKind::Popup {
+            suppress_show_animation(&win);
+        }
         let win = Rc::new(win);
         let id = win.id();
         let mut surface = softbuffer::Surface::new(context, win.clone()).ok()?;
@@ -1142,6 +1165,31 @@ struct PopupWindow {
     /// field on [`AppHandler`].
     cursor_icon: Cursor,
     needs_redraw: bool,
+}
+
+/// Take a macOS popup window out of the system's window choreography: a menu
+/// must be on screen the instant it is asked for, not faded in over a few
+/// frames. winit has no API for `NSWindow.animationBehavior`, so it is set on
+/// the window itself — before it is first shown, since that is the appearance
+/// being suppressed. A window whose view we can't reach is left alone.
+#[cfg(target_os = "macos")]
+fn suppress_show_animation(win: &Window) {
+    use objc2_app_kit::{NSView, NSWindowAnimationBehavior};
+    use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
+
+    let Ok(handle) = win.window_handle() else {
+        return;
+    };
+    let RawWindowHandle::AppKit(handle) = handle.as_raw() else {
+        return;
+    };
+    // SAFETY: winit owns this `NSView` for as long as the window lives, which
+    // is past the end of this borrow — `win` is still holding it.
+    let view: &NSView = unsafe { handle.ns_view.cast().as_ref() };
+    let Some(window) = view.window() else {
+        return;
+    };
+    window.setAnimationBehavior(NSWindowAnimationBehavior::None);
 }
 
 fn popup_position_to_widget(pos: PhysicalPosition<f64>, popup: &PopupWindow) -> Point {

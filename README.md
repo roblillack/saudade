@@ -43,7 +43,7 @@ Reference apps live under `examples/`. Run any of them with
 | `flight_booker` | 7GUIs task 3 — a `Dropdown` picks the flight type and reactively enables / disables the return-date field and the Book `Button`.                                                                                                                                                                                                                                                                 |
 | `timer`         | 7GUIs task 4 — a `ProgressBar` gauge, a duration `Slider`, and a reset `Button`.                                                                                                                                                                                                                                                                                                                 |
 | `crud`          | 7GUIs task 5 — a `List` as a live, prefix-filtered database view with Create / Update / Delete `Button`s that enable themselves reactively.                                                                                                                                                                                                                                                      |
-| `circle_drawer` | 7GUIs task 6 — a custom canvas (no circle primitive: midpoint outlines, span-filled disks) with hover selection, a right-click menu, a real modal dialog (`Modal`) hosting the diameter `Slider`, and snapshot undo/redo.                                                                                                                                                                        |
+| `circle_drawer` | 7GUIs task 6 — a custom canvas (no circle primitive: midpoint outlines, span-filled disks) with hover selection, a `ContextMenu` right-click menu, a real modal dialog (`Modal`) hosting the diameter `Slider`, and snapshot undo/redo.                                                                                                                                                                        |
 | `cells`         | 7GUIs task 7 — a scrollable A–Z / 0–99 spreadsheet `Grid` (built on `ScrollBar` + `TextInput`) with a formula engine: cell refs, `+ - * /`, ranges, `SUM`/`AVG`/…, reactive recompute and cycle detection.                                                                                                                                                                                       |
 | `patterns`      | Previews the window background patterns (`none`, `solid`, `dots`, `lines`, `diagonal`, `cross-stitch`): press `p` to cycle the pattern and `c` to cycle the color. Every app draws one behind its widgets — default `superlight` `diagonal`, overridable with `SAUDADE_WINDOW_PATTERN` / `SAUDADE_WINDOW_PATTERN_COLOR` (e.g. `SAUDADE_WINDOW_PATTERN=dots SAUDADE_WINDOW_PATTERN_COLOR=light`). |
 | `scaling`       | Previews widgets at an arbitrary logical→physical scale via `Painter::draw_scaled`: a `Slider` and preset `Button`s (1.0x / 1.25x / … / 3.0x) drive a "preview scale" — starting at the display's OS scale — that a small panel of real widgets (`TextInput`, `Dropdown`, `Checkbox`, `Button`s, `ProgressBar`) redraws at, plus a "zoom in 2x" `Checkbox` that magnifies the result. The window resizes itself (via `EventCtx::request_window_size`) to fit the preview at the chosen scale. The window's own (OS-owned) scale is never touched.                                  |
@@ -126,7 +126,7 @@ to an object-oriented UI framework.
 | svg      | `SvgImage`, `SvgPolygon`, `FillRule` + the `include_svg!` macro — compile-time vector icons                                                                                                              |
 | font     | `Font` — system font lookup + glyph rasterization                                                                                                                                                        |
 | widget   | `Widget` trait (paint / event / focus / overlay hooks)                                                                                                                                                   |
-| widgets  | `Container`, `Column`, `Row`, `Label`, `FocusLabel`, `Button`, `Checkbox`, `Bevel`, `Image`, `MenuBar`, `Menu`, `MenuItem`, `ScrollBar`, `Slider`, `ProgressBar`, `List`, `Modal`, `Dialog`, `FileDialog`, `TextInput`, `TextEditor` |
+| widgets  | `Container`, `Column`, `Row`, `Label`, `FocusLabel`, `Button`, `Checkbox`, `Bevel`, `Image`, `MenuBar`, `Menu`, `MenuItem`, `ContextMenu`, `ScrollBar`, `Slider`, `ProgressBar`, `List`, `Modal`, `Dialog`, `FileDialog`, `TextInput`, `TextEditor` |
 | app      | `App`, `WindowConfig` — runtime entry point                                                                                                                                                              |
 | mock     | `MockBackend`, `Snapshot` — offscreen rendering to a pixel buffer / PNG                                                                                                                                   |
 | chrome   | `WindowChrome`, `WindowFrame` — Canoe-style title bar + frame for screenshots                                                                                                                             |
@@ -648,6 +648,76 @@ an item.
 
 `MenuBar::open(idx)` programmatically opens a menu — handy for custom
 application-level keybindings.
+
+### `ContextMenu`
+
+The same panel a `MenuBar` drops open, anchored at a point instead of
+hanging off a bar label — the classic right-click menu. It is built from
+the same `MenuItem`s, so mnemonics, accelerator hints, checkmarks,
+separators and `with_enabled` predicates all work exactly as they do in
+a menu, and it lives in its own borderless window the same way, so it is
+never clipped by the widget it belongs to.
+
+```rust
+let mut menu = ContextMenu::new().with_items(vec![
+    MenuItem::action("&Edit", |_| { /* … */ }),
+    MenuItem::action("&Duplicate", |_| { /* … */ }),
+    MenuItem::separator(),
+    MenuItem::action("De&lete", |cx| { /* … */ cx.request_paint(); }),
+]);
+
+// …from the owning widget's `event`, on a right-press:
+menu.open_at(pos);
+```
+
+**Owning one.** A `ContextMenu` takes no space and is not placed by
+layout. Hold it in the widget whose rows it acts on, forward `paint`,
+`paint_overlay`, `event` and `collect_popups` to it, and report
+`captures_pointer()` while it is open so the pointer keeps reaching it
+once it leaves those rows. Added to a `Container` instead, the
+container's own routing does all of that for you.
+
+**Items per opening.** A context menu usually acts on whatever was
+right-clicked, so build its rows fresh each time: `set_items()` then
+`open_at()`. Labels are mnemonic-parsed, so an `&` in a name the app did
+not write — a file, a project — has to be doubled
+(`label.replace('&', "&&")`) or it disappears and underlines the letter
+after it.
+
+**Picking an item** runs its callback, which gets only an `EventCtx` —
+nothing that can reach back into the owning widget. Where the action
+needs more than the shared application state a closure can capture, have
+the callback record what was picked (an `Rc<Cell<…>>`) and act on it
+after the event returns.
+
+**Mouse behavior.** Moving the cursor highlights rows; a left-click
+fires one and closes the menu. A press outside dismisses it — and a
+*right*-press outside is deliberately left unconsumed, so it can open a
+fresh menu on whatever it landed on in a single gesture.
+
+**Keyboard navigation** (active while the menu is open):
+
+| Key        | Effect                                                       |
+| ---------- | ------------------------------------------------------------ |
+| ↑ / ↓      | move highlight (skipping separators and disabled rows; wraps) |
+| Home / End | jump to first / last item                                    |
+| Enter      | fire the highlighted item                                    |
+| letter     | fire the item whose mnemonic matches                         |
+| Esc        | dismiss the menu                                             |
+
+As with a menu bar, no keystroke reaches the widget below while the menu
+is up.
+
+**Placement.** The panel opens down and to the right of the anchor, at
+its full size. The window it lives in is not the app's, so it may hang
+off the main window's edges — which is what a menu right-clicked near a
+border should do. `open_within(pos, region)` keeps it inside a rect the
+caller names instead — a pane it should not leave, or a screen rect the
+app knows and the widget doesn't: there it flips to the other side of
+the anchor rather than crossing an edge, and a menu taller than the
+region is capped to it and scrolls. The wheel and the arrow keys move
+that window of rows, a click on either end's arrow pages through it, and
+the arrows themselves mark what is off-panel.
 
 ### `ScrollBar`
 
