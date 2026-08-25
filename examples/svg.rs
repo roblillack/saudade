@@ -114,8 +114,8 @@ fn rasterize_tree(tree: &usvg::Tree, w: u32, h: u32) -> Vec<u32> {
     resvg::render(tree, transform, &mut pixmap.as_mut());
 
     let mut out = vec![Color::WHITE.0; (w * h) as usize];
-    for (px, chunk) in out.iter_mut().zip(pixmap.data().chunks_exact(4)) {
-        let (r, g, b, a) = (chunk[0], chunk[1], chunk[2], chunk[3]);
+    let (pixels, _) = pixmap.data().as_chunks::<4>();
+    for (px, &[r, g, b, a]) in out.iter_mut().zip(pixels) {
         if a == 0 {
             continue;
         }
