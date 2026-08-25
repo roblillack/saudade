@@ -11,9 +11,9 @@
 //! This demo wires a [`Slider`] and a row of preset [`Button`]s to a shared
 //! "preview scale" factor, then hands it to a `ScalePreview` widget that draws
 //! a small panel of real widgets — a text input, a dropdown, a checkbox,
-//! buttons, a progress bar — at that scale, in a canvas below the controls. The
-//! slider starts at this display's actual OS scale, so the panel opens looking
-//! exactly like the rest of the window.
+//! buttons, a progress bar, a scrollbar — at that scale, in a canvas below the
+//! controls. The slider starts at this display's actual OS scale, so the panel
+//! opens looking exactly like the rest of the window.
 //!
 //! The window resizes to the *space the preview needs*: whenever the scale
 //! factor (or the 2× zoom) changes, the example recomputes how big the panel
@@ -41,7 +41,8 @@ use std::rc::Rc;
 
 use saudade::{
     App, Button, Checkbox, Color, Container, Dropdown, Event, EventCtx, Label, Painter,
-    PopupRequest, ProgressBar, Rect, Slider, TextInput, Theme, Widget, WindowConfig,
+    PopupRequest, ProgressBar, Rect, SCROLLBAR_THICKNESS, ScrollBar, Slider, TextInput, Theme,
+    Widget, WindowConfig,
 };
 
 /// Layout metrics. The controls occupy a fixed-height band at the top (down to
@@ -362,20 +363,29 @@ impl ScalePreview {
 }
 
 /// The widgets shown inside the preview panel, laid out in preview-logical
-/// coordinates within the [`SAMPLE_W`]×[`SAMPLE_H`] footprint.
+/// coordinates within the [`SAMPLE_W`]×[`SAMPLE_H`] footprint. A scrollbar runs
+/// down the right-hand column: its arrow glyphs and one-pixel bevels are the
+/// finest chrome in the panel, so it is where a fractional scale shows first.
 fn build_sample() -> Vec<Box<dyn Widget>> {
+    // Parked mid-track with a thumb about a third of the track long, so both
+    // the thumb and the track around it are visible at any scale.
+    let mut scrollbar = ScrollBar::vertical(Rect::new(128, 24, SCROLLBAR_THICKNESS, 114));
+    scrollbar.set_range(3, 6);
+    scrollbar.set_value(2);
+
     vec![
-        Box::new(Label::new(Rect::new(10, 6, 130, 14), "Preview").with_size(11.0)),
-        Box::new(TextInput::new(Rect::new(10, 24, 130, 18)).with_text("Type here")),
+        Box::new(Label::new(Rect::new(10, 6, 114, 14), "Preview").with_size(11.0)),
+        Box::new(TextInput::new(Rect::new(10, 24, 114, 18)).with_text("Type here")),
         Box::new(
-            Dropdown::new(Rect::new(10, 48, 130, 20))
+            Dropdown::new(Rect::new(10, 48, 114, 20))
                 .with_items(["Apple", "Banana", "Cherry"])
                 .with_selected(0),
         ),
-        Box::new(Checkbox::new(Rect::new(10, 76, 120, 14), "Crisp").checked(true)),
+        Box::new(Checkbox::new(Rect::new(10, 76, 114, 14), "Crisp").checked(true)),
         Box::new(Button::new(Rect::new(10, 98, 50, 22), "OK").default(true)),
         Box::new(Button::new(Rect::new(66, 98, 56, 22), "Cancel")),
-        Box::new(ProgressBar::new(Rect::new(10, 128, 130, 10)).with_fraction(0.66)),
+        Box::new(ProgressBar::new(Rect::new(10, 128, 114, 10)).with_fraction(0.66)),
+        Box::new(scrollbar),
     ]
 }
 
