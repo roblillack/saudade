@@ -18,12 +18,22 @@ While pre-1.0, the minor version is bumped for breaking changes.
   checkmarks, separators and `with_enabled` predicates all behave identically,
   and it gets its own borderless window so it is never clipped by the widget it
   belongs to — a menu right-clicked near a window border hangs off the edge
-  rather than being folded back inside it. Items are usually built per opening
-  (`set_items` then `open_at`). `open_within` keeps the panel inside a rect the
-  caller names instead, flipping rather than crossing an edge and capping and
-  scrolling a menu taller than that rect — with the wheel, the arrow keys, or a
-  click on either end's arrow. Apps that had hand-rolled a context menu can drop
+  rather than being folded back inside it. What bounds it is the *screen*: the
+  panel flips rather than crossing an edge of the display, and a menu taller
+  than the display is capped to it and scrolls — with the wheel, the arrow keys,
+  or a click on either end's arrow. Items are usually built per opening
+  (`set_items` then `open_at`); `open_within` bounds the panel by a rect of the
+  caller's choosing instead. Apps that had hand-rolled a context menu can drop
   it; the `circle_drawer` example did.
+- `Painter::screen_area` tells a widget where the display is, in the root
+  widget's own coordinates — what a widget placing its own top-level window
+  needs, since a popup is not bounded by the app's window and the display is the
+  only thing that is. It excludes the space the desktop reserves for itself
+  (on macOS the menu bar and the Dock, via `NSScreen.visibleFrame`; X11 and
+  Windows report no reservation, which winit does not surface). The runtime works
+  it out once per window move / resize / DPI change rather than per frame.
+  `MockBackend::with_screen_area` fakes one so the placement is testable
+  offscreen; an ordinary offscreen render reports `None`, meaning unbounded.
 
 - On macOS the *system* fonts now come from Core Text rather than from a font
   file picked out of a database. `Font::load_sans` and `load_monospace` ask for

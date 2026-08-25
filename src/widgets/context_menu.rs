@@ -80,14 +80,15 @@ const MIN_HEIGHT: i32 = POPUP_PADDING_Y * 2 + ITEM_HEIGHT;
 /// While the menu is up it owns the keyboard: no keystroke reaches the widget
 /// underneath, the way an open drop-down's doesn't.
 ///
-/// **Placement.** The panel opens down and to the right of the anchor, at its
-/// full size — the window it lives in is not the app's, so it may hang off the
-/// main window's edges, which is what a menu right-clicked near a border should
-/// do. [`open_within`](Self::open_within) instead keeps it inside a rect the
-/// caller names: there it flips to the other side of the anchor rather than
-/// crossing an edge, and a menu taller than that rect is capped to it and
-/// scrolls — with the wheel, the arrow keys, or a click on either end's arrow,
-/// which also mark what is off-panel.
+/// **Placement.** The panel opens down and to the right of the anchor. The
+/// window it lives in is not the app's, so it may hang off the main window's
+/// edges — which is what a menu right-clicked near a border should do — but it
+/// stays on the *screen*: it flips to the other side of the anchor rather than
+/// crossing an edge of the display, and a menu taller than the display is
+/// capped to it and scrolls, with the wheel, the arrow keys, or a click on
+/// either end's arrow, which also mark what is off-panel.
+/// [`open_within`](Self::open_within) bounds it by a rect of the caller's
+/// choosing instead.
 ///
 /// [`captures_pointer`]: Widget::captures_pointer
 pub struct ContextMenu {
@@ -97,8 +98,8 @@ pub struct ContextMenu {
     /// Where the menu was asked to appear, in the root widget's coordinates.
     anchor: Point,
     /// The area the panel is kept inside, from [`Self::open_within`]. Empty for
-    /// the [`Self::open_at`] default: the panel lands on the anchor at its full
-    /// size, hanging off the main window if that is where it falls.
+    /// the [`Self::open_at`] default, which falls back to the screen —
+    /// [`Painter::screen_area`].
     region: Rect,
     /// The placed panel, measured on the first paint after opening — the labels
     /// cannot be measured without a painter. `None` until then, which is also
@@ -164,20 +165,22 @@ impl ContextMenu {
     /// Open the menu with its top-left corner at `anchor`, in the root widget's
     /// coordinate space — the space pointer events arrive in.
     ///
-    /// The panel is placed at its full size wherever it was asked for: it has a
-    /// top-level window of its own, so it is free to hang off the main window's
-    /// edges the way a right-click menu near a window border should. Use
-    /// [`open_within`](Self::open_within) to keep it inside something instead.
+    /// The panel has a top-level window of its own, so it is free to hang off
+    /// the main window's edges the way a right-click menu near a window border
+    /// should. What does bound it is the *screen*
+    /// ([`Painter::screen_area`](crate::Painter::screen_area)): the panel flips
+    /// to the other side of the anchor rather than crossing an edge of the
+    /// display, and a menu taller than the display is capped to it and scrolls.
+    /// Use [`open_within`](Self::open_within) to bound it by something smaller.
     pub fn open_at(&mut self, anchor: Point) {
         self.open_within(anchor, Rect::new(0, 0, 0, 0));
     }
 
     /// Open at `anchor`, but keep the panel inside `region` — a pane it should
-    /// not leave, or a screen rect the app knows and the widget doesn't. The
-    /// panel flips to the other side of the anchor rather than crossing an edge
-    /// of the region, and a menu taller than the region is capped to it and
-    /// scrolls. An empty `region` constrains nothing, i.e. behaves like
-    /// [`open_at`](Self::open_at).
+    /// not leave, say. The panel flips to the other side of the anchor rather
+    /// than crossing an edge of the region, and a menu taller than the region
+    /// is capped to it and scrolls. An empty `region` means the screen, i.e.
+    /// behaves like [`open_at`](Self::open_at).
     pub fn open_within(&mut self, anchor: Point, region: Rect) {
         self.open = true;
         self.anchor = anchor;
@@ -200,31 +203,38 @@ impl ContextMenu {
     }
 
     /// Measure the labels and settle where the panel sits. Runs on every paint
-    /// of the main pass, and always against the region the menu was opened with
-    /// — a window resized under an open menu doesn't move it.
+    /// of the main pass, so a menu open while the window is dragged across a
+    /// screen edge is re-placed against the display it is now on.
     fn place(&mut self, painter: &Painter, theme: &Theme) {
+        // The region named at `open_within` wins; otherwise the panel is bounded
+        // by the screen, which is the only thing that bounds a popup window. An
+        // offscreen render knows of no screen and leaves it unbounded.
+        let region = match self.region {
+            region if region.w > 0 && region.h > 0 => region,
+            _ => painter.screen_area().unwrap_or(Rect::new(0, 0, 0, 0)),
+        };
         let natural = self.popup().measure(painter, theme);
         let mut rect = Rect::new(self.anchor.x, self.anchor.y, natural.w, natural.h);
-        if self.region.w > 0 && self.region.h > 0 {
-            rect.w = rect.w.min(self.region.w);
-            rect.h = rect.h.min(self.region.h.max(MIN_HEIGHT));
+        if region.w > 0 && region.h > 0 {
+            rect.w = rect.w.min(region.w);
+            rect.h = rect.h.min(region.h.max(MIN_HEIGHT));
             // Classic placement: down and to the right, flipping to the other
             // side of the anchor when there is no room — and only when the flip
             // actually fits, since a panel wider or taller than the space on
             // either side is better off pinned to the far edge than hanging off
             // the near one.
-            if rect.right() > self.region.right() {
-                rect.x = if self.anchor.x - rect.w >= self.region.x {
+            if rect.right() > region.right() {
+                rect.x = if self.anchor.x - rect.w >= region.x {
                     self.anchor.x - rect.w
                 } else {
-                    (self.region.right() - rect.w).max(self.region.x)
+                    (region.right() - rect.w).max(region.x)
                 };
             }
-            if rect.bottom() > self.region.bottom() {
-                rect.y = if self.anchor.y - rect.h >= self.region.y {
+            if rect.bottom() > region.bottom() {
+                rect.y = if self.anchor.y - rect.h >= region.y {
                     self.anchor.y - rect.h
                 } else {
-                    (self.region.bottom() - rect.h).max(self.region.y)
+                    (region.bottom() - rect.h).max(region.y)
                 };
             }
         }
@@ -493,9 +503,18 @@ mod tests {
     }
 
     /// Paint the menu through the mock backend so its labels get measured and
-    /// the panel is placed — everything positional needs this first.
+    /// the panel is placed — everything positional needs this first. The
+    /// backend reports no screen, so an `open_at` menu comes out unbounded.
     fn place(menu: &mut ContextMenu) {
         MockBackend::new(REGION.w, REGION.h).render(menu);
+    }
+
+    /// Place the menu against a display whose usable area is `screen`, the way
+    /// the live runtime reports one.
+    fn place_on_screen(menu: &mut ContextMenu, screen: Rect) {
+        MockBackend::new(REGION.w, REGION.h)
+            .with_screen_area(screen)
+            .render(menu);
     }
 
     fn keydown(key: Key) -> Event {
@@ -782,6 +801,58 @@ mod tests {
         dispatch(&mut menu, &keydown(Key::Named(NamedKey::Home)));
         assert_eq!(menu.hovered, Some(0));
         assert_eq!(menu.scroll, 0);
+    }
+
+    #[test]
+    fn a_menu_opened_at_a_point_is_bounded_by_the_screen() {
+        // The screen extends well past the window in both directions, as it
+        // does in the live runtime: the panel is free to leave the window …
+        let screen = Rect::new(-40, -30, 900, 700);
+        let mut menu = menu(Rc::new(Cell::new(false)));
+        let anchor = Point::new(REGION.right() - 2, REGION.bottom() - 2);
+        menu.open_at(anchor);
+        place_on_screen(&mut menu, screen);
+        let rect = menu.rect.unwrap();
+        assert_eq!((rect.x, rect.y), (anchor.x, anchor.y));
+        assert!(rect.bottom() > REGION.bottom(), "past the window's edge");
+
+        // … but not the screen's: at the far corner of the display it flips.
+        let anchor = Point::new(screen.right() - 2, screen.bottom() - 2);
+        menu.open_at(anchor);
+        place_on_screen(&mut menu, screen);
+        let rect = menu.rect.unwrap();
+        assert_eq!(rect.right(), anchor.x, "flipped to the left of the anchor");
+        assert_eq!(rect.bottom(), anchor.y, "and above it");
+    }
+
+    #[test]
+    fn a_menu_taller_than_the_screen_scrolls() {
+        // 40 rows is taller than this display, so the panel caps itself to the
+        // usable area and scrolls rather than running off the bottom.
+        let screen = Rect::new(0, 0, 400, short_region(6).h);
+        let mut menu = long_menu(40);
+        menu.open_at(Point::new(10, 0));
+        place_on_screen(&mut menu, screen);
+        let rect = menu.rect.unwrap();
+        assert_eq!(rect.h, screen.h);
+        assert!(
+            menu.popup().max_scroll(rect.h) > 0,
+            "there is somewhere to scroll"
+        );
+        assert!(
+            menu.popup().rows(rect.h, 0).down,
+            "and the panel says so with its down arrow"
+        );
+    }
+
+    #[test]
+    fn the_screen_only_bounds_a_menu_that_named_no_region_of_its_own() {
+        // `open_within` is the caller's own bound, and it wins over the screen.
+        let screen = Rect::new(0, 0, 900, 700);
+        let mut menu = long_menu(40);
+        menu.open_within(Point::new(0, 0), short_region(3));
+        place_on_screen(&mut menu, screen);
+        assert_eq!(menu.rect.unwrap().h, short_region(3).h);
     }
 
     #[test]

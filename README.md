@@ -708,16 +708,16 @@ fresh menu on whatever it landed on in a single gesture.
 As with a menu bar, no keystroke reaches the widget below while the menu
 is up.
 
-**Placement.** The panel opens down and to the right of the anchor, at
-its full size. The window it lives in is not the app's, so it may hang
-off the main window's edges — which is what a menu right-clicked near a
-border should do. `open_within(pos, region)` keeps it inside a rect the
-caller names instead — a pane it should not leave, or a screen rect the
-app knows and the widget doesn't: there it flips to the other side of
-the anchor rather than crossing an edge, and a menu taller than the
-region is capped to it and scrolls. The wheel and the arrow keys move
-that window of rows, a click on either end's arrow pages through it, and
-the arrows themselves mark what is off-panel.
+**Placement.** The panel opens down and to the right of the anchor. The
+window it lives in is not the app's, so it may hang off the main
+window's edges — which is what a menu right-clicked near a border should
+do. What *does* bound it is the screen (`Painter::screen_area`): the
+panel flips to the other side of the anchor rather than crossing an edge
+of the display, and a menu taller than the display is capped to it and
+scrolls. The wheel and the arrow keys move that window of rows, a click
+on either end's arrow pages through it, and the arrows themselves mark
+what is off-panel. `open_within(pos, region)` bounds it by a rect of the
+caller's choosing instead — a pane it should not leave.
 
 ### `ScrollBar`
 
