@@ -81,10 +81,12 @@ pub struct ScrollBar {
     /// `Some` while an arrow button is held down — the source of the depressed
     /// look and the click auto-repeat. `None` when no button is held.
     held: Option<HeldButton>,
-    /// Sub-line scroll-wheel remainder. Wheel / trackpad deltas arrive in
-    /// fractional lines; we accumulate them here and only move `value` once a
-    /// whole line has built up, so a high-resolution trackpad scrolls smoothly
-    /// instead of snapping a line at a time.
+    /// Sub-step scroll-wheel remainder, in *document units*. Wheel / trackpad
+    /// deltas arrive in fractional lines; each is scaled by `line_step` into
+    /// this bar's own units and accumulated here, and `value` only moves once a
+    /// whole unit has built up. That is what lets a high-resolution trackpad
+    /// scroll smoothly instead of snapping a whole step at a time — including
+    /// on a bar whose unit is a pixel, where one line is `line_step` of them.
     wheel_accum: f32,
 }
 
@@ -145,6 +147,11 @@ impl ScrollBar {
         }
     }
 
+    /// How far one line travels, in this bar's document units: what an arrow
+    /// button click scrolls, and what a wheel detent scrolls three of. Defaults
+    /// to 1, which is right for a bar whose `value` counts rows; a bar that
+    /// counts pixels of content sets it to a row's height, so the wheel covers
+    /// the same ground either way.
     pub fn set_line_step(&mut self, step: i32) {
         self.line_step = step.max(1);
     }
@@ -241,12 +248,15 @@ impl ScrollBar {
         self.set_value(self.value.saturating_add(delta));
     }
 
-    /// Apply a wheel / trackpad scroll measured in (possibly fractional)
-    /// lines along this bar's axis. Sub-line movement is banked in
-    /// `wheel_accum` until it adds up to a whole line. Returns `true` if
-    /// `value` actually moved, so callers can decide whether to repaint.
+    /// Apply a wheel / trackpad scroll measured in (possibly fractional) lines
+    /// along this bar's axis. A line is [`set_line_step`](Self::set_line_step)
+    /// document units, the same distance an arrow button covers, so a gesture
+    /// travels the same way on screen whether `value` counts rows or pixels.
+    /// Sub-unit movement is banked in `wheel_accum` until it adds up to a whole
+    /// unit. Returns `true` if `value` actually moved, so callers can decide
+    /// whether to repaint.
     fn scroll_lines(&mut self, lines: f32) -> bool {
-        self.wheel_accum += lines;
+        self.wheel_accum += lines * self.line_step as f32;
         let whole = self.wheel_accum.trunc();
         self.wheel_accum -= whole;
         let step = whole as i32;
@@ -587,7 +597,7 @@ fn draw_arrow(painter: &mut Painter, btn: Rect, orient: Orientation, dir: ArrowD
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::event::Modifiers;
+    use crate::event::{Modifiers, WHEEL_LINES_PER_DETENT};
 
     /// A 16×200 vertical bar with 100 lines of content, 10 of them visible —
     /// so `value` can travel 0..=90 a single line-step at a time.
@@ -745,6 +755,109 @@ mod tests {
         let ctx = send(&mut sb, Event::PointerLeave);
         assert!(!sb.captures_pointer(), "leaving the window ends the hold");
         assert!(!ctx.tick_requested, "and stops the tick re-requests");
+    }
+
+    /// A bar whose `value` counts *pixels* of content, the shape a pane with
+    /// unequal row heights needs: 24px rows, 560px of viewport, 1000px of
+    /// overflow.
+    fn pixel_bar() -> ScrollBar {
+        let mut sb = ScrollBar::vertical(Rect::new(0, 0, 16, 560));
+        sb.set_line_step(24);
+        sb.set_range(560, 1000);
+        sb
+    }
+
+    fn wheel(sb: &mut ScrollBar, lines: f32) -> EventCtx {
+        send(
+            sb,
+            Event::Scroll {
+                pos: center(sb.track_rect()),
+                delta_x: 0.0,
+                delta_y: lines,
+            },
+        )
+    }
+
+    #[test]
+    fn a_wheel_detent_travels_one_line_step_per_line() {
+        // A row-valued bar: a line *is* a unit, so a detent moves three.
+        let mut rows = vbar();
+        wheel(&mut rows, WHEEL_LINES_PER_DETENT);
+        assert_eq!(rows.value(), 3, "three rows on a bar that counts rows");
+
+        // A pixel-valued bar covers the same ground on screen — three rows of
+        // it — rather than three pixels.
+        let mut pixels = pixel_bar();
+        wheel(&mut pixels, WHEEL_LINES_PER_DETENT);
+        assert_eq!(
+            pixels.value(),
+            72,
+            "three 24px rows on a bar that counts pixels"
+        );
+    }
+
+    #[test]
+    fn a_trackpad_moves_a_pixel_valued_bar_below_a_whole_line() {
+        let mut sb = pixel_bar();
+        // A fine trackpad delta: a sixteenth of a line, i.e. one logical pixel
+        // of finger travel. Sub-line, but 1.5 units of *this* bar.
+        let ctx = wheel(&mut sb, 1.0 / 16.0);
+        assert_eq!(
+            sb.value(),
+            1,
+            "a sub-line delta still moves a pixel-valued bar"
+        );
+        assert!(
+            ctx.paint_requested,
+            "and asks for the repaint that shows it"
+        );
+
+        // The half-pixel remainder is banked, not dropped: the next identical
+        // delta lands a whole 2px further on.
+        wheel(&mut sb, 1.0 / 16.0);
+        assert_eq!(
+            sb.value(),
+            3,
+            "the sub-unit remainder carries into the next delta"
+        );
+    }
+
+    #[test]
+    fn a_wheel_delta_too_small_to_move_the_bar_is_banked() {
+        let mut sb = vbar();
+        let ctx = wheel(&mut sb, 0.25);
+        assert_eq!(
+            sb.value(),
+            0,
+            "a quarter of a row doesn't move a row-valued bar"
+        );
+        assert!(
+            !ctx.paint_requested,
+            "and doesn't ask for a pointless repaint"
+        );
+        wheel(&mut sb, 0.75);
+        assert_eq!(
+            sb.value(),
+            1,
+            "but the bank pays out once a whole row adds up"
+        );
+    }
+
+    #[test]
+    fn the_wheel_bank_is_dropped_at_the_end_of_the_range() {
+        let mut sb = pixel_bar();
+        // Wheel far past the bottom, then reverse: the first delta back up has
+        // to move immediately rather than unwinding what piled up at the stop.
+        for _ in 0..40 {
+            wheel(&mut sb, WHEEL_LINES_PER_DETENT);
+        }
+        assert_eq!(sb.value(), sb.max(), "the bar is parked at the bottom");
+        wheel(&mut sb, -1.0 / 16.0);
+        assert_eq!(
+            sb.value(),
+            sb.max() - 1,
+            "reversing responds on the very next delta"
+        );
     }
 
     /// A minimal host that forwards events to an inner scrollbar but
