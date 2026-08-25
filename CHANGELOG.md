@@ -34,7 +34,7 @@ While pre-1.0, the minor version is bumped for breaking changes.
   display metrics — around 10% narrower than the same app on a 1x screen. Asking
   instead for 13 points magnified 2x keeps the variant a native app would use,
   keeps advances exactly proportional to the DPI, and keeps a layout the same on
-  every display.
+  every display. (#48)
 
 ### Changed
 
@@ -48,7 +48,7 @@ While pre-1.0, the minor version is bumped for breaking changes.
   `/System/Library/Fonts/Supplemental` rather than anything Apple ships.
   A variable-weight system font (macOS's San Francisco) offers no bold face to
   load, so it is listed first but passed over until it can carry emphasis — see
-  the bold-preference rule above.
+  the bold-preference rule above. (#48)
 
 ### Fixed
 
@@ -61,7 +61,7 @@ While pre-1.0, the minor version is bumped for breaking changes.
   usable regular face, even when that family shipped no bold at all: on macOS
   that is Microsoft Sans Serif, one line above Tahoma, which does have a real
   bold. The family chain now prefers a family that can do bold, falling back to
-  a regular-only one only when no candidate offers better.
+  a regular-only one only when no candidate offers better. (#48)
 
 ## [0.5.0] - 2026-06-10
 
