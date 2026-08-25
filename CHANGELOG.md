@@ -18,7 +18,7 @@ While pre-1.0, the minor version is bumped for breaking changes.
   surface, where the widget tree would immediately cover it again. `Container`
   answers yes when it was given a background color; anything else has to opt in
   (and must mean it — the skipped pixels keep whatever the surface buffer held,
-  which on most platforms is neither the last frame nor blank).
+  which on most platforms is neither the last frame nor blank). (#49)
 
 ### Changed
 
@@ -27,7 +27,7 @@ While pre-1.0, the minor version is bumped for breaking changes.
   is computed and the rest of the surface is filled by copying whole rows —
   around 9x faster on a 2x HiDPI window (2.75 ms → 0.32 ms for 1800×1240),
   which had made the backdrop cost more per frame than the entire widget tree.
-  The output is unchanged, pixel for pixel, at every scale and origin.
+  The output is unchanged, pixel for pixel, at every scale and origin. (#49)
 
 ## [0.5.0] - 2026-06-10
 
