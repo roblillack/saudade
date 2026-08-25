@@ -79,6 +79,14 @@ While pre-1.0, the minor version is bumped for breaking changes.
   A variable-weight system font (macOS's San Francisco) offers no bold face to
   load, so it is listed first but passed over until it can carry emphasis — see
   the bold-preference rule above. (#48)
+- The arrow glyphs on the scrollbar's end buttons grew from a 5×3 triangle to
+  the classic 7×4 one, so they read as arrows rather than as specks — at 1.0x
+  the mark is now four rows deep and spans most of the 16px button. We're now
+  way closer to the Windows 95 style regarding the button's content—but that's
+  fine as the scrollbar thiumb itself is also not 100% resembling the 3.1 style.
+  Nothing around them moved: the buttons, the track and the thumb keep their
+  metrics, and the wider triangle is still centered in the button at every
+  scale. (#51)
 - `Painter::fill_pattern` no longer walks the window pixel by pixel. Every
   background pattern repeats after a handful of rows, so only the first period
   is computed and the rest of the surface is filled by copying whole rows —

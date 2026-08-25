@@ -29,10 +29,10 @@
      inkscape:window-y="0"
      inkscape:window-maximized="0"
      inkscape:current-layer="svg1" />
-  <!-- Scrollbar "down" arrow — the up triangle mirrored: 5px base at y=7,
+  <!-- Scrollbar "down" arrow — the up triangle mirrored: 7px base at y=6,
        apex at y=10, matching the classic glyph's footprint. -->
   <path
-     d="m 8,9.5 -2.5,-3 h 5 z"
+     d="m 8,10 -3.5,-4 h 7 z"
      fill="#000000"
      id="path1" />
 </svg>
