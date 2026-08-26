@@ -90,6 +90,12 @@ impl Checkbox {
         self.checked = checked;
     }
 
+    /// Move the checkbox to `rect` — for a layout that reflows, e.g. a control
+    /// anchored to the bottom of a resizable window.
+    pub fn set_rect(&mut self, rect: Rect) {
+        self.rect = rect;
+    }
+
     fn toggle(&mut self, ctx: &mut EventCtx) {
         self.checked = !self.checked;
         ctx.request_paint();

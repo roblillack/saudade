@@ -43,9 +43,32 @@ While pre-1.0, the minor version is bumped for breaking changes.
   `Painter::fill_ring` or side by side), `Frame::inside(d)` what is left for the
   face. `Painter::chrome_unit` is the scale rounded to a whole pixel, for a lone
   thin line — a divider, a caret, a grid rule — and nothing deeper.
+- `Painter::draw_resampled(area, content, scale, bg, |p| …)` renders content at
+  a scale of its own choosing and resamples the result into a fixed on-screen
+  box, where `Painter::draw_scaled` lands it at the size that scale makes it.
+  Holding the box still while the scale moves is what a denser display of the
+  same physical size does: the content keeps its size and gains resolution,
+  which is what a DPI preview pane wants from a slider. The resample is an area
+  average — a destination pixel is the mean of the source pixels it covers, each
+  weighted by how much of it the destination covers, to a 256th of a pixel — so
+  downscaling blends rather than drops pixels, and a whole-number magnification
+  comes out identical to `draw_scaled`'s nearest-neighbor blocks. The `scaling`
+  example drives it from a new "scale to fit" toggle, in a window the user can
+  now resize.
+- `Checkbox::set_rect` moves a checkbox after construction, as `Slider`,
+  `Dropdown`, `ProgressBar` and `ScrollBar` already allow — for a layout that
+  reflows, e.g. a control pinned to the bottom edge of a resizable window.
 
 ### Changed
 
+- Dev builds of saudade itself now compile at `opt-level = 2` (a
+  `[profile.dev.package.saudade]` override; dependencies keep the dev default).
+  Every frame here is a per-pixel loop, and unoptimized those run about eight
+  times slower — a full-window preview resample measured 78 ms against 10 ms —
+  while a touched `painter.rs` rebuilds in the same ~3 s either way. An app
+  depending on saudade wants the same stanza in its own `Cargo.toml`, since
+  profiles only apply from the workspace being built; unset it for a build you
+  intend to step through in a debugger.
 - Button frames, bevels and focus rings are crisp at a fractional scale. A Win
   3.1 button is four or five 1-logical-pixel lines stacked on each other, and
   snapping each of them on its own — from its own position in the window —

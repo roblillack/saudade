@@ -643,6 +643,156 @@ impl<'a> Painter<'a> {
         }
     }
 
+    /// Render `f` at logical→physical scale `scale` into an offscreen buffer
+    /// `content` logical pixels large, then resample that buffer into `area` on
+    /// screen, area-averaging the source pixels each destination pixel covers.
+    ///
+    /// Where [`Self::draw_scaled`] ties the footprint to the scale — content
+    /// drawn at `scale` lands on screen at `scale`, so raising it grows the
+    /// result — this pins the footprint and lets the scale change only *how
+    /// many device pixels the content was rendered from*. Holding `area` still
+    /// while `scale` rises is what a denser display of the same physical size
+    /// shows: the panel keeps its size and gains resolution. That makes this
+    /// the tool for a preview pane that must not resize itself as the previewed
+    /// DPI is dragged around.
+    ///
+    /// `content` is the extent, in the *preview's* logical pixels, the buffer
+    /// covers: `f` draws within `(0, 0)`–`(content.w, content.h)` and anything
+    /// past that falls off the buffer. `area` need not share its aspect ratio —
+    /// each axis is resampled independently — so a caller who wants the content
+    /// undistorted gives `area` the proportions of `content`.
+    ///
+    /// The resample is an area average: a destination pixel is the mean of the
+    /// source pixels it overlaps, each weighted by how much of it the
+    /// destination pixel covers (to a 256th of a source pixel — see
+    /// [`AxisMap`]). Downscaling therefore blends rather than drops pixels, so
+    /// a scale's extra resolution reads as detail instead of dropouts; and
+    /// where `area` is a whole multiple of the buffer every destination pixel
+    /// falls inside a single source pixel, which reproduces
+    /// [`Self::draw_scaled`]'s nearest-neighbor magnification exactly.
+    ///
+    /// `bg` is the backdrop the offscreen buffer starts as, so anti-aliased
+    /// edges blend toward the color they will be seen against — and it needs no
+    /// separate fill of `area`, since every pixel of it is written. Drawing is
+    /// confined to `area`, intersected with any active clip.
+    pub fn draw_resampled(
+        &mut self,
+        area: Rect,
+        content: Size,
+        scale: f32,
+        bg: Color,
+        f: impl FnOnce(&mut Painter),
+    ) {
+        if area.w <= 0 || area.h <= 0 || content.w <= 0 || content.h <= 0 {
+            return;
+        }
+        let scale = scale.max(0.01);
+        // The buffer holds the content at its *own* scale — the device pixels a
+        // window opened at `scale` would give it — whatever room `area` has for
+        // the result.
+        let src_w = ((content.w as f32 * scale).round() as i32).max(1);
+        let src_h = ((content.h as f32 * scale).round() as i32).max(1);
+        let mut buf = vec![bg.0; (src_w * src_h) as usize];
+        {
+            let mut p = Painter::new(&mut buf, src_w, src_h, scale, 0, 0, self.fonts);
+            f(&mut p);
+        }
+        let dst = Rect::new(
+            self.origin_x + self.snap(area.x),
+            self.origin_y + self.snap(area.y),
+            self.snap(area.x + area.w) - self.snap(area.x),
+            self.snap(area.y + area.h) - self.snap(area.y),
+        );
+        self.blit_resampled(&buf, src_w, src_h, dst);
+    }
+
+    /// Opaque-copy a `src_w × src_h` ARGB buffer onto the physical rectangle
+    /// `dst`, resampling it to fit: every destination pixel is the
+    /// area-weighted mean of the source pixels it covers. Honors the active
+    /// clip. The resampling half of [`Self::draw_resampled`].
+    ///
+    /// Three shapes of destination pixel are pulled out of the general case,
+    /// because this runs on every frame of a preview being dragged and most
+    /// pixels are one of the cheap ones. A pixel that lies inside a single
+    /// source pixel is a copy. A *row* that lies inside a single source row
+    /// blends horizontally only. And a row whose source row is the one the row
+    /// above already used is a copy of the row just written — which, when the
+    /// buffer is being magnified, is most of the rows on screen.
+    fn blit_resampled(&mut self, src: &[u32], src_w: i32, src_h: i32, dst: Rect) {
+        let (cx0, cy0, cx1, cy1) = self.clip_bounds();
+        let (x0, x1) = (dst.x.max(cx0), (dst.x + dst.w).min(cx1));
+        if x1 <= x0 {
+            return;
+        }
+        let cols = AxisMap::new(src_w, dst.w);
+        let rows = AxisMap::new(src_h, dst.h);
+        // Where the last row went and which source row it was a plain copy of,
+        // for the wholesale row copy. `None` while the last row was a blend of
+        // several, which no other row repeats.
+        let mut repeatable: Option<(usize, i32)> = None;
+        for dy in 0..dst.h {
+            let py = dst.y + dy;
+            if py < cy0 || py >= cy1 {
+                repeatable = None;
+                continue;
+            }
+            let base = (py * self.width) as usize;
+            let row_taps = rows.taps(dy);
+            let [(sy, _)] = row_taps else {
+                // Rows to blend: the general case, a full 16-bit average.
+                repeatable = None;
+                for px in x0..x1 {
+                    let col_taps = cols.taps(px - dst.x);
+                    let (mut a, mut r, mut g, mut b) = (0u32, 0u32, 0u32, 0u32);
+                    for &(sy, wy) in row_taps {
+                        let row = (sy * src_w) as usize;
+                        for &(sx, wx) in col_taps {
+                            let weight = (wx * wy) as u32;
+                            let pixel = src[row + sx as usize];
+                            a += ((pixel >> 24) & 0xFF) * weight;
+                            r += ((pixel >> 16) & 0xFF) * weight;
+                            g += ((pixel >> 8) & 0xFF) * weight;
+                            b += (pixel & 0xFF) * weight;
+                        }
+                    }
+                    self.pixels[base + px as usize] = resampled(a, r, g, b, 2 * WEIGHT_BITS);
+                }
+                continue;
+            };
+            // One source row, so nothing to average vertically.
+            if let Some((from, previous)) = repeatable
+                && previous == *sy
+            {
+                let span = from + x0 as usize..from + x1 as usize;
+                self.pixels.copy_within(span, base + x0 as usize);
+                repeatable = Some((base, *sy));
+                continue;
+            }
+            let row = (sy * src_w) as usize;
+            for px in x0..x1 {
+                let col_taps = cols.taps(px - dst.x);
+                self.pixels[base + px as usize] = match col_taps {
+                    // One source pixel: the copy every pixel of a whole-number
+                    // magnification takes.
+                    [(sx, _)] => src[row + *sx as usize],
+                    _ => {
+                        let (mut a, mut r, mut g, mut b) = (0u32, 0u32, 0u32, 0u32);
+                        for &(sx, wx) in col_taps {
+                            let weight = wx as u32;
+                            let pixel = src[row + sx as usize];
+                            a += ((pixel >> 24) & 0xFF) * weight;
+                            r += ((pixel >> 16) & 0xFF) * weight;
+                            g += ((pixel >> 8) & 0xFF) * weight;
+                            b += (pixel & 0xFF) * weight;
+                        }
+                        resampled(a, r, g, b, WEIGHT_BITS)
+                    }
+                };
+            }
+            repeatable = Some((base, *sy));
+        }
+    }
+
     /// Fill a compile-time-baked [`SvgImage`](crate::SvgImage) into the logical
     /// rectangle `rect`, aspect-fit and centered. Convenience wrapper for
     /// [`SvgImage::draw`](crate::SvgImage::draw).
@@ -1312,6 +1462,90 @@ impl<'a> Painter<'a> {
     }
 }
 
+/// Fractional bits one axis' resampling weights carry, and the whole a weight
+/// of that many bits stands for. Two axes multiply to 16 bits of fraction —
+/// more than an 8-bit channel can show — and being a power of two, the average
+/// they feed comes out with a shift where a divide by the covered area would
+/// otherwise be, which is worth having in a loop that runs per pixel per frame.
+const WEIGHT_BITS: u32 = 8;
+const WEIGHT_ONE: i32 = 1 << WEIGHT_BITS;
+
+/// Fold four weight-scaled channel sums back into an ARGB word, rounding each
+/// to nearest. `bits` is how much fraction the weights carried: [`WEIGHT_BITS`]
+/// per axis that was averaged.
+///
+/// Inlined even in an unoptimized build — with a call and four closure calls
+/// per pixel this is most of the work in a debug preview, and none of it once
+/// it is folded into the loop.
+#[inline(always)]
+fn resampled(a: u32, r: u32, g: u32, b: u32, bits: u32) -> u32 {
+    let half = 1 << (bits - 1);
+    (((a + half) >> bits).min(0xFF) << 24)
+        | (((r + half) >> bits).min(0xFF) << 16)
+        | (((g + half) >> bits).min(0xFF) << 8)
+        | ((b + half) >> bits).min(0xFF)
+}
+
+/// One axis of a resample, worked out once for every destination pixel: the
+/// source pixels it draws from, and how much of each it covers, in
+/// [`WEIGHT_ONE`]ths of a source pixel.
+///
+/// The overlaps are exact — counted in units of 1/`dst_n` of a source pixel, so
+/// both grids land on whole numbers — and quantized cumulatively, each tap
+/// taking the difference between two rounded running totals. Rounding therefore
+/// cannot drift, and one destination pixel's weights add up to exactly
+/// `WEIGHT_ONE` however the grids fall against each other: the average divides
+/// by a constant the two axes fix in advance rather than by a per-pixel sum.
+/// Where the ratio divides evenly a destination pixel lands inside a single
+/// source pixel and gets that one alone at full weight — which is what makes a
+/// whole-number magnification an exact pixel copy.
+struct AxisMap {
+    /// Destination pixel `d` draws from `taps[starts[d]..starts[d + 1]]`, each
+    /// a source index and its weight.
+    starts: Vec<u32>,
+    taps: Vec<(i32, i32)>,
+}
+
+impl AxisMap {
+    fn new(src_n: i32, dst_n: i32) -> Self {
+        let mut starts = Vec::with_capacity(dst_n as usize + 1);
+        let mut taps = Vec::with_capacity(dst_n as usize * 2);
+        let (src, dst) = (src_n as i64, dst_n as i64);
+        for d in 0..dst_n {
+            starts.push(taps.len() as u32);
+            let (start, end) = (d as i64 * src, (d as i64 + 1) * src);
+            let first = (start / dst) as i32;
+            let last = (((end - 1) / dst) as i32).min(src_n - 1);
+            let (mut covered, mut quantized) = (0i64, 0i64);
+            for i in first..=last {
+                let lo = (i as i64 * dst).max(start);
+                let hi = ((i as i64 + 1) * dst).min(end);
+                if hi <= lo {
+                    continue;
+                }
+                covered += hi - lo;
+                // The rounded share of the destination pixel the taps up to and
+                // including this one account for; this tap gets what that adds.
+                let upto = (2 * covered * WEIGHT_ONE as i64 + src) / (2 * src);
+                let weight = (upto - quantized) as i32;
+                quantized = upto;
+                if weight > 0 {
+                    taps.push((i, weight));
+                }
+            }
+        }
+        starts.push(taps.len() as u32);
+        Self { starts, taps }
+    }
+
+    /// Inlined even unoptimized: this is called once per destination pixel.
+    #[inline(always)]
+    fn taps(&self, d: i32) -> &[(i32, i32)] {
+        let (from, to) = (self.starts[d as usize], self.starts[d as usize + 1]);
+        &self.taps[from as usize..to as usize]
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1381,6 +1615,90 @@ mod tests {
             }
         }
         px
+    }
+
+    /// The sample content both resampling tests render: a few opaque blocks and
+    /// a lone pixel, drawn at scale 1 so one content pixel is one buffer pixel.
+    fn blocks(p: &mut Painter) {
+        p.fill_rect(Rect::new(1, 1, 3, 2), Color::BLACK);
+        p.fill_rect(Rect::new(0, 4, 7, 1), Color::rgb(0x40, 0x40, 0xC0));
+        p.pixel(5, 3, Color::rgb(0x00, 0x80, 0x00));
+    }
+
+    /// A whole-number magnification has no pixels to average — each destination
+    /// pixel sits inside one source pixel — so `draw_resampled` has to land on
+    /// exactly the blocks `draw_scaled`'s nearest-neighbor zoom produces.
+    #[test]
+    fn resampling_a_whole_multiple_matches_the_zoom_blit() {
+        const CONTENT: Size = Size { w: 7, h: 5 };
+        for zoom in [1, 2, 3, 4] {
+            let (w, h) = (CONTENT.w * zoom, CONTENT.h * zoom);
+            let area = Rect::new(0, 0, w, h);
+            let mut zoomed = vec![0u32; (w * h) as usize];
+            {
+                let mut p = Painter::new(&mut zoomed, w, h, 1.0, 0, 0, FontSet::default());
+                p.draw_scaled(area, 1.0, zoom, Color::WHITE, blocks);
+            }
+            let mut resampled = vec![0u32; (w * h) as usize];
+            {
+                let mut p = Painter::new(&mut resampled, w, h, 1.0, 0, 0, FontSet::default());
+                p.draw_resampled(area, CONTENT, 1.0, Color::WHITE, blocks);
+            }
+            assert_eq!(zoomed, resampled, "zoom {zoom}");
+        }
+    }
+
+    /// Downscaling blends: a destination pixel covering four source pixels is
+    /// their mean, not whichever one a nearest-neighbor pick would land on.
+    #[test]
+    fn resampling_down_averages_the_pixels_it_merges() {
+        let mut pixels = vec![0u32; 4];
+        {
+            let mut p = Painter::new(&mut pixels, 2, 2, 1.0, 0, 0, FontSet::default());
+            // Four content pixels per destination pixel: a black/white checker
+            // in the left half, solid red in the right.
+            p.draw_resampled(
+                Rect::new(0, 0, 2, 1),
+                Size::new(4, 2),
+                1.0,
+                Color::WHITE,
+                |p| {
+                    p.pixel(0, 0, Color::BLACK);
+                    p.pixel(1, 1, Color::BLACK);
+                    p.fill_rect(Rect::new(2, 0, 2, 2), Color::rgb(0xFF, 0, 0));
+                },
+            );
+        }
+        // Two black and two white averages to mid-grey (128 after rounding),
+        // and a uniform block comes through unchanged.
+        assert_eq!(pixels[0], Color::rgb(0x80, 0x80, 0x80).0);
+        assert_eq!(pixels[1], Color::rgb(0xFF, 0, 0).0);
+        // The row below the one-pixel-tall area is untouched.
+        assert_eq!(&pixels[2..], &[0, 0]);
+    }
+
+    /// The weights of one destination pixel always account for exactly one
+    /// source pixel's worth of coverage — the whole the averaging divides by —
+    /// whether the axis is being stretched, squeezed, or left alone.
+    #[test]
+    fn axis_weights_always_add_up_to_a_whole_pixel() {
+        for src_n in 1..=17 {
+            for dst_n in 1..=17 {
+                let map = AxisMap::new(src_n, dst_n);
+                for d in 0..dst_n {
+                    let taps = map.taps(d);
+                    assert!(
+                        taps.iter().all(|&(i, w)| i >= 0 && i < src_n && w > 0),
+                        "{src_n}->{dst_n} pixel {d}: {taps:?}"
+                    );
+                    assert_eq!(
+                        taps.iter().map(|&(_, w)| w).sum::<i32>(),
+                        WEIGHT_ONE,
+                        "{src_n}->{dst_n} pixel {d}"
+                    );
+                }
+            }
+        }
     }
 
     const PATTERNS: [BackgroundPattern; 6] = [
