@@ -1307,6 +1307,10 @@ transformation to physical pixels itself.
 - Rectangle edges are snapped independently to physical pixels —
   adjacent rects always share an exact pixel boundary, so chrome stays
   crisp regardless of DPI.
+- Frames — button borders, bevels, field outlines, focus rings — are
+  drawn in physical pixels from scaled *depths* instead (see "Frames as
+  vectors" below), because a stack of 1-logical-pixel lines snapped one
+  at a time comes out uneven.
 - Text is rasterized once at `font_size × scale` physical pixels via
   fontdue. No upscale, no resample, no blur.
 
@@ -1325,17 +1329,92 @@ around it depends on the root widget:
 Resize **never** scales pixels — it only changes how much space is
 available for layout decisions.
 
-Trade-off to be aware of: at non-integer scale factors (1.25, 1.5,…) a
-1-logical-pixel chrome line can land on a y-coordinate where the
-physical width rounds to 1 vs 2 pixels. The variation is invisible in
-practice on the dialogs we've built; if you hit a case where it
-matters, draw chrome at a fixed `round(scale)` thickness using
-`Painter::scale()`.
-
 The window's scale factor is owned by the OS — adopted at startup and
 refreshed when the platform reports a change. There is no API to
 override it: density independence comes from designing in logical
 pixels, not from forcing a particular scale.
+
+### Frames as vectors
+
+Independent edge snapping is right for one rectangle and wrong for a
+frame. A Win 3.1 button is four or five lines a logical pixel wide
+sitting directly on top of each other — black outline, an extra ring
+if it is the default button, then a bevel two pixels deep — and at a
+fractional scale each of them rounds on its own, from its own position
+in the window. At 2.25x a 1-logical-pixel line covers two device
+pixels or three purely by where its edges fall: a frame that should
+read as one object comes out heavier along one edge than the opposite
+one, and different again on the button beside it. A dotted focus ring
+is worse, because there the error is in the *pitch* — dots of two and
+three pixels separated by gaps of two and one stop reading as dots at
+all.
+
+So the frame primitives don't snap line by line. `Painter::crisp`
+drops the painter to device pixels, snaps the rect once, and hands the
+recipe a `Frame`, which places chrome the way `include_svg!` marks are
+rasterized: the geometry is written in resolution-independent units and
+each boundary is scaled and rounded on the way to the buffer.
+
+```rust
+painter.crisp(box_rect, |p, f| {
+    p.fill_rect(f.inside(1), fill);                      // the field
+    p.fill_ring(f.ring(0), theme.border, theme.border);  // 1px outline
+});
+```
+
+A `Frame` answers in *depths*: `f.depth(d)` is how many device pixels
+in from the widget's edge logical depth `d` lands, `f.ring(d)` is the
+four sides of the ring between `depth(d)` and `depth(d + 1)`, and
+`f.inside(d)` is what is left for the face. Nothing accumulates —
+every boundary is measured from the widget's own edge, and adjacent
+rings meet on the one they share — so a band lands within half a
+device pixel of its drawn depth no matter how deep the chrome goes:
+
+| scale | 2px bevel, nominal | drawn |
+|-------|--------------------|-------|
+| 1.25x | 2.5                | 2     |
+| 1.5x  | 3.0                | 3     |
+| 2.0x  | 4.0                | 4     |
+| 2.25x | 4.5                | 5     |
+| 2.5x  | 5.0                | 5     |
+| 2.75x | 5.5                | 5     |
+| 3.0x  | 6.0                | 6     |
+
+Below 1.5x the depths are pinned to the design's own rather than
+scaled, which is where that 2 at 1.25x comes from. A logical pixel is
+still worth a single device pixel there, so half a device pixel of
+rounding is most of a 1-pixel line: scaling the depths anyway would put
+a 3-pixel bevel under a 1-pixel border where the design says 2 and 1.
+Keeping the drawn widths spends the room the scale buys on the face
+instead — the button comes out a little roomier and a lot sharper.
+
+Rounding each line's *thickness* to a whole `Painter::chrome_unit` and
+multiplying instead — which keeps every ring the same weight — rounds
+the wrong quantity: the error compounds with depth and steps in whole
+units, giving 4 device pixels at 2.25x and 6 at 2.5x. A 50% jump for
+an 11% change of scale. `chrome_unit` is still the right answer for a
+*lone* thin line — a divider, a caret, a grid rule — and nothing else.
+
+A band two pixels deep is still drawn as two rings rather than one
+taller rect, because each ring is inset by its own depth: that is the
+staircase a Win 3.1 bevel steps down at its corners. Sharing the
+boundary between them is what keeps the pair exact.
+
+`stroke_rect`, `raised_bevel`, `sunken_bevel`, `button`,
+`light_button`, `focus_rect` and `etched_h_line` all go through
+`crisp`, so widgets get this for free; a widget drawing chrome of its
+own asks for the pass directly, as above. Inside the closure the
+painter is at `scale == 1.0`, so those primitives are no help there —
+each would draw a single device pixel. Take the geometry from the
+`Frame`.
+
+The one exception is the dotted focus ring, which is placed by weight
+rather than by depth: what the eye reads in a dash is its rhythm, so
+the dot is `depth(1)` square and the pitch exactly twice that. Placing
+each dot at its own scaled position would put 2- and 3-pixel gaps
+between 2-pixel dots at 2.25x, which reads as a smear. A dash has no
+geometry riding on it, so a pitch up to a pixel off nominal costs
+nothing.
 
 ### How big a logical pixel is
 

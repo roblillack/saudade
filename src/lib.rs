@@ -57,7 +57,7 @@ pub use chrome::{WindowChrome, WindowFrame};
 pub use event::{Cursor, DragData, Event, EventCtx, Key, Modifiers, MouseButton, NamedKey};
 pub use font::{Font, FontFamily, FontSet, FontStyle};
 pub use geometry::{Color, Point, Rect, Size};
-pub use painter::Painter;
+pub use painter::{Frame, Painter, Ring};
 // `include_svg!` reads an SVG at compile time and expands to a const
 // `SvgImage`; the runtime side just fills the baked polygons (no SVG parser in
 // the binary). The macro emits paths like `::saudade::SvgImage`, so these

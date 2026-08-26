@@ -3,20 +3,193 @@ use crate::font::{Font, FontFamily, FontSet, FontStyle};
 use crate::geometry::{Color, Rect, Size};
 use crate::theme::Theme;
 
-/// Pixel-perfect 2D painter over an ARGB32 framebuffer.
-///
-/// Widgets paint in **logical pixels**: density-independent design units. The
-/// painter applies the OS-reported scale factor (which may be fractional —
-/// 1.0, 1.25, 1.5, 2.0, …) and writes straight into the physical surface
-/// buffer. Rectangle edges are snapped independently so adjacent rectangles
-/// always share an exact physical-pixel boundary, which keeps Win 3.1 chrome
-/// crisp at every DPI. Text is rasterized once at its final physical size via
-/// fontdue — no resampling, no smudge.
 /// Opaque clip-stack token returned by [`Painter::push_clip`]. Pass it back
 /// to [`Painter::restore_clip`] to pop the clip the caller installed.
 #[derive(Clone, Copy)]
 pub struct SavedClip(Option<(i32, i32, i32, i32)>);
 
+/// A widget's frame, in device pixels, ready to be measured in the *depths* its
+/// design is written in.
+///
+/// Handed to a [`Painter::crisp`] recipe. Win 3.1 chrome is described as a set
+/// of depths in logical pixels — a button's black outline occupies the first,
+/// the bevel under it the next two — and this turns any such depth into device
+/// pixels the way [`SvgImage`](crate::SvgImage) turns a viewBox coordinate into
+/// one: scale the boundary, round *that*, and fill between the results. Nothing
+/// accumulates,
+/// because every boundary is measured from the widget's own edge and
+/// neighbouring rings meet on the one they share, so a band lands within half a
+/// device pixel of the depth it is drawn at however many rings deep it is.
+///
+/// Rounding each ring's *thickness* instead — one shared
+/// [`Painter::chrome_unit`] per line — makes every ring the same weight, but
+/// the error then compounds with depth and steps in whole units. A bevel two
+/// logical pixels deep comes out four device pixels at 2.25x and six at 2.5x: a
+/// 50% jump for an 11% change of scale, and 20% deeper than the five it is
+/// drawn as. Depths give five at both, and six at 2.75x.
+///
+/// Below 1.5x the depths are the design's own instead of scaled ones, for the
+/// reason [`Frame::new`] gives.
+///
+/// The price is that the rings *within* one band can differ by a device pixel —
+/// at 2.5x a button's bevel is a ring 2 deep over a ring 3 deep. Nothing shows,
+/// since both carry the same pair of colours and the band's total is what the
+/// eye measures; and where a difference would show, it is at least
+/// *consistent*, a ring being the same thickness on all four sides and the same
+/// on every widget at that scale. Snapping each line from its own position in
+/// the window, which is what the plain drawing path does, could promise
+/// neither.
+#[derive(Clone, Copy)]
+pub struct Frame {
+    /// The widget's rect, snapped to device pixels.
+    rect: Rect,
+    /// Device pixels one logical pixel of *depth* is worth: the window's scale,
+    /// or 1.0 below 1.5x where the chrome keeps its drawn widths. Not the 1.0
+    /// the painter itself runs at inside the pass.
+    per_pixel: f32,
+}
+
+impl Frame {
+    /// A frame over `rect` (already in device pixels) for a window drawn at
+    /// `scale`.
+    ///
+    /// Below 1.5x the depths are pinned to the design's own: a logical pixel is
+    /// still worth a single device pixel there — [`Painter::chrome_unit`] is 1 —
+    /// and scaling the depths anyway only distorts the frame's proportions,
+    /// since half a device pixel of rounding error is most of a 1-pixel line. At
+    /// 1.25x it would put a 3-pixel bevel under a 1-pixel border where the
+    /// design says 2 and 1. Keeping the drawn widths spends the extra room on
+    /// the face instead: the button comes out a little roomier and a lot
+    /// sharper.
+    fn new(rect: Rect, scale: f32) -> Self {
+        let per_pixel = if scale.round() > 1.0 { scale } else { 1.0 };
+        Self { rect, per_pixel }
+    }
+
+    /// The frame's outer bounds, in device pixels.
+    pub fn rect(&self) -> Rect {
+        self.rect
+    }
+
+    /// Device pixels from the frame's edge in to logical depth `d`. `depth(0)`
+    /// is the edge itself; `depth(1)` the far side of a one-pixel border.
+    ///
+    /// Scaled from the window's scale factor, except below 1.5x — see
+    /// [`Frame::new`], where the reasoning lives.
+    pub fn depth(&self, d: i32) -> i32 {
+        (d as f32 * self.per_pixel).round().max(0.0) as i32
+    }
+
+    /// What is left of the frame inside `d` logical pixels of chrome — the face
+    /// of a button, the field of an input. The scale-aware `inset(d)`.
+    pub fn inside(&self, d: i32) -> Rect {
+        // `Rect::inset` floors the result at zero size, so a depth deeper than
+        // the widget leaves nothing to paint rather than an inverted rect.
+        self.rect.inset(self.depth(d))
+    }
+
+    /// The four sides of the one-logical-pixel ring at depth `d`: from
+    /// `depth(d)` in to `depth(d + 1)`.
+    ///
+    /// A band several logical pixels deep is drawn as several rings rather than
+    /// one taller rect, because each ring is also *inset* by its own depth —
+    /// that is the staircase a Win 3.1 bevel steps down at its corners. The
+    /// depth stays exact all the same: neighbouring rings meet on a shared
+    /// `depth(d + 1)`, so nothing accumulates and the pair spans exactly
+    /// `depth(d + 2) - depth(d)`.
+    pub fn ring(&self, d: i32) -> Ring {
+        let (ax, ay) = self.axis_depth(d);
+        let (bx, by) = self.axis_depth(d + 1);
+        let r = self.rect;
+        // Horizontal sides span what is left after the *vertical* inset, and
+        // vice versa, so the corners belong to whichever side paints last.
+        Ring {
+            top: Rect::new(r.x + ax, r.y + ay, r.w - 2 * ax, by - ay),
+            bottom: Rect::new(r.x + ax, r.bottom() - by, r.w - 2 * ax, by - ay),
+            left: Rect::new(r.x + ax, r.y + ay, bx - ax, r.h - 2 * ay),
+            right: Rect::new(r.right() - bx, r.y + ay, bx - ax, r.h - 2 * ay),
+        }
+    }
+
+    /// A depth clamped to each axis of the frame, so a widget shallower than
+    /// its own chrome overlaps itself rather than spilling over its neighbour.
+    /// Everything else here goes through this.
+    fn axis_depth(&self, d: i32) -> (i32, i32) {
+        let depth = self.depth(d);
+        (depth.min(self.rect.w.max(0)), depth.min(self.rect.h.max(0)))
+    }
+}
+
+/// One ring of a [`Frame`]: its four sides at a single logical depth, each
+/// already a device-pixel rect.
+///
+/// `top` / `left` are the pair a bevel lights and `bottom` / `right` the pair it
+/// shadows, which is why [`Painter::fill_ring`] takes its two colours in that
+/// order. A side is drawn with [`Painter::fill_rect`] like any other rect, so a
+/// recipe that wants only one half of a ring — a scrollbar's highlight, with no
+/// shadow opposite it — just paints the sides it wants.
+#[derive(Clone, Copy)]
+pub struct Ring {
+    pub top: Rect,
+    pub left: Rect,
+    pub bottom: Rect,
+    pub right: Rect,
+}
+
+impl Ring {
+    /// The same ring with its corners left unpainted: every side pulled back at
+    /// both ends by the thickness of the side it would have met there. The
+    /// rounded outline a Win 3.1 button wears.
+    pub fn cut_corners(self) -> Self {
+        let (across, down) = (self.left.w, self.top.h);
+        Self {
+            top: Rect::new(
+                self.top.x + across,
+                self.top.y,
+                self.top.w - 2 * across,
+                self.top.h,
+            ),
+            bottom: Rect::new(
+                self.bottom.x + across,
+                self.bottom.y,
+                self.bottom.w - 2 * across,
+                self.bottom.h,
+            ),
+            left: Rect::new(
+                self.left.x,
+                self.left.y + down,
+                self.left.w,
+                self.left.h - 2 * down,
+            ),
+            right: Rect::new(
+                self.right.x,
+                self.right.y + down,
+                self.right.w,
+                self.right.h - 2 * down,
+            ),
+        }
+    }
+}
+
+/// Pixel-perfect 2D painter over an ARGB32 framebuffer.
+///
+/// Widgets paint in **logical pixels**: density-independent design units. The
+/// painter applies the scale factor the window is drawn at (which may be
+/// fractional — 1.0, 1.25, 1.5, 2.25, …) and writes straight into the physical
+/// surface buffer. Rectangle edges are snapped independently so adjacent
+/// rectangles always share an exact physical-pixel boundary. Text is
+/// rasterized once at its final physical size via fontdue — no resampling, no
+/// smudge.
+///
+/// Frames are the exception to independent snapping: a button's outline, bevel
+/// and inner highlight are lines a logical pixel wide sitting right on top of
+/// one another, and snapped one at a time — each from its own position in the
+/// window — they round to different widths, so a frame that should read as one
+/// object comes out heavier along one edge than the opposite one and different
+/// again on the widget beside it. Every frame primitive here instead draws in
+/// device pixels off a [`Frame`], which places each ring by scaling the depth
+/// the design puts it at, the way an [`SvgImage`](crate::SvgImage) is
+/// rasterized. See [`Painter::crisp`].
 pub struct Painter<'a> {
     pixels: &'a mut [u32],
     /// Physical buffer width in pixels.
@@ -258,26 +431,19 @@ impl<'a> Painter<'a> {
         Rect::new(x0, y0, x1 - x0, y1 - y0)
     }
 
-    /// Whether 1-logical-pixel chrome should be redrawn at exact device
-    /// pixels at the current scale. True only in `[0.9, 1.5)` and not at
-    /// exactly 1.0×: there a 1-logical line rounds to 1 *or* 2 device pixels
-    /// depending on where it falls, so adjacent bevel / outline edges look
-    /// uneven. At 1.0× (or inside a [`Self::physical`] block, where
-    /// `scale == 1.0`) there is nothing to fix — which is also what stops the
-    /// self-managing chrome primitives ([`Self::button`], [`Self::raised_bevel`],
-    /// [`Self::stroke_rect`], [`Self::focus_rect`]) from recursing.
+    /// Device pixels one logical pixel of chrome is worth on its own: the scale
+    /// rounded to a whole pixel, never less than one. The same `unit` the window
+    /// chrome in [`crate::chrome`] draws its frame lines at, and what a widget
+    /// wants for a *lone* thin line — a divider, a caret, a grid rule.
     ///
-    /// Custom widgets that draw their own thin chrome with helpers the painter
-    /// doesn't provide gate the [`Self::physical`] pass on this:
-    /// ```ignore
-    /// if painter.wants_1x_crispness() {
-    ///     painter.physical(rect, |p, r| draw_my_glyph(p, r));
-    /// } else {
-    ///     draw_my_glyph(painter, rect);
-    /// }
-    /// ```
-    pub fn wants_1x_crispness(&self) -> bool {
-        self.scale != 1.0 && (0.9..1.5).contains(&self.scale)
+    /// Not the way to build a frame. Multiplying this by a depth rounds the
+    /// wrong quantity: the error compounds with every ring and steps in whole
+    /// units, so a two-pixel bevel jumps from four device pixels to six between
+    /// 2.25x and 2.5x. Ask a [`Frame`] for the ring instead — it rounds the
+    /// depth, which is [`Frame::depth(1)`](Frame::depth) for a single line and
+    /// stays exact however deep the chrome goes.
+    pub fn chrome_unit(&self) -> i32 {
+        (self.scale.round() as i32).max(1)
     }
 
     /// Run `f` with the painter dropped to physical pixels — one unit maps to
@@ -301,6 +467,45 @@ impl<'a> Painter<'a> {
         self.scale = 1.0;
         f(self, phys);
         self.scale = saved.max(0.01);
+    }
+
+    /// Draw a frame recipe crisply: `f` runs in device pixels, against a
+    /// [`Frame`] that places its rings by scaling the design's depths.
+    ///
+    /// The painter is dropped to device pixels exactly as [`Self::physical`]
+    /// hands it over, and the `Frame` carries `rect` snapped to its device
+    /// bounds together with the *outer* scale. A recipe asks the frame for the
+    /// ring it wants to paint — `f.ring(0)` for the outline, `f.ring(1)` and
+    /// `f.ring(2)` for the bevel behind it, `f.inside(3)` for the face left
+    /// over — and every one of those comes back with its boundaries already
+    /// rounded to device pixels. Because the outer rect is the snapped
+    /// one, the frame still lands exactly where the scaled draw would have put
+    /// it, and still shares its edge pixels with the widget next door.
+    ///
+    /// At 1.0x, and at any integer scale where every depth is an exact multiple,
+    /// this paints the same pixels the plain logical path would. It diverges
+    /// only where that path was snapping each line from its own position in the
+    /// window and so came out uneven — heavier along one edge of a frame than
+    /// the opposite one, and different again on the widget beside it.
+    ///
+    /// Every frame primitive here is built on it ([`Self::stroke_rect`],
+    /// [`Self::raised_bevel`], [`Self::button`], [`Self::light_button`],
+    /// [`Self::focus_rect`], [`Self::etched_h_line`]); a widget drawing chrome
+    /// of its own reaches for it directly:
+    ///
+    /// ```ignore
+    /// painter.crisp(box_rect, |p, f| {
+    ///     p.fill_rect(f.inside(1), fill);                      // the field
+    ///     p.fill_ring(f.ring(0), theme.border, theme.border);  // 1px outline
+    /// });
+    /// ```
+    ///
+    /// Note that the painter inside `f` sits at `scale == 1.0`, so the
+    /// self-managing primitives above are no use there — each would draw a
+    /// single device pixel. Take the geometry from the `Frame`.
+    pub fn crisp(&mut self, rect: Rect, f: impl FnOnce(&mut Painter, Frame)) {
+        let scale = self.scale;
+        self.physical(rect, |p, r| f(p, Frame::new(r, scale)));
     }
 
     /// Render `f` into the logical-pixel region `area` as though the painter
@@ -817,20 +1022,24 @@ impl<'a> Painter<'a> {
         }
     }
 
+    /// Paint a [`Ring`]: `near` along its top and left, `far` along its bottom
+    /// and right. The same colour twice is an outline; two colours is a bevel,
+    /// lit on the near pair and shadowed on the far one.
+    ///
+    /// The far sides paint last, so they own the two corners they share with
+    /// the near ones — the diagonal a Win 3.1 bevel runs along.
+    pub fn fill_ring(&mut self, ring: Ring, near: Color, far: Color) {
+        self.fill_rect(ring.top, near);
+        self.fill_rect(ring.left, near);
+        self.fill_rect(ring.bottom, far);
+        self.fill_rect(ring.right, far);
+    }
+
     pub fn stroke_rect(&mut self, rect: Rect, color: Color) {
         if rect.w <= 0 || rect.h <= 0 {
             return;
         }
-        // Self-manage the crisp pass like `button` does: at awkward fractional
-        // scales the four 1-logical-pixel edges round unevenly, so redraw this
-        // recipe at exact device pixels (the re-entry runs at `scale == 1.0`).
-        if self.wants_1x_crispness() {
-            return self.physical(rect, |p, r| p.stroke_rect(r, color));
-        }
-        self.h_line(rect.x, rect.y, rect.w, color);
-        self.h_line(rect.x, rect.bottom() - 1, rect.w, color);
-        self.v_line(rect.x, rect.y, rect.h, color);
-        self.v_line(rect.right() - 1, rect.y, rect.h, color);
+        self.crisp(rect, |p, f| p.fill_ring(f.ring(0), color, color));
     }
 
     /// Raised 3D bevel: light highlight on top/left, dark shadow on bottom/right.
@@ -838,15 +1047,7 @@ impl<'a> Painter<'a> {
         if rect.w <= 0 || rect.h <= 0 {
             return;
         }
-        // Same crisp self-management as `stroke_rect` / `button`. `sunken_bevel`
-        // delegates here, so it inherits this without its own guard.
-        if self.wants_1x_crispness() {
-            return self.physical(rect, |p, r| p.raised_bevel(r, highlight, shadow));
-        }
-        self.h_line(rect.x, rect.y, rect.w, highlight);
-        self.v_line(rect.x, rect.y, rect.h, highlight);
-        self.h_line(rect.x, rect.bottom() - 1, rect.w, shadow);
-        self.v_line(rect.right() - 1, rect.y, rect.h, shadow);
+        self.crisp(rect, |p, f| p.fill_ring(f.ring(0), highlight, shadow));
     }
 
     pub fn sunken_bevel(&mut self, rect: Rect, highlight: Color, shadow: Color) {
@@ -855,56 +1056,65 @@ impl<'a> Painter<'a> {
 
     /// Two-tone horizontal etched line (dark + light) — the divider above the
     /// system stats block in the Win 3.1 about box.
+    ///
+    /// Two logical pixels tall, each tone running to its own depth — so they
+    /// come out even, where snapping them separately gave whichever of the two
+    /// happened to round up first: 2 device pixels of shadow over 1 of highlight
+    /// at 1.25x with the divider on one row, 1 over 2 with it on the next.
     pub fn etched_h_line(&mut self, x: i32, y: i32, w: i32, theme: &Theme) {
-        self.h_line(x, y, w, theme.shadow);
-        self.h_line(x, y + 1, w, theme.highlight);
+        self.crisp(Rect::new(x, y, w, 2), |p, f| {
+            let r = f.rect();
+            // Clamped to the snapped slot, which can be a device pixel shy of
+            // `depth(2)` depending on the row the divider landed on.
+            let (first, second) = (f.depth(1).min(r.h), f.depth(2).min(r.h));
+            p.fill_rect(Rect::new(r.x, r.y, r.w, first), theme.shadow);
+            p.fill_rect(
+                Rect::new(r.x, r.y + first, r.w, second - first),
+                theme.highlight,
+            );
+        });
     }
 
     /// Full Win 3.1 button chrome: every button has a 1px black outer border
     /// with rounded (unpainted) corners; the default button gets an
     /// additional sharp-cornered outer border. Light-gray face, raised
     /// bevel, sunken when pressed.
+    ///
+    /// Drawn in one [`Self::crisp`] pass, with every ring placed at its scaled
+    /// depth. That is what keeps the bevel as deep as it is drawn — 5 device
+    /// pixels at 2.5x, where rounding each of its two rings to a whole 3 and
+    /// adding them gave 6.
     pub fn button(&mut self, rect: Rect, theme: &Theme, pressed: bool, default: bool) {
         if rect.w <= 0 || rect.h <= 0 {
             return;
         }
-        // At awkward fractional scales the 1-logical-pixel chrome edges round
-        // inconsistently — neighbouring lines land on 1 or 2 device pixels
-        // depending on where they fall. Redraw the whole frame at exact device
-        // pixels there, reusing *this* recipe against the button's physical
-        // bounds. Inside the block `scale == 1.0`, so the body below runs 1:1 —
-        // and the same condition breaks the recursion.
-        if self.wants_1x_crispness() {
-            return self.physical(rect, |p, r| p.button(r, theme, pressed, default));
-        }
-        // Rounded black outline: skip the four corner pixels.
-        if rect.w > 2 {
-            self.h_line(rect.x + 1, rect.y, rect.w - 2, theme.border);
-            self.h_line(rect.x + 1, rect.bottom() - 1, rect.w - 2, theme.border);
-        }
-        if rect.h > 2 {
-            self.v_line(rect.x, rect.y + 1, rect.h - 2, theme.border);
-            self.v_line(rect.right() - 1, rect.y + 1, rect.h - 2, theme.border);
-        }
-        let mut inner = rect.inset(1);
-        if default {
-            self.stroke_rect(inner, theme.border);
-            inner = inner.inset(1);
-        }
-        self.fill_rect(inner, theme.face);
-        if pressed {
-            self.sunken_bevel(inner, theme.highlight, theme.shadow);
-            let inner2 = inner.inset(1);
-            self.h_line(inner2.x, inner2.y, inner2.w, theme.shadow);
-            self.v_line(inner2.x, inner2.y, inner2.h, theme.shadow);
-        } else {
-            self.raised_bevel(inner, theme.highlight, theme.shadow);
-            let inner2 = inner.inset(1);
-            self.h_line(inner2.x, inner2.y, inner2.w, theme.highlight);
-            self.v_line(inner2.x, inner2.y, inner2.h, theme.highlight);
-            self.h_line(inner2.x, inner2.bottom() - 1, inner2.w, theme.shadow);
-            self.v_line(inner2.right() - 1, inner2.y, inner2.h, theme.shadow);
-        }
+        self.crisp(rect, |p, f| {
+            // Rounded black outline, then the default button's extra ring —
+            // square-cornered, and the same black, so the two read as one
+            // heavier border whose depth is still exactly `depth(2)`.
+            p.fill_ring(f.ring(0).cut_corners(), theme.border, theme.border);
+            let face = if default {
+                p.fill_ring(f.ring(1), theme.border, theme.border);
+                2
+            } else {
+                1
+            };
+            p.fill_rect(f.inside(face), theme.face);
+            // The bevel is two logical pixels deep: two rings, meeting on a
+            // shared depth, so together they span exactly `depth(face + 2) -
+            // depth(face)` and still step at the corners.
+            let (outer, inner) = (f.ring(face), f.ring(face + 1));
+            if pressed {
+                // Sunken: the shadow takes both pixels along the top/left, and
+                // a single highlight line sits opposite it.
+                p.fill_ring(outer, theme.shadow, theme.highlight);
+                p.fill_rect(inner.top, theme.shadow);
+                p.fill_rect(inner.left, theme.shadow);
+            } else {
+                p.fill_ring(outer, theme.highlight, theme.shadow);
+                p.fill_ring(inner, theme.highlight, theme.shadow);
+            }
+        });
     }
 
     /// Lighter Win 3.1 chrome used by the scrollbar's arrow buttons and thumb:
@@ -921,61 +1131,67 @@ impl<'a> Painter<'a> {
         if rect.w <= 0 || rect.h <= 0 {
             return;
         }
-        // Same crisp self-management as `button`: at the awkward fractional
-        // scales the 1-logical-pixel edges round unevenly, so redraw this recipe
-        // at exact device pixels there (the re-entry runs at `scale == 1.0`,
-        // which also breaks the recursion).
-        if self.wants_1x_crispness() {
-            return self.physical(rect, |p, r| p.light_button(r, theme, pressed));
-        }
-        self.stroke_rect(rect, theme.border);
-        let inner = rect.inset(1);
-        self.fill_rect(inner, theme.face);
-        if pressed {
-            // Depressed: a single shadow line on the top/left, no highlight and
-            // no bottom/right shadow, so the button reads as pushed in.
-            self.h_line(inner.x, inner.y, inner.w, theme.shadow);
-            self.v_line(inner.x, inner.y, inner.h, theme.shadow);
-            return;
-        }
-        // One highlight line on the top/left...
-        self.h_line(inner.x, inner.y, inner.w, theme.highlight);
-        self.v_line(inner.x, inner.y, inner.h, theme.highlight);
-        // ...against a 2px shadow on the bottom/right.
-        self.h_line(inner.x, inner.bottom() - 1, inner.w, theme.shadow);
-        self.v_line(inner.right() - 1, inner.y, inner.h, theme.shadow);
-        let inner2 = inner.inset(1);
-        self.h_line(inner2.x, inner2.bottom() - 1, inner2.w, theme.shadow);
-        self.v_line(inner2.right() - 1, inner2.y, inner2.h, theme.shadow);
+        self.crisp(rect, |p, f| {
+            p.fill_ring(f.ring(0), theme.border, theme.border);
+            p.fill_rect(f.inside(1), theme.face);
+            let inner = f.ring(1);
+            if pressed {
+                // Depressed: a single shadow line on the top/left, no highlight
+                // and no bottom/right shadow, so the button reads as pushed in.
+                p.fill_rect(inner.top, theme.shadow);
+                p.fill_rect(inner.left, theme.shadow);
+                return;
+            }
+            // One highlight line on the top/left...
+            p.fill_rect(inner.top, theme.highlight);
+            p.fill_rect(inner.left, theme.highlight);
+            // ...against a 2px shadow on the bottom/right: two rings sharing a
+            // depth, so the pair is exactly `depth(3) - depth(1)` deep.
+            p.fill_rect(inner.bottom, theme.shadow);
+            p.fill_rect(inner.right, theme.shadow);
+            let deeper = f.ring(2);
+            p.fill_rect(deeper.bottom, theme.shadow);
+            p.fill_rect(deeper.right, theme.shadow);
+        });
     }
 
-    /// Dotted Win 3.1 focus rectangle: a 1px dashed outline (every other
-    /// pixel) tracing the edges of `rect`. Like [`Self::button`], at the
-    /// fractional scales in `[0.9, 1.5)` the dash aliases — a 1-logical-pixel
-    /// dot rounds to 1 or 2 device pixels — so the ring is redrawn at exact
-    /// device pixels there, reusing this recipe (the re-entry runs at
-    /// `scale == 1.0`).
+    /// Dotted Win 3.1 focus rectangle: a dashed outline — one dot, one gap —
+    /// tracing the edges of `rect`.
+    ///
+    /// The one piece of chrome that wants a uniform weight rather than exact
+    /// depths, because what the eye reads in a dash is its rhythm. The dot is
+    /// [`Frame::depth(1)`](Frame::depth) square and the pitch twice that, so the
+    /// ring is evenly dotted at every scale; placing each dot at its exact
+    /// scaled position instead would put 2- and 3-pixel gaps between 2-pixel
+    /// dots at 2.25x, which reads as a smear and not as dots. The cost is a
+    /// pitch up to a pixel off nominal, which a dash has no geometry riding on.
     pub fn focus_rect(&mut self, rect: Rect, color: Color) {
         if rect.w <= 0 || rect.h <= 0 {
             return;
         }
-        if self.wants_1x_crispness() {
-            return self.physical(rect, |p, r| p.focus_rect(r, color));
-        }
-        let right = rect.right() - 1;
-        let bottom = rect.bottom() - 1;
-        let mut x = rect.x;
-        while x <= right {
-            self.pixel(x, rect.y, color);
-            self.pixel(x, bottom, color);
-            x += 2;
-        }
-        let mut y = rect.y;
-        while y <= bottom {
-            self.pixel(rect.x, y, color);
-            self.pixel(right, y, color);
-            y += 2;
-        }
+        self.crisp(rect, |p, f| {
+            let r = f.rect();
+            let dot = f.depth(1).min(r.w).min(r.h).max(1);
+            let pitch = 2 * dot;
+            // Both runs start on the rect's own corner, so the dash is anchored
+            // there rather than wherever the pitch happens to land — the way the
+            // Win 3.1 ring reads. A dot that would hang over the far edge is
+            // trimmed to it instead of spilling out.
+            let mut x = r.x;
+            while x < r.right() {
+                let w = dot.min(r.right() - x);
+                p.fill_rect(Rect::new(x, r.y, w, dot), color);
+                p.fill_rect(Rect::new(x, r.bottom() - dot, w, dot), color);
+                x += pitch;
+            }
+            let mut y = r.y;
+            while y < r.bottom() {
+                let h = dot.min(r.bottom() - y);
+                p.fill_rect(Rect::new(r.x, y, dot, h), color);
+                p.fill_rect(Rect::new(r.right() - dot, y, dot, h), color);
+                y += pitch;
+            }
+        });
     }
 
     /// Draw a line of regular-weight text. `x` / `y` and `size` are in logical
@@ -1448,5 +1664,334 @@ mod tests {
         assert_eq!(at(2, 2), 0xFFFFFFFF, "inside the clip is painted");
         assert_eq!(at(0, 0), 0, "outside the clip stays untouched");
         assert_eq!(at(3, 3), 0, "outside the clip stays untouched");
+    }
+
+    /// Every scale a saudade window is plausibly drawn at: the ladder Windows
+    /// and X11 hand over, plus the quarter steps a density-corrected Mac snaps
+    /// to (see [`crate::density`]). The frame primitives have to hold their
+    /// geometry on all of them, in order, which is what a [`Frame`]'s depths
+    /// are for.
+    const CHROME_SCALES: &[f32] = &[1.0, 1.25, 1.5, 2.0, 2.25, 2.5, 2.75, 3.0];
+
+    /// Paint `f` into a fresh `w × h` *device-pixel* buffer at `scale`.
+    fn chrome_buffer(w: i32, h: i32, scale: f32, f: impl FnOnce(&mut Painter)) -> Vec<u32> {
+        let mut pixels = vec![0u32; (w * h) as usize];
+        {
+            let mut p = Painter::new(&mut pixels, w, h, scale, 0, 0, FontSet::default());
+            f(&mut p);
+        }
+        pixels
+    }
+
+    /// Run-length encode a line of pixels into `(color, length)` pairs. What a
+    /// frame test wants to know is how thick each band came out, in order.
+    fn runs(line: impl Iterator<Item = u32>) -> Vec<(u32, i32)> {
+        let mut out: Vec<(u32, i32)> = Vec::new();
+        for px in line {
+            match out.last_mut() {
+                Some((color, len)) if *color == px => *len += 1,
+                _ => out.push((px, 1)),
+            }
+        }
+        out
+    }
+
+    /// The bands crossed going down column `x` / across row `y`.
+    fn column(px: &[u32], w: i32, h: i32, x: i32) -> Vec<(u32, i32)> {
+        runs((0..h).map(|y| px[(y * w + x) as usize]))
+    }
+
+    fn row(px: &[u32], w: i32, y: i32) -> Vec<(u32, i32)> {
+        runs((0..w).map(|x| px[(y * w + x) as usize]))
+    }
+
+    /// The device size a logical rect of `(w, h)` at the origin occupies.
+    fn phys(w: i32, h: i32, scale: f32) -> (i32, i32) {
+        (
+            (w as f32 * scale).round() as i32,
+            (h as f32 * scale).round() as i32,
+        )
+    }
+
+    /// What [`Frame::depth`] will answer: the only arithmetic a frame does,
+    /// including the pin to the design's own widths below 1.5x.
+    fn depth(d: i32, scale: f32) -> i32 {
+        let per_pixel = if scale.round() > 1.0 { scale } else { 1.0 };
+        (d as f32 * per_pixel).round() as i32
+    }
+
+    #[test]
+    fn a_chrome_unit_is_the_scale_rounded_to_a_whole_pixel() {
+        let expected = [
+            (1.0, 1),
+            (1.25, 1),
+            (1.5, 2),
+            (2.0, 2),
+            (2.25, 2),
+            (2.5, 3),
+            (2.75, 3),
+            (3.0, 3),
+        ];
+        for (scale, unit) in expected {
+            let mut pixels = [0u32; 4];
+            let p = Painter::new(&mut pixels, 2, 2, scale, 0, 0, FontSet::default());
+            assert_eq!(p.chrome_unit(), unit, "the unit at {scale}x");
+        }
+    }
+
+    /// A section through a plain button, at every scale: the black outline runs
+    /// to `depth(1)` and the bevel from there to `depth(3)`, on all four sides.
+    /// Both bands are measured from the button's edge, so neither carries the
+    /// other's rounding error, and the chrome is exactly as deep as the three
+    /// logical pixels it is drawn as.
+    #[test]
+    fn a_button_frames_bands_land_on_their_scaled_depths() {
+        let theme = Theme::windows_31();
+        for &scale in CHROME_SCALES {
+            let (border, chrome) = (depth(1, scale), depth(3, scale));
+            let (w, h) = phys(60, 30, scale);
+            let px = chrome_buffer(w, h, scale, |p| {
+                p.button(Rect::new(0, 0, 60, 30), &theme, false, false)
+            });
+            let expected = |across: i32| {
+                vec![
+                    (theme.border.0, border),
+                    (theme.highlight.0, chrome - border),
+                    (theme.face.0, across - 2 * chrome),
+                    (theme.shadow.0, chrome - border),
+                    (theme.border.0, border),
+                ]
+            };
+            assert_eq!(
+                column(&px, w, h, w / 2),
+                expected(h),
+                "vertical section of a button at {scale}x"
+            );
+            assert_eq!(
+                row(&px, w, h / 2),
+                expected(w),
+                "horizontal section of a button at {scale}x"
+            );
+        }
+    }
+
+    /// Up to 1.25x — up to 1.5x, where a logical pixel stops being worth a
+    /// single device one — the frame keeps the widths it is drawn at, and the
+    /// room the scale buys goes to the face instead. A button at 1.25x is a
+    /// quarter bigger around the same 1-pixel border and 2-pixel bevel: roomier,
+    /// and far sharper than the 3-pixel bevel under a 1-pixel border that
+    /// scaling the depths there would give.
+    #[test]
+    fn below_one_and_a_half_a_frame_keeps_its_drawn_widths() {
+        let theme = Theme::windows_31();
+        for &scale in &[1.0f32, 1.1, 1.25, 1.4] {
+            let (w, h) = phys(60, 30, scale);
+            let px = chrome_buffer(w, h, scale, |p| {
+                p.button(Rect::new(0, 0, 60, 30), &theme, false, false)
+            });
+            assert_eq!(
+                column(&px, w, h, w / 2),
+                vec![
+                    (theme.border.0, 1),
+                    (theme.highlight.0, 2),
+                    (theme.face.0, h - 6),
+                    (theme.shadow.0, 2),
+                    (theme.border.0, 1),
+                ],
+                "a button's frame at {scale}x, which should be the 1.0x one"
+            );
+        }
+        // From 1.5x the depths scale, and the border thickens with them.
+        let (w, h) = phys(60, 30, 1.5);
+        let px = chrome_buffer(w, h, 1.5, |p| {
+            p.button(Rect::new(0, 0, 60, 30), &theme, false, false)
+        });
+        assert_eq!(
+            column(&px, w, h, w / 2)[0],
+            (theme.border.0, 2),
+            "the border at 1.5x, where depths start scaling"
+        );
+    }
+
+    /// The default button's extra ring is the same black directly inside the
+    /// outline, so the border reads as one band two logical pixels deep — and
+    /// lands on `depth(2)` exactly, not on twice whatever the first ring
+    /// rounded to.
+    #[test]
+    fn a_default_buttons_doubled_border_lands_on_depth_two() {
+        let theme = Theme::windows_31();
+        for &scale in CHROME_SCALES {
+            let (border, chrome) = (depth(2, scale), depth(4, scale));
+            let (w, h) = phys(60, 30, scale);
+            let px = chrome_buffer(w, h, scale, |p| {
+                p.button(Rect::new(0, 0, 60, 30), &theme, false, true)
+            });
+            assert_eq!(
+                column(&px, w, h, w / 2),
+                vec![
+                    (theme.border.0, border),
+                    (theme.highlight.0, chrome - border),
+                    (theme.face.0, h - 2 * chrome),
+                    (theme.shadow.0, chrome - border),
+                    (theme.border.0, border),
+                ],
+                "vertical section of a default button at {scale}x"
+            );
+        }
+    }
+
+    /// Pressed, the bevel inverts: the shadow takes both logical pixels on the
+    /// top/left and a single highlight line sits opposite it.
+    #[test]
+    fn a_pressed_button_inverts_its_bevel() {
+        let theme = Theme::windows_31();
+        for &scale in CHROME_SCALES {
+            let (one, two, three) = (depth(1, scale), depth(2, scale), depth(3, scale));
+            let (w, h) = phys(60, 30, scale);
+            let px = chrome_buffer(w, h, scale, |p| {
+                p.button(Rect::new(0, 0, 60, 30), &theme, true, false)
+            });
+            assert_eq!(
+                column(&px, w, h, w / 2),
+                vec![
+                    (theme.border.0, one),
+                    (theme.shadow.0, three - one),
+                    (theme.face.0, h - three - two),
+                    (theme.highlight.0, two - one),
+                    (theme.border.0, one),
+                ],
+                "vertical section of a pressed button at {scale}x"
+            );
+        }
+    }
+
+    /// The scrollbar's lighter chrome: outline, one highlight line, and the
+    /// doubled shadow opposite — the band that used to double in width from one
+    /// quarter step to the next, and now runs from `depth(1)` to `depth(3)`.
+    #[test]
+    fn a_light_buttons_doubled_shadow_lands_on_depth_three() {
+        let theme = Theme::windows_31();
+        for &scale in CHROME_SCALES {
+            let (one, two, three) = (depth(1, scale), depth(2, scale), depth(3, scale));
+            let (w, h) = phys(30, 30, scale);
+            let px = chrome_buffer(w, h, scale, |p| {
+                p.light_button(Rect::new(0, 0, 30, 30), &theme, false)
+            });
+            assert_eq!(
+                column(&px, w, h, w / 2),
+                vec![
+                    (theme.border.0, one),
+                    (theme.highlight.0, two - one),
+                    (theme.face.0, h - two - three),
+                    (theme.shadow.0, three - one),
+                    (theme.border.0, one),
+                ],
+                "vertical section of a light button at {scale}x"
+            );
+        }
+    }
+
+    /// The point of measuring depths rather than multiplying a rounded
+    /// thickness: a 2-logical-pixel bevel stays within a device pixel of the
+    /// `2 × scale` it is drawn as, and never gains more than one pixel from one
+    /// rung of the ladder to the next. Rounding each of its two rings and adding
+    /// them gave 4 device pixels at 2.25x and 6 at 2.5x — a 50% jump for an 11%
+    /// change of scale, and the reason this test exists.
+    #[test]
+    fn a_bevel_deepens_by_at_most_a_pixel_from_one_scale_to_the_next() {
+        let theme = Theme::windows_31();
+        let mut previous: Option<(f32, i32)> = None;
+        for &scale in CHROME_SCALES {
+            let (w, h) = phys(30, 30, scale);
+            let px = chrome_buffer(w, h, scale, |p| {
+                p.light_button(Rect::new(0, 0, 30, 30), &theme, false)
+            });
+            // The doubled shadow: the fourth band down the middle column.
+            let bands = column(&px, w, h, w / 2);
+            let (color, shadow) = bands[3];
+            assert_eq!(color, theme.shadow.0, "the shadow band at {scale}x");
+
+            let nominal = 2.0 * scale;
+            assert!(
+                (shadow as f32 - nominal).abs() <= 1.0,
+                "a 2px bevel is {shadow} device px at {scale}x, nominal {nominal}"
+            );
+            if let Some((prev_scale, prev)) = previous {
+                assert!(
+                    (shadow - prev).abs() <= 1,
+                    "the bevel jumps from {prev} to {shadow} device px \
+                     between {prev_scale}x and {scale}x"
+                );
+            }
+            previous = Some((scale, shadow));
+        }
+    }
+
+    /// A dot, a gap, a dot — every one of them the same size, starting from the
+    /// lit corner. A dash is the one piece of chrome placed by weight rather
+    /// than by depth: what the eye reads here is the rhythm, and dots spaced at
+    /// their exact scaled positions would sit 2 and 3 pixels apart at 2.25x.
+    #[test]
+    fn a_focus_ring_dashes_at_a_uniform_pitch() {
+        for &scale in CHROME_SCALES {
+            let dot = depth(1, scale);
+            let (w, h) = phys(40, 20, scale);
+            let px = chrome_buffer(w, h, scale, |p| {
+                p.focus_rect(Rect::new(0, 0, 40, 20), Color::BLACK)
+            });
+            for (edge, bands) in [
+                ("top", row(&px, w, 0)),
+                ("bottom", row(&px, w, h - 1)),
+                ("left", column(&px, w, h, 0)),
+                ("right", column(&px, w, h, w - 1)),
+            ] {
+                // The tail of the run is where a trimmed final dot may sit, so
+                // check the first three dots and the gaps between them.
+                for (i, &band) in bands.iter().take(5).enumerate() {
+                    let ink = if i % 2 == 0 { Color::BLACK.0 } else { 0 };
+                    assert_eq!(band, (ink, dot), "dash {i} of the {edge} edge at {scale}x");
+                }
+            }
+        }
+    }
+
+    /// The etched divider's two tones each run to their own depth, so neither
+    /// takes the other's rounding: one device pixel apiece up to 1.25x, and 3
+    /// over 2 at 2.5x. Nothing hangs out the bottom onto whatever it divides.
+    #[test]
+    fn an_etched_divider_splits_its_two_tones_at_their_depths() {
+        let theme = Theme::windows_31();
+        for &scale in CHROME_SCALES {
+            let (w, slot) = phys(40, 2, scale);
+            let (first, second) = (depth(1, scale).min(slot), depth(2, scale).min(slot));
+            let h = slot + 4;
+            let px = chrome_buffer(w, h, scale, |p| p.etched_h_line(0, 0, 40, &theme));
+            assert_eq!(
+                column(&px, w, h, w / 2),
+                vec![
+                    (theme.shadow.0, first),
+                    (theme.highlight.0, second - first),
+                    (0, h - second),
+                ],
+                "the two tones of an etched line at {scale}x"
+            );
+        }
+    }
+
+    /// A widget shallower than the chrome it wears overlaps itself rather than
+    /// spilling over its neighbour: a 1-logical-pixel rule at 2.75x is three
+    /// device pixels of buffer and its outline is capped there, so the rule
+    /// fills solid and stops.
+    #[test]
+    fn a_frame_deeper_than_its_widget_stays_inside_its_bounds() {
+        let (w, h) = phys(8, 1, 2.75);
+        let px = chrome_buffer(w, h + 4, 2.75, |p| {
+            p.stroke_rect(Rect::new(0, 0, 8, 1), Color::BLACK)
+        });
+        assert_eq!(
+            column(&px, w, h + 4, w / 2),
+            vec![(Color::BLACK.0, h), (0, 4)],
+            "the outline fills the rule and stops at its bottom edge"
+        );
     }
 }

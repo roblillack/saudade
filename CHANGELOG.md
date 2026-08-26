@@ -34,6 +34,61 @@ While pre-1.0, the minor version is bumped for breaking changes.
   every backend, leaving `Painter::scale` as the one the window is drawn at.
   The two differed only under Wayland's fractional scaling before; a macOS
   density correction is the second case.
+- `Painter::crisp(rect, |p, frame| …)` runs a frame recipe in device pixels,
+  against a `Frame` that places chrome the way `include_svg!` marks are
+  rasterized: the geometry is written in resolution-independent units and each
+  boundary is scaled and rounded on the way to the buffer. `Frame::depth(d)` is
+  how far in from the widget's edge logical depth `d` lands, `Frame::ring(d)`
+  the four sides of the ring between two depths (as a `Ring`, filled with
+  `Painter::fill_ring` or side by side), `Frame::inside(d)` what is left for the
+  face. `Painter::chrome_unit` is the scale rounded to a whole pixel, for a lone
+  thin line — a divider, a caret, a grid rule — and nothing deeper.
+
+### Changed
+
+- Button frames, bevels and focus rings are crisp at a fractional scale. A Win
+  3.1 button is four or five 1-logical-pixel lines stacked on each other, and
+  snapping each of them on its own — from its own position in the window —
+  rounds them to different widths: at 2.25x the same frame came out heavier
+  along one edge than the opposite one and different again on the button beside
+  it, and a dotted focus ring degenerated into a smear of two- and three-pixel
+  dots with one- and two-pixel gaps. Every frame primitive — `stroke_rect`,
+  `raised_bevel`, `sunken_bevel`, `button`, `light_button`, `focus_rect`,
+  `etched_h_line` — now draws in device pixels off a `Frame`, so a ring is the
+  same thickness on all four sides of a frame and the same on every widget at
+  that scale, and a dash keeps its pitch.
+
+  Because a `Frame` rounds each boundary's *depth* rather than each line's
+  thickness, nothing accumulates: a bevel two logical pixels deep lands within
+  half a device pixel of `2 × scale` however deep the chrome in front of it
+  goes — 3 device pixels at 1.5x, 5 at 2.25x and 2.5x, 6 at 3.0x. Rounding the
+  thickness to a whole `chrome_unit` and multiplying, which keeps every ring the
+  same weight, rounds the wrong quantity: it would step in whole units, giving 4
+  device pixels at 2.25x and 6 at 2.5x — a 50% jump for an 11% change of scale.
+
+  Below 1.5x the depths are pinned to the design's own instead of scaled. A
+  logical pixel is still worth a single device pixel there, so half a device
+  pixel of rounding is most of a 1-pixel line, and scaling the depths anyway
+  would put a 3-pixel bevel under a 1-pixel border at 1.25x where the design
+  says 2 and 1. The room the scale buys goes to the face instead: a button at
+  1.25x is a quarter bigger around the border and bevel it is drawn with.
+
+  Chrome at 1.0x, at 1.25x and at integer scales is byte-for-byte unchanged —
+  the depths there are the drawn ones or an exact multiple of them. 1.5x moves,
+  and so does `etched_h_line` at 1.25x, it having had no crisp pass before: its
+  two tones were 2 device pixels and 1, or 1 and 2, depending on the row the
+  divider landed on, and are now 1 apiece.
+- Snapshot tests run at 2.25x as well as 1.0x / 1.25x / 1.5x / 2.0x, that being
+  what a density-corrected Mac renders at. The painter's own frame tests walk
+  the whole quarter ladder to 3.0x, asserting each band's exact device-pixel
+  depth.
+
+### Removed
+
+- `Painter::wants_1x_crispness`, whose `[0.9, 1.5)` range described a narrower
+  fix than the one that replaced it: `Painter::crisp` is unconditional, so a
+  widget no longer branches on the scale at all. Custom chrome that gated a
+  `Painter::physical` pass on it becomes one `crisp` call.
 
 ## [0.6.1] - 2026-08-25
 

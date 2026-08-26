@@ -2,8 +2,13 @@
 //!
 //! All tests render against the bundled DejaVu fonts so glyph rasterization
 //! is stable regardless of which fonts happen to be installed on the host.
-//! Tests run at four scales (1.0x, 1.25x, 1.5x, 2.0x) so we catch regressions
-//! in fractional-DPI snapping as well as integer-DPI layout.
+//! Tests run at five scales (1.0x, 1.25x, 1.5x, 2.0x, 2.25x) so we catch
+//! regressions in fractional-DPI snapping as well as integer-DPI layout. The
+//! last of them is a quarter step above an integer, which is what a
+//! density-corrected Mac renders at (see `saudade::density`) and the hardest
+//! case for the chrome: a logical pixel is worth 2.25 device ones there, so
+//! every frame line has to take its weight from `Painter::chrome_unit` rather
+//! than from wherever its own edges happened to round to.
 //!
 //! Each rendered frame is compared to a checked-in baseline PNG. In practice
 //! fontdue rasterizes identically across the dev and CI machines — measured
@@ -37,7 +42,7 @@ pub fn mono_font() -> Font {
 }
 
 /// The fractional and integer scales every widget should look correct at.
-pub const SCALES: &[f32] = &[1.0, 1.25, 1.5, 2.0];
+pub const SCALES: &[f32] = &[1.0, 1.25, 1.5, 2.0, 2.25];
 
 /// Per-pixel amount of difference we tolerate: a channel may be off by up to
 /// this many levels (0–255) without counting as a change. Measured cross-machine
