@@ -1,0 +1,57 @@
+name: Release
+
+# cargo-release pushes the tag; everything below turns that tag into a GitHub
+# release. Nothing is built here: saudade is a library, so a release carries no
+# artifacts — only the notes lifted out of CHANGELOG.md. The crates themselves
+# still go to crates.io from `cargo release` on the maintainer's machine.
+on:
+  push:
+    tags:
+      # The two crates are versioned independently and get collision-free tags
+      # (see release.toml): `v{{version}}` for the root `saudade` crate and
+      # `saudade-macros-v{{version}}` for the macro crate.
+      - "v[0-9]+.*"
+      - "saudade-macros-v[0-9]+.*"
+
+jobs:
+  # `v0.6.2` and friends: the release body is the matching `## [0.6.2]` section
+  # of CHANGELOG.md, which create-gh-release-action extracts with
+  # parse-changelog. A tag whose version has no changelog section fails the job
+  # rather than publishing an empty release, which is the check we want — the
+  # pre-release-replacements in Cargo.toml are what fill that section in, so a
+  # failure here means the [Unreleased] rollover did not happen.
+  release:
+    name: Publish release notes
+    runs-on: ubuntu-latest
+    if: ${{ !startsWith(github.ref_name, 'saudade-macros-') }}
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Create GitHub release with changelog notes
+        uses: taiki-e/create-gh-release-action@v1
+        with:
+          changelog: CHANGELOG.md
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+  # `saudade-macros-v0.2.0`: the macro crate has no changelog of its own, and
+  # feeding it saudade's would match a same-numbered *saudade* section and put
+  # the wrong notes on the release. So this one is deliberately body-less, the
+  # way the existing saudade-macros releases are. The action reads the
+  # `saudade-macros-` prefix off the tag itself; the title stays the tag name.
+  release-macros:
+    name: Publish release (saudade-macros)
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref_name, 'saudade-macros-')
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Create GitHub release
+        uses: taiki-e/create-gh-release-action@v1
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
