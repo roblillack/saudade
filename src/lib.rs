@@ -37,7 +37,6 @@ mod background;
 pub mod chrome;
 #[cfg(target_os = "macos")]
 mod coretext;
-mod density;
 mod event;
 mod font;
 mod geometry;
@@ -45,6 +44,7 @@ pub mod mock;
 mod painter;
 mod svg;
 mod theme;
+mod ui_scale;
 #[cfg(all(unix, not(target_os = "macos")))]
 mod wayland;
 mod widget;

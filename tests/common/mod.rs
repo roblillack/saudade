@@ -4,9 +4,9 @@
 //! is stable regardless of which fonts happen to be installed on the host.
 //! Tests run at five scales (1.0x, 1.25x, 1.5x, 2.0x, 2.25x) so we catch
 //! regressions in fractional-DPI snapping as well as integer-DPI layout. The
-//! last of them is a quarter step above an integer, which is what a
-//! density-corrected Mac renders at (see `saudade::density`) and the hardest
-//! case for the chrome: a logical pixel is worth 2.25 device ones there, so
+//! last of them is a quarter step above an integer, which is what a Retina Mac
+//! renders at (see `saudade::ui_scale`) and the hardest case for the chrome: a
+//! logical pixel is worth 2.25 device ones there, so
 //! every frame line has to take its weight from `Painter::chrome_unit` rather
 //! than from wherever its own edges happened to round to.
 //!

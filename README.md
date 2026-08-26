@@ -46,7 +46,7 @@ Reference apps live under `examples/`. Run any of them with
 | `circle_drawer` | 7GUIs task 6 — a custom canvas (no circle primitive: midpoint outlines, span-filled disks) with hover selection, a `ContextMenu` right-click menu, a real modal dialog (`Modal`) hosting the diameter `Slider`, and snapshot undo/redo.                                                                                                                                                                        |
 | `cells`         | 7GUIs task 7 — a scrollable A–Z / 0–99 spreadsheet `Grid` (built on `ScrollBar` + `TextInput`) with a formula engine: cell refs, `+ - * /`, ranges, `SUM`/`AVG`/…, reactive recompute and cycle detection.                                                                                                                                                                                       |
 | `patterns`      | Previews the window background patterns (`none`, `solid`, `dots`, `lines`, `diagonal`, `cross-stitch`): press `p` to cycle the pattern and `c` to cycle the color. Every app draws one behind its widgets — default `superlight` `diagonal`, overridable with `SAUDADE_WINDOW_PATTERN` / `SAUDADE_WINDOW_PATTERN_COLOR` (e.g. `SAUDADE_WINDOW_PATTERN=dots SAUDADE_WINDOW_PATTERN_COLOR=light`). |
-| `scaling`       | Previews widgets at an arbitrary logical→physical scale via `Painter::draw_scaled`: a `Slider` and two rows of preset `Button`s walking the quarter ladder a density-corrected Mac snaps to (1.0x / 1.25x / … / 3.0x, plus 3.5x) drive a "preview scale" — starting at the display's OS scale — that a small panel of real widgets (`TextInput`, `Dropdown`, `Checkbox`, `Button`s including a focused one for its dotted focus rectangle, `ProgressBar`) redraws at, plus a "zoom in 2x" `Checkbox` that magnifies the result. The window resizes itself (via `EventCtx::request_window_size`) to fit the preview at the chosen scale. The window's own (OS-owned) scale is never touched.                                  |
+| `scaling`       | Previews widgets at an arbitrary logical→physical scale via `Painter::draw_scaled`: a `Slider` and two rows of preset `Button`s walking a quarter ladder (1.0x / 1.25x / … / 3.0x, plus 3.5x) drive a "preview scale" — starting at the display's OS scale — that a small panel of real widgets (`TextInput`, `Dropdown`, `Checkbox`, `Button`s including a focused one for its dotted focus rectangle, `ProgressBar`) redraws at, plus a "zoom in 2x" `Checkbox` that magnifies the result. The window resizes itself (via `EventCtx::request_window_size`) to fit the preview at the chosen scale. The window's own (OS-owned) scale is never touched.                                  |
 | `svg`           | Compares `include_svg!` (SVG baked to polygons at compile time, filled at runtime — no SVG crate in the binary) against `include_str!` + `resvg` (parse + rasterize at runtime). Draws six icons both ways for a side-by-side fidelity check and prints a micro-benchmark to the console (run with `--release`). Needs `resvg` only as a dev-dependency, for the comparison.                                                                                                                                                |
 | `chrome`        | Renders an "about box" offscreen and wraps it in Canoe-style window chrome (title bar, frame, drop shadow on a teal desktop) via `MockBackend::render_framed`, writing one PNG per frame style (`Resizable` / `Fixed` / `Dialog`). Opens no window — it generates screenshots.                                                                                                                    |
 
@@ -1332,7 +1332,8 @@ available for layout decisions.
 The window's scale factor is owned by the OS — adopted at startup and
 refreshed when the platform reports a change. There is no API to
 override it: density independence comes from designing in logical
-pixels, not from forcing a particular scale.
+pixels, not from forcing a particular scale. How big a logical pixel
+itself is *is* configurable — see below — but it is fixed for the run.
 
 ### Frames as vectors
 
@@ -1428,46 +1429,54 @@ with that resource unset it measures the panel through XRandR and
 divides *that* by 96.
 
 macOS promises nothing of the kind. `backingScaleFactor` is 1 or 2 — a
-property of the panel's backing store, not of its density — and the
-user changes their density by changing the *resolution*, which slides
-the point size around underneath a scale factor that never budges. A
-27" 4K display in its default HiDPI mode puts 108 points in an inch
-and a 14" MacBook Pro puts 127.5, both reporting exactly 2.0, so the
-same chrome lands 11% short on one and 25% short on the other. So on macOS
-saudade does what X11 already does for it: measures the display
-(`CGDisplayScreenSize`), divides by 96, and multiplies that correction
-onto the OS scale factor. The OS still owns how many physical pixels a
-point is worth; the correction only decides how many logical pixels
-make an inch.
+property of the panel's backing store, not of its density — and there
+is no "make the UI 125% bigger" setting to move it: the user changes
+the *resolution* instead, which slides the point size around
+underneath a scale factor that never budges. A 27" 4K display in its
+default HiDPI mode puts 108 points in an inch and a 14" MacBook Pro
+puts 127.5, both reporting exactly 2.0, so the same chrome lands 11%
+short on one and 25% short on the other. Apple's own metrics absorb
+this — the HIG's 24-point menu bar is drawn for ~110 ppi, not for 96 —
+and ours can't.
 
-The *product* is then snapped to a quarter — 2.25x, 2.5x, 2.75x on a
-Retina Mac — since that is the number that has to look right. At a
-quarter step an edge lands on an exact physical pixel every four
-logical ones, and the ladder is coarse enough that a panel measuring
-near a step doesn't flip between two sizes when `CGDisplayScreenSize`
-re-derives its millimetres for a new display mode. The 27" 4K this was
-written on measures an eighth over 96 dpi and lands dead centre of
-2.25x; a 14" MacBook Pro measures a third over and rounds up to 2.75x.
-It is re-derived when the window moves to another display, which on a
-Mac is a density change no `ScaleFactorChanged` event will ever
-report.
+So saudade scales a logical pixel by a fixed **1.125** on macOS: a
+point of 1/108 in, which is what Apple's default HiDPI mode gives a
+27" 4K and close to the density the HIG's metrics assume. It
+multiplies the OS scale factor rather than replacing it, so a Retina
+Mac draws at an effective 2.25x — a quarter step, where a logical edge
+lands on a whole device pixel every four logical pixels, and the ladder
+the chrome is tested along. Every other platform defaults to 1.0,
+having nothing to correct.
 
-Note what "physical pixel" means there: the framebuffer macOS gives
+The obvious alternative is to measure the panel (`CGDisplayScreenSize`)
+and divide by 96, the way winit does for X11 — and it defeats itself.
+On macOS the resolution *is* the size knob; the "Larger Text ↔ More
+Space" slider in Display Settings is nothing but a list of display
+modes. A correction derived from the measurement cancels that knob
+out: pick a roomier mode and every point gets smaller by exactly as
+much as the correction grows, so the UI comes back the size it was.
+A blunt constant leaves the knob working, and a Mac user resizing
+saudade's chrome does it the same way they resize everything else.
+Nothing similar goes wrong on Windows, where the 125% the user picks
+*is* the scale factor, or on X11, where `Xft.dpi` is set by hand and
+the measurement is only the fallback.
+
+Note what "physical pixel" means on a Mac: the framebuffer macOS gives
 us, which is not always the glass. A HiDPI mode renders at twice its
 point size, and only lands on the panel 1:1 when that product happens
 to *be* the panel — true of every built-in Retina display, and of a
-4K panel only in its "looks like 1920x1080" mode. The 27" 4K above,
-in the 2560x1440 mode macOS picks by default, renders 5120x2880 and
-is scaled down to 3840x2160 for display, so every edge saudade snaps
-is resampled by 0.75 on the way out. That softness belongs to the
-display mode, not to the scale factor, and no correction can undo it:
-the choice is a crisp mode with a physically larger UI, or the right
-size slightly soft.
+4K panel only in its "looks like 1920x1080" mode. A 27" 4K in the
+2560x1440 mode macOS picks by default renders 5120x2880 and is scaled
+down to 3840x2160 for display, so every edge saudade snaps is
+resampled by 0.75 on the way out. That softness belongs to the display
+mode, not to the scale factor, and no scale can undo it: the choice is
+a crisp mode with a physically larger UI, or the right size slightly
+soft.
 
 Two ways to take the wheel:
 
 ```rust
-App::new(cfg, root).with_ui_scale(1.0).run();  // OS scale factor, uncorrected
+App::new(cfg, root).with_ui_scale(1.0).run();  // OS scale factor, unscaled
 ```
 
 ```console
@@ -1477,9 +1486,9 @@ $ SAUDADE_UI_SCALE=1.5 cargo run --example filer   # or `auto` for the default
 The environment variable wins over `with_ui_scale`, in the spirit of
 winit's own `WINIT_X11_SCALE_FACTOR`, so a UI can be tried at other
 sizes without touching the program. `Painter::scale()` reports the
-corrected scale the window draws at and `Painter::system_scale()` the
-one the display reports; on macOS with a correction in play they
-differ. The Wayland backend does not implement the knob — a Wayland
+scale the window draws at and `Painter::system_scale()` the one the
+display reports; on macOS, or with a scale set by hand, they differ.
+The Wayland backend does not implement the knob — a Wayland
 compositor's logical unit is already 96-dpi-normalized, so there is
 nothing to correct.
 

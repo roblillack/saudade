@@ -18,10 +18,11 @@
 //!
 //! The factor is the *absolute* logical→physical scale, the same number the OS
 //! reports. Try the fractional steps (1.25x, 1.5x): that's where saudade's
-//! crisp physical-pixel chrome pass earns its keep. The presets walk the
-//! quarter ladder a macOS density correction snaps to — the only scales the
-//! runtime itself ever picks — up into the range where a logical pixel is worth
-//! two-and-a-fraction physical ones and every edge has to round.
+//! crisp physical-pixel chrome pass earns its keep. The presets walk a quarter
+//! ladder covering what the runtime itself picks — the steps Windows and X11
+//! hand over, and the 2.25x a Retina Mac draws at — up into the range where a
+//! logical pixel is worth two-and-a-fraction physical ones and every edge has
+//! to round.
 //!
 //! Two checkboxes along the bottom pick how the rendered panel reaches the
 //! screen, and they are the two halves of what a scale factor means:
@@ -49,7 +50,8 @@
 //! when it differs, the scale the window is really being drawn at. It differs
 //! on Wayland, where a fractional display (say 150%) is oversampled at 2.0x and
 //! resampled down by the compositor, and on macOS, where saudade multiplies the
-//! backing factor by a correction for the display's physical density.
+//! backing factor by a UI scale, the desktop being laid out in a point denser
+//! than the 96-dpi one the widgets are drawn for.
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -103,12 +105,11 @@ const MAX_PCT: i32 = 350;
 /// Preset scales, ascending, filling the grid row by row: the first row runs
 /// 1.0x to 2.0x and the second carries on to 3.0x, with a 3.5x at the end.
 ///
-/// Every one is a quarter step, because a quarter is all a macOS density
-/// correction ever snaps to — so the grid is the ladder itself, walked in
-/// order. It spans what both kinds of Mac can land on: the low steps are a
-/// dense display on a 1x machine, the 2.25x–2.75x middle is where a Retina Mac
-/// ends up (a 27" 4K measures 2.25x, a 14" MacBook Pro panel 2.75x), and 3.5x
-/// is the far end.
+/// Every one is a quarter step, which is the ladder the runtime itself walks:
+/// the low steps are what Windows and X11 hand over, and 2.25x is what a Retina
+/// Mac draws at once macOS's UI scale is folded into its backing factor. Above
+/// that is headroom — a display denser than any of them, to see the chrome hold
+/// its geometry.
 const PRESETS: [(&str, i32); 10] = [
     ("1.0x", 100),
     ("1.25x", 125),
@@ -677,8 +678,8 @@ impl Widget for FactorReadout {
 /// rasterizes at. Two backends make those differ, and the bar appends the
 /// rendering scale when they do: Wayland oversamples a fractional display (we
 /// draw at 2.0x, the compositor resamples down to 1.5x), and macOS multiplies
-/// in a density correction, since a Mac's scale factor says only whether the
-/// panel is Retina and nothing about how dense it is.
+/// in a UI scale, since a Mac's scale factor says only whether the panel is
+/// Retina and nothing about how dense its point is.
 struct StatusBar {
     win: Rc<Cell<Size>>,
 }
@@ -705,7 +706,7 @@ impl Widget for StatusBar {
         let mut line = format!("System scale factor: {system:.2}x");
         // The two part company where the display's own scale isn't the one the
         // UI wants drawing at: a compositor resampling an oversampled buffer
-        // down, or a density correction sizing a logical pixel for the glass.
+        // down, or a UI scale sizing a logical pixel for a denser point.
         if (win_scale - system).abs() > 0.01 {
             line.push_str(&format!("    ·    Rendering at {win_scale:.2}x"));
         }

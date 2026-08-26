@@ -413,8 +413,8 @@ impl<'a> Painter<'a> {
     ///
     /// Two backends have something to say here: Wayland, whose integer buffer
     /// scale is not the fractional scale the compositor presents at, and the
-    /// winit runtime, whose scale carries saudade's density correction on top
-    /// of the factor the display reports.
+    /// winit runtime, whose scale carries saudade's UI scale on top of the
+    /// factor the display reports.
     pub(crate) fn set_system_scale(&mut self, scale: f32) {
         self.system_scale = scale.max(0.01);
     }
@@ -1985,10 +1985,10 @@ mod tests {
     }
 
     /// Every scale a saudade window is plausibly drawn at: the ladder Windows
-    /// and X11 hand over, plus the quarter steps a density-corrected Mac snaps
-    /// to (see [`crate::density`]). The frame primitives have to hold their
-    /// geometry on all of them, in order, which is what a [`Frame`]'s depths
-    /// are for.
+    /// and X11 hand over, plus the quarter steps a Mac lands on once the
+    /// platform's UI scale is folded in (see [`crate::ui_scale`]). The frame
+    /// primitives have to hold their geometry on all of them, in order, which
+    /// is what a [`Frame`]'s depths are for.
     const CHROME_SCALES: &[f32] = &[1.0, 1.25, 1.5, 2.0, 2.25, 2.5, 2.75, 3.0];
 
     /// Paint `f` into a fresh `w × h` *device-pixel* buffer at `scale`.
