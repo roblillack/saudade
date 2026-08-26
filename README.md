@@ -1333,7 +1333,7 @@ The window's scale factor is owned by the OS — adopted at startup and
 refreshed when the platform reports a change. There is no API to
 override it: density independence comes from designing in logical
 pixels, not from forcing a particular scale. How big a logical pixel
-itself is *is* configurable — see below — but it is fixed for the run.
+itself is follows from the display — see below.
 
 ### Frames as vectors
 
@@ -1420,54 +1420,81 @@ nothing.
 ### How big a logical pixel is
 
 A logical pixel is a **96-dpi** pixel: a `List` row is 18 of them, a
-checkbox 13, the padding either side of a menu-bar label 8 — Windows 3.1
-metrics, drawn for a display where 96 of them span an inch. Two of the
-three platforms keep that promise for us. winit's Windows backend
-divides the reported DPI by 96, so 100% / 125% / 150% all leave a
-logical pixel at 1/96 in; its X11 backend divides `Xft.dpi` by 96, and
-with that resource unset it measures the panel through XRandR and
-divides *that* by 96.
+checkbox 13, the padding either side of a menu-bar label 8 — Windows
+3.1 metrics, drawn for a display where 96 of them span an inch.
 
-macOS promises nothing of the kind. `backingScaleFactor` is 1 or 2 — a
-property of the panel's backing store, not of its density — and there
-is no "make the UI 125% bigger" setting to move it: the user changes
-the *resolution* instead, which slides the point size around
-underneath a scale factor that never budges. A 27" 4K display in its
-default HiDPI mode puts 108 points in an inch and a 14" MacBook Pro
-puts 127.5, both reporting exactly 2.0, so the same chrome lands 11%
-short on one and 25% short on the other. Apple's own metrics absorb
-this — the HIG's 24-point menu bar is drawn for ~110 ppi, not for 96 —
-and ours can't.
+Except that no display ever did. 96 dpi was Windows' *nominal* figure,
+and the glass these metrics were drawn against was much coarser: a 14"
+CRT at 640x480 runs 57 ppi, a 15" at 1024x768 runs 85. A 13-pixel
+checkbox was a sixth of an inch across on the screen it was designed
+on, and it is that size — the size the chrome was drawn to *feel* —
+that saudade is trying to put back. Rendered at a true 96 dpi the whole
+UI comes out small.
 
-So saudade scales a logical pixel by a fixed **1.125** on macOS: a
-point of 1/108 in, which is what Apple's default HiDPI mode gives a
-27" 4K and close to the density the HIG's metrics assume. It
-multiplies the OS scale factor rather than replacing it, so a Retina
-Mac draws at an effective 2.25x — a quarter step, where a logical edge
-lands on a whole device pixel every four logical pixels, and the ladder
-the chrome is tested along. Every other platform defaults to 1.0,
-having nothing to correct.
+So the chrome is drawn **a quarter over nominal**, which puts a logical
+pixel at 1/77 in — the coarse end of what 90s screens really ran. The
+question is a quarter over nominal *of what*, and the platforms
+disagree about what their own logical unit stands for:
 
-The obvious alternative is to measure the panel (`CGDisplayScreenSize`)
-and divide by 96, the way winit does for X11 — and it defeats itself.
-On macOS the resolution *is* the size knob; the "Larger Text ↔ More
-Space" slider in Display Settings is nothing but a list of display
-modes. A correction derived from the measurement cancels that knob
-out: pick a roomier mode and every point gets smaller by exactly as
-much as the correction grows, so the UI comes back the size it was.
-A blunt constant leaves the knob working, and a Mac user resizing
-saudade's chrome does it the same way they resize everything else.
-Nothing similar goes wrong on Windows, where the 125% the user picks
-*is* the scale factor, or on X11, where `Xft.dpi` is set by hand and
-the measurement is only the fallback.
+- **Windows and X11** hand over a ratio against 96 dpi, so their unit
+  is the nominal one already. winit's Windows backend divides the
+  reported DPI by 96, so 100% / 125% / 150% all leave a logical pixel
+  at 1/96 in; its X11 backend divides `Xft.dpi` by 96, and with that
+  resource unset measures the panel through XRandR and divides *that*
+  by 96. The correction is **1.25** as it stands.
+- **macOS in a HiDPI mode** hands over a `backingScaleFactor` of 2 — a
+  count of device pixels per point, not a density — and lays the
+  desktop out in a point nearer 1/108 in: a 27" 4K in its default mode
+  puts 108 points in an inch, a 14" MacBook Pro 127.5, both reporting
+  exactly 2.0. Reaching the same physical size from a denser unit takes
+  108/96 more, so the correction is 1.25 × 108/96 = **1.40625**.
+- **macOS in a 1x mode** is back to the nominal unit — a point is a
+  device pixel there, and the density is whatever the panel's own is,
+  the same position Windows and X11 leave us in. So **1.25**, like
+  them.
+
+The *product* — the OS factor times that correction — is snapped to a
+quarter, since the number that has to look right is the scale the
+window is really drawn at. At a quarter step a logical edge lands on a
+whole device pixel every four logical pixels; the nearest twelfth only
+manages every six. It's also the ladder the chrome is tested along.
+
+One panel, both platforms, as a check that the two baselines agree — a
+27" 4K, which Windows drives at 150% and macOS in its default "looks
+like 2560x1440" HiDPI mode. Both lay the desktop out at ~109 points
+per inch:
+
+```text
+Windows  1.5 x 1.25    = 1.875  -> 2.0   2.0 device px per logical px
+macOS    2.0 x 1.40625 = 2.8125 -> 2.75  2.75 x 0.75 = 2.06 on the glass
+```
+
+The macOS row carries the extra 0.75 because that mode renders
+5120x2880 and is scaled down to the panel's 3840x2160 — so the two land
+within 3% of each other on the same glass, at very nearly the same
+physical size. The scale follows the display, so a window dragged to a
+screen with a different factor picks up the new one on the way.
+
+What saudade deliberately does *not* do is measure the panel
+(`CGDisplayScreenSize`) and divide, the way winit does for X11 — that
+defeats itself on macOS. There the resolution *is* the size knob; the
+"Larger Text ↔ More Space" slider in Display Settings is nothing but a
+list of display modes. A correction derived from the measurement
+cancels that knob out: pick a roomier mode and every point gets smaller
+by exactly as much as the correction grows, so the UI comes back the
+size it was. A constant base leaves the knob working, and a Mac user
+resizing saudade's chrome does it the same way they resize everything
+else. On Windows and X11 the knob is the scale factor itself, which is
+already being multiplied, so it keeps working there for the same
+reason.
 
 Note what "physical pixel" means on a Mac: the framebuffer macOS gives
 us, which is not always the glass. A HiDPI mode renders at twice its
 point size, and only lands on the panel 1:1 when that product happens
 to *be* the panel — true of every built-in Retina display, and of a
-4K panel only in its "looks like 1920x1080" mode. A 27" 4K in the
-2560x1440 mode macOS picks by default renders 5120x2880 and is scaled
-down to 3840x2160 for display, so every edge saudade snaps is
+4K panel only in its "looks like 1920x1080" mode. The 27" 4K above, in
+the 2560x1440 mode macOS picks by default, renders 5120x2880 and is
+scaled down to 3840x2160 for display, so every edge saudade snaps is
 resampled by 0.75 on the way out. That softness belongs to the display
 mode, not to the scale factor, and no scale can undo it: the choice is
 a crisp mode with a physically larger UI, or the right size slightly
@@ -1476,7 +1503,7 @@ soft.
 Two ways to take the wheel:
 
 ```rust
-App::new(cfg, root).with_ui_scale(1.0).run();  // OS scale factor, unscaled
+App::new(cfg, root).with_ui_scale(1.0).run();  // OS scale factor, uncorrected
 ```
 
 ```console
@@ -1487,10 +1514,9 @@ The environment variable wins over `with_ui_scale`, in the spirit of
 winit's own `WINIT_X11_SCALE_FACTOR`, so a UI can be tried at other
 sizes without touching the program. `Painter::scale()` reports the
 scale the window draws at and `Painter::system_scale()` the one the
-display reports; on macOS, or with a scale set by hand, they differ.
-The Wayland backend does not implement the knob — a Wayland
-compositor's logical unit is already 96-dpi-normalized, so there is
-nothing to correct.
+display reports; with a base applied they differ, which is the normal
+case. The Wayland backend does not implement the knob — it renders at
+the integer buffer scale the compositor asks for.
 
 What a widget *can* do is render content at a scale of its own
 choosing. `Painter::draw_scaled(area, scale, zoom, bg, |p| …)` draws
