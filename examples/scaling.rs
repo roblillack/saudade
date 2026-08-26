@@ -8,11 +8,11 @@
 //! that DPI would (chrome snapped to device pixels, text re-rasterized at its
 //! physical size, nothing resampled), into a region of the surface.
 //!
-//! This demo wires a [`Slider`] and a row of preset [`Button`]s to a shared
+//! This demo wires a [`Slider`] and two rows of preset [`Button`]s to a shared
 //! "preview scale" factor, then hands it to a `ScalePreview` widget that draws
 //! a small panel of real widgets — a text input, a dropdown, a checkbox,
-//! buttons, a progress bar, a scrollbar — at that scale, in a canvas below the
-//! controls. The slider starts at this display's actual OS scale, so the panel
+//! buttons (one of them focused, for its dotted focus rectangle), a progress
+//! bar, a scrollbar — at that scale, in a canvas below the controls. The slider starts at this display's actual OS scale, so the panel
 //! opens looking exactly like the rest of the window.
 //!
 //! The window resizes to the *space the preview needs*: whenever the scale
@@ -24,17 +24,20 @@
 //!
 //! The factor is the *absolute* logical→physical scale, the same number the OS
 //! reports. Try the fractional steps (1.25x, 1.5x): that's where saudade's
-//! crisp physical-pixel chrome pass earns its keep. The "Zoom in 2x" checkbox
+//! crisp physical-pixel chrome pass earns its keep. The presets walk the
+//! quarter ladder a macOS density correction snaps to — the only scales the
+//! runtime itself ever picks — up into the range where a logical pixel is worth
+//! two-and-a-fraction physical ones and every edge has to round. The "Zoom in 2x" checkbox
 //! magnifies the *rendered result* 2× (a pure pixel copy — it does not re-run
 //! the scaling at a higher factor) so you can see the per-pixel snapping a scale
 //! produced.
 //!
 //! A status bar along the bottom reports the window's *actual* OS scale factor
-//! (`Painter::system_scale`) — independent of the preview slider above. On
-//! Wayland a fractional display (say 150%) makes that differ from the integer
-//! buffer scale we rasterize at, so the bar also notes that the compositor is
-//! resampling the oversampled buffer down. On every other backend the two match
-//! and the note is omitted.
+//! (`Painter::system_scale`) — independent of the preview slider above — and,
+//! when it differs, the scale the window is really being drawn at. It differs
+//! on Wayland, where a fractional display (say 150%) is oversampled at 2.0x and
+//! resampled down by the compositor, and on macOS, where saudade multiplies the
+//! backing factor by a correction for the display's physical density.
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -52,30 +55,59 @@ use saudade::{
 /// the scale factor (or the 2× zoom) resizes the window to the needed space.
 const MIN_W: i32 = 480;
 const CANVAS_X: i32 = 24;
-const CANVAS_Y: i32 = 198;
 const MARGIN: i32 = 16;
 const PANEL_PAD: i32 = 24;
 /// Height of the bottom status bar that reports the real OS scale factor.
 const FOOTER_H: i32 = 24;
-/// Logical width of each preset button.
-const PRESET_W: i32 = 80;
 
-/// Slider range, in percent (100% = 1.0x … 300% = 3.0x).
+/// The preset grid: `PRESET_ROWS` rows of `PRESET_COLS` buttons, starting at
+/// `PRESET_Y`. The rows below derive their own y from these, so adding a row of
+/// presets moves the zoom toggle and the canvas down with it.
+const PRESET_W: i32 = 80;
+const PRESET_H: i32 = 24;
+const PRESET_COLS: i32 = 5;
+const PRESET_ROWS: i32 = 2;
+const PRESET_Y: i32 = 138;
+const PRESET_ROW_GAP: i32 = 4;
+/// First free row under the preset grid.
+const PRESETS_BOTTOM: i32 = PRESET_Y + PRESET_ROWS * PRESET_H + (PRESET_ROWS - 1) * PRESET_ROW_GAP;
+/// The "Zoom in 2x" checkbox, and the canvas that starts below it.
+const ZOOM_Y: i32 = PRESETS_BOTTOM + 10;
+const ZOOM_H: i32 = 16;
+const CANVAS_Y: i32 = ZOOM_Y + ZOOM_H + 10;
+
+/// Slider range, in percent (100% = 1.0x … 350% = 3.5x). The top reaches the
+/// densest preset rather than a round number, so every preset is a position the
+/// slider can also be dragged to.
 const MIN_PCT: i32 = 100;
-const MAX_PCT: i32 = 300;
-const PRESETS: [(&str, i32); 5] = [
+const MAX_PCT: i32 = 350;
+/// Preset scales, ascending, filling the grid row by row: the first row runs
+/// 1.0x to 2.0x and the second carries on to 3.0x, with a 3.5x at the end.
+///
+/// Every one is a quarter step, because a quarter is all a macOS density
+/// correction ever snaps to — so the grid is the ladder itself, walked in
+/// order. It spans what both kinds of Mac can land on: the low steps are a
+/// dense display on a 1x machine, the 2.25x–2.75x middle is where a Retina Mac
+/// ends up (a 27" 4K measures 2.25x, a 14" MacBook Pro panel 2.75x), and 3.5x
+/// is the far end.
+const PRESETS: [(&str, i32); 10] = [
     ("1.0x", 100),
     ("1.25x", 125),
     ("1.5x", 150),
+    ("1.75x", 175),
     ("2.0x", 200),
+    ("2.25x", 225),
+    ("2.5x", 250),
+    ("2.75x", 275),
     ("3.0x", 300),
+    ("3.5x", 350),
 ];
 
 /// The sample panel's natural footprint, in *preview-logical* pixels. The
 /// widgets sit a few pixels inside it (see [`build_sample`]), so the slack
 /// absorbs any rounding when the panel is clipped to the canvas.
 const SAMPLE_W: i32 = 150;
-const SAMPLE_H: i32 = 146;
+const SAMPLE_H: i32 = 172;
 
 /// The sample panel's on-screen footprint (after the optional 2× zoom) in the
 /// window's logical pixels, given the OS scale `os_scale`. This is the literal
@@ -110,13 +142,20 @@ fn desired_window(factor: f32, zoom: bool, os_scale: f32) -> (i32, i32) {
 fn slider_rect(w: i32) -> Rect {
     Rect::new(140, 92, w - 164, 22)
 }
-/// The five preset buttons spread evenly across a window `w` wide, keeping a
-/// fixed button width and growing the gaps.
+/// Preset button `i`, filling the grid left to right and top to bottom. Each
+/// row spreads evenly across a window `w` wide, keeping a fixed button width
+/// and growing the gaps.
 fn preset_rect(i: i32, w: i32) -> Rect {
-    let gap = ((w - 48 - 5 * PRESET_W) / 4).max(0);
-    Rect::new(24 + i * (PRESET_W + gap), 138, PRESET_W, 24)
+    let (row, col) = (i / PRESET_COLS, i % PRESET_COLS);
+    let gap = ((w - 48 - PRESET_COLS * PRESET_W) / (PRESET_COLS - 1)).max(0);
+    Rect::new(
+        24 + col * (PRESET_W + gap),
+        PRESET_Y + row * (PRESET_H + PRESET_ROW_GAP),
+        PRESET_W,
+        PRESET_H,
+    )
 }
-/// The right-hand ("3.0x") slider tick, pinned under the slider's right end.
+/// The right-hand ("3.5x") slider tick, pinned under the slider's right end.
 fn max_tick_rect(w: i32) -> Rect {
     Rect::new(w - 64, 118, 40, 14)
 }
@@ -161,7 +200,7 @@ fn main() {
             }),
     ));
     let max_tick = Rc::new(RefCell::new(
-        Label::new(max_tick_rect(init_w), "3.0x")
+        Label::new(max_tick_rect(init_w), "3.5x")
             .with_size(9.0)
             .with_color(Color::DARK_GRAY),
     ));
@@ -186,16 +225,17 @@ fn main() {
 
     // Toggling zoom also resizes the window — the panel doubles, so the space it
     // needs doubles too.
-    let zoom_toggle = Checkbox::new(Rect::new(24, 172, init_w - 48, 16), "Zoom in 2x").on_toggle({
-        let zoom = zoom.clone();
-        let factor = factor.clone();
-        let os_scale = os_scale.clone();
-        move |cx, on| {
-            zoom.set(on);
-            let (w, h) = desired_window(factor.get().max(0.1), on, os_scale.get());
-            cx.request_window_size(w, h);
-        }
-    });
+    let zoom_toggle = Checkbox::new(Rect::new(24, ZOOM_Y, init_w - 48, ZOOM_H), "Zoom in 2x")
+        .on_toggle({
+            let zoom = zoom.clone();
+            let factor = factor.clone();
+            let os_scale = os_scale.clone();
+            move |cx, on| {
+                zoom.set(on);
+                let (w, h) = desired_window(factor.get().max(0.1), on, os_scale.get());
+                cx.request_window_size(w, h);
+            }
+        });
 
     let mut body = Container::new(init_w, init_h)
         .add(Label::new(Rect::new(24, 16, init_w - 48, 18), "Scale factor preview").with_size(13.0))
@@ -363,15 +403,23 @@ impl ScalePreview {
 }
 
 /// The widgets shown inside the preview panel, laid out in preview-logical
-/// coordinates within the [`SAMPLE_W`]×[`SAMPLE_H`] footprint. A scrollbar runs
-/// down the right-hand column: its arrow glyphs and one-pixel bevels are the
-/// finest chrome in the panel, so it is where a fractional scale shows first.
+/// coordinates within the [`SAMPLE_W`]×[`SAMPLE_H`] footprint. Two things here
+/// are drawn from single logical pixels and so show a fractional scale first:
+/// the scrollbar down the right-hand column — arrow glyphs and one-pixel bevels
+/// — and the dotted focus rectangle inside the focused button, whose dashes are
+/// every *other* pixel and alias where a scale rounds unevenly.
 fn build_sample() -> Vec<Box<dyn Widget>> {
     // Parked mid-track with a thumb about a third of the track long, so both
     // the thumb and the track around it are visible at any scale.
-    let mut scrollbar = ScrollBar::vertical(Rect::new(128, 24, SCROLLBAR_THICKNESS, 114));
+    let mut scrollbar = ScrollBar::vertical(Rect::new(128, 24, SCROLLBAR_THICKNESS, 140));
     scrollbar.set_range(3, 6);
     scrollbar.set_value(2);
+
+    // Focused rather than merely focusable: the panel is painted but never sent
+    // events, so nothing would ever give it the focus, and the dotted rectangle
+    // is the whole reason it is here.
+    let mut focused = Button::new(Rect::new(10, 124, 66, 22), "Focus");
+    focused.set_focused(true);
 
     vec![
         Box::new(Label::new(Rect::new(10, 6, 114, 14), "Preview").with_size(11.0)),
@@ -384,7 +432,8 @@ fn build_sample() -> Vec<Box<dyn Widget>> {
         Box::new(Checkbox::new(Rect::new(10, 76, 114, 14), "Crisp").checked(true)),
         Box::new(Button::new(Rect::new(10, 98, 50, 22), "OK").default(true)),
         Box::new(Button::new(Rect::new(66, 98, 56, 22), "Cancel")),
-        Box::new(ProgressBar::new(Rect::new(10, 128, 114, 10)).with_fraction(0.66)),
+        Box::new(focused),
+        Box::new(ProgressBar::new(Rect::new(10, 154, 114, 10)).with_fraction(0.66)),
         Box::new(scrollbar),
     ]
 }
@@ -503,12 +552,13 @@ impl Widget for FactorReadout {
 
 /// Bottom status bar reporting the window's *real* OS scale factor — the value
 /// the display is actually set to — independent of the preview slider above. It
-/// reads both scales from the painter each frame: `system_scale()` is the true
-/// display scale (e.g. 1.50x) and `scale()` the integer buffer scale the window
-/// is rasterized at. On the Wayland backend a fractional display (say 150%)
-/// makes those differ — we render at 2.0x and the compositor resamples down to
-/// 1.5x — so the bar appends a note saying so. On every other backend they
-/// match and the note is omitted.
+/// reads both scales from the painter each frame: `system_scale()` is the scale
+/// the display reports (e.g. 1.50x) and `scale()` the one saudade actually
+/// rasterizes at. Two backends make those differ, and the bar appends the
+/// rendering scale when they do: Wayland oversamples a fractional display (we
+/// draw at 2.0x, the compositor resamples down to 1.5x), and macOS multiplies
+/// in a density correction, since a Mac's scale factor says only whether the
+/// panel is Retina and nothing about how dense it is.
 struct StatusBar;
 
 impl Widget for StatusBar {
@@ -530,12 +580,11 @@ impl Widget for StatusBar {
 
         let system = painter.system_scale();
         let mut line = format!("System scale factor: {system:.2}x");
-        // The buffer scale exceeds the display scale only when the compositor is
-        // resampling our oversampled buffer down — Wayland fractional scaling.
+        // The two part company where the display's own scale isn't the one the
+        // UI wants drawing at: a compositor resampling an oversampled buffer
+        // down, or a density correction sizing a logical pixel for the glass.
         if (win_scale - system).abs() > 0.01 {
-            line.push_str(&format!(
-                "    ·    Resampling from {win_scale:.1}x done by compositor"
-            ));
+            line.push_str(&format!("    ·    Rendering at {win_scale:.2}x"));
         }
         painter.text(CANVAS_X, top + 7, &line, 10.0, theme.disabled_text);
     }

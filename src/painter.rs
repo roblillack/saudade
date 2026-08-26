@@ -238,10 +238,10 @@ impl<'a> Painter<'a> {
     /// scale is owned by the OS. Applications can *read* it via
     /// [`Self::system_scale`] but must not be able to override it.
     ///
-    /// Only the Wayland backend ever calls this, so it is compiled in solely
-    /// on the platforms that host that backend — otherwise it would be dead
-    /// code and trip the `-D warnings` clippy build on Windows/macOS.
-    #[cfg(all(unix, not(target_os = "macos")))]
+    /// Two backends have something to say here: Wayland, whose integer buffer
+    /// scale is not the fractional scale the compositor presents at, and the
+    /// winit runtime, whose scale carries saudade's density correction on top
+    /// of the factor the display reports.
     pub(crate) fn set_system_scale(&mut self, scale: f32) {
         self.system_scale = scale.max(0.01);
     }

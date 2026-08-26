@@ -10,6 +10,31 @@ While pre-1.0, the minor version is bumped for breaking changes.
 
 ## [Unreleased] - ReleaseDate
 
+### Added
+
+- A logical pixel now keeps its size on macOS. saudade's logical pixel is a
+  96-dpi pixel — an 18-pixel list row, a 13-pixel checkbox — and Windows and
+  X11 both hand us a scale factor that says so, being the reported DPI over 96
+  (winit measures the panel itself when X11 has no `Xft.dpi`). macOS reports
+  `backingScaleFactor` instead, which is 1 or 2 and describes the backing store
+  rather than the density: a 27" 4K in its default HiDPI mode puts 108 points in an
+  inch, a 14" MacBook Pro puts 127.5, both call themselves 2.0, and the same
+  chrome came out 11% and 25% smaller than drawn. On macOS the display is now
+  measured (`CGDisplayScreenSize`), divided by 96, and that correction
+  multiplies the OS scale factor — with the product snapped to a quarter, so a
+  Retina Mac renders at 2.25x, 2.5x or 2.75x rather than at whatever a panel
+  happens to measure. The 4K lands on 2.25x and the MacBook panel on 2.75x. It
+  is re-derived when the window moves to another display, which on a Mac is a
+  density change no `ScaleFactorChanged` event ever reports.
+- `App::with_ui_scale` pins that correction — `1.0` takes the OS scale factor
+  as it comes — and `SAUDADE_UI_SCALE` overrides both, so a UI can be tried at
+  another size without a rebuild. The Wayland backend implements neither: a
+  compositor's logical unit is already 96-dpi-normalized.
+- `Painter::system_scale` now reports the scale the *display* is set to on
+  every backend, leaving `Painter::scale` as the one the window is drawn at.
+  The two differed only under Wayland's fractional scaling before; a macOS
+  density correction is the second case.
+
 ## [0.6.1] - 2026-08-25
 
 ### Fixed
