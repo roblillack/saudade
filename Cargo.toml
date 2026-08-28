@@ -99,6 +99,28 @@ objc2-core-foundation = { version = "0.3", default-features = false, features = 
 objc2-core-graphics = { version = "0.3", default-features = false, features = ["CGContext", "CGBitmapContext", "CGColorSpace", "CGImage", "std"] }
 objc2-core-text = { version = "0.3", default-features = false, features = ["CTFont", "CTFontDescriptor", "CTFontTraits", "CTDefines", "std", "objc2-core-graphics"] }
 
+# EXPERIMENTAL, uncommitted: the GPU presenter behind `src/present.rs`, for
+# measuring a wgpu blit against softbuffer's CPU one. Off by default; build it
+# with `--features pixels-backend`.
+[features]
+pixels-backend = ["dep:pixels"]
+wgpu-backend = ["dep:wgpu", "dep:pollster"]
+
+[dependencies.pixels]
+version = "0.17"
+optional = true
+
+# The same GPU present as `pixels`, but driven directly: one device and queue
+# shared by every window, no scaling shader, and the frame written straight
+# into the swapchain image where the surface allows it.
+[dependencies.wgpu]
+version = "29"
+optional = true
+
+[dependencies.pollster]
+version = "0.4"
+optional = true
+
 [dev-dependencies]
 # Snapshot tests decode their baseline PNGs for a tolerant pixel comparison
 # (see tests/common/mod.rs). `png` is also a normal dependency above, but

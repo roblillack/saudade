@@ -42,6 +42,8 @@ mod font;
 mod geometry;
 pub mod mock;
 mod painter;
+// EXPERIMENTAL, uncommitted: the presenter seam (softbuffer / pixels).
+mod present;
 mod svg;
 mod theme;
 mod ui_scale;
