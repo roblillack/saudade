@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
+use softbuffer::AlphaMode;
 use winit::application::ApplicationHandler;
 use winit::dpi::{LogicalSize, PhysicalPosition, PhysicalSize};
 use winit::event::{ElementState, MouseButton as WinitMouseButton, MouseScrollDelta, WindowEvent};
@@ -29,7 +30,7 @@ use crate::event::{
     SCROLL_PIXELS_PER_LINE, WHEEL_LINES_PER_DETENT,
 };
 use crate::font::{Font, FontSet};
-use crate::geometry::{Point, Rect, Size};
+use crate::geometry::{Color, Point, Rect, Size};
 use crate::painter::Painter;
 use crate::theme::Theme;
 use crate::widget::{PopupKind, PopupRequest, Widget};
@@ -399,7 +400,8 @@ impl ApplicationHandler for AppHandler {
         } else {
             self.fit_window(&win, self.design_size)
         };
-        resize_surface(&mut surface, self.physical);
+        let alpha = opaque_mode(&surface);
+        configure_surface(&mut surface, self.physical, alpha);
         relayout(&mut self.root, self.physical, self.scale, self.design_size);
         // Give the first focusable widget in the tree keyboard focus by
         // default so apps with a clear "primary" target (a text editor, a
@@ -995,10 +997,11 @@ impl AppHandler {
             return;
         };
         let mut surface_buf = surface
-            .buffer_mut()
+            .next_buffer()
             .expect("saudade: failed to acquire surface buffer");
+        let stride = buffer_stride(&surface_buf);
         let mut painter = Painter::with_popup_anchor(
-            &mut surface_buf,
+            buffer_pixels(&mut surface_buf),
             self.physical.width as i32,
             self.physical.height as i32,
             self.scale,
@@ -1012,6 +1015,7 @@ impl AppHandler {
             None,
         )
         .with_screen(self.screen);
+        painter.set_stride(stride);
         // `scale` above is saudade's logical→physical factor, which a UI scale
         // lifts above the display's own; widgets asking what the *display* is
         // set to want that one.
@@ -1041,16 +1045,31 @@ impl AppHandler {
         };
         let origin_x = -((p.anchor.x as f32 * p.scale).round() as i32);
         let origin_y = -((p.anchor.y as f32 * p.scale).round() as i32);
-        let popup_phys_w = (p.anchor.w as f32 * p.scale).round() as i32;
-        let popup_phys_h = (p.anchor.h as f32 * p.scale).round() as i32;
+        // How far the pass may paint. Nominally the popup's footprint in
+        // device pixels — but the window we got may be a shade larger than the
+        // one we asked for: macOS sizes windows in *points* and rounds a
+        // fractional content size up, so a popup requested at an odd number of
+        // device pixels (139 logical at scale 2.25 → 313) comes back 314 wide.
+        // Clipping to the request alone would leave that last column and row
+        // untouched by everything below, showing whatever the buffer was
+        // cleared to — on a surface without an alpha channel, a white hairline
+        // down the right edge and along the bottom of every menu, just outside
+        // its black border. Take whichever is bigger so the pass owns the whole
+        // surface.
+        let popup_phys_w =
+            ((p.anchor.w as f32 * p.scale).round() as i32).max(p.physical.width as i32);
+        let popup_phys_h =
+            ((p.anchor.h as f32 * p.scale).round() as i32).max(p.physical.height as i32);
         let anchor = p.anchor;
         let screen = self.screen;
+        let transparent = p.transparent;
         let mut surface_buf = p
             .surface
-            .buffer_mut()
+            .next_buffer()
             .expect("saudade: failed to acquire popup buffer");
+        let stride = buffer_stride(&surface_buf);
         let mut painter = Painter::with_popup_anchor(
-            &mut surface_buf,
+            buffer_pixels(&mut surface_buf),
             p.physical.width as i32,
             p.physical.height as i32,
             p.scale,
@@ -1064,10 +1083,28 @@ impl AppHandler {
             Some(anchor),
         )
         .with_screen(screen);
+        painter.set_stride(stride);
         painter.set_system_scale(system_scale);
-        painter.fill(self.theme.background);
         painter.set_clip_phys(0, 0, popup_phys_w, popup_phys_h);
-        self.root.paint(&mut painter, &self.theme);
+        if transparent {
+            // The window has a real alpha channel, so everything the panel
+            // does not cover — the two corners inside the bend of its L-shaped
+            // drop shadow, and the sliver the compositor's own rounding leaves
+            // over — is simply see-through, and only the overlay pass has
+            // anything to draw. Nothing under the popup is repainted at all,
+            // which is both what makes a menu hanging off the window look
+            // right and one less full render of the app per frame.
+            painter.fill(Color::TRANSPARENT);
+            self.root.paint_overlay(&mut painter, &self.theme);
+        } else {
+            // No alpha to work with: fake it by redrawing the app underneath
+            // the panel, which is what the popup would be seeing through to.
+            // Only pixels the window itself covers are right — where the popup
+            // hangs off the main window there is nothing to redraw, and the
+            // fill shows instead.
+            painter.fill(self.theme.background);
+            self.root.paint(&mut painter, &self.theme);
+        }
         painter.clear_clip();
         surface_buf
             .present()
@@ -1470,7 +1507,23 @@ impl AppHandler {
         let id = win.id();
         let mut surface = softbuffer::Surface::new(context, win.clone()).ok()?;
         let actual = win.inner_size();
-        resize_surface(&mut surface, actual);
+        // A menu panel never fills its window: the L-shaped drop shadow leaves
+        // the two corners inside its bend uncovered, and the compositor may
+        // round the window up a pixel past the footprint we asked for. Ask for
+        // a straight-alpha surface so those pixels can be genuinely
+        // transparent. Only some backends can give us one — macOS today; X11
+        // and Windows say no — and the rest fall back to repainting the app
+        // underneath the panel, which is right for as long as the popup stays
+        // over the window. A dialog is a real, opaque window and wants none of
+        // this.
+        let transparent = request.kind == PopupKind::Popup
+            && surface.supports_alpha_mode(AlphaMode::Postmultiplied);
+        let alpha = if transparent {
+            AlphaMode::Postmultiplied
+        } else {
+            opaque_mode(&surface)
+        };
+        configure_surface(&mut surface, actual, alpha);
         win.set_visible(true);
 
         Some(PopupWindow {
@@ -1479,6 +1532,7 @@ impl AppHandler {
             surface,
             anchor: rect,
             kind: request.kind,
+            transparent,
             physical: actual,
             scale: self.scale,
             cursor: None,
@@ -1498,6 +1552,10 @@ struct PopupWindow {
     surface: softbuffer::Surface<Rc<Window>, Rc<Window>>,
     anchor: Rect,
     kind: PopupKind,
+    /// Whether this window's surface carries a real alpha channel, so the
+    /// parts of it the panel does not cover can be transparent rather than
+    /// painted over with a redraw of whatever is behind the window.
+    transparent: bool,
     physical: PhysicalSize<u32>,
     scale: f32,
     cursor: Option<Point>,
@@ -1732,9 +1790,62 @@ fn resize_surface(
 ) {
     let w = NonZeroU32::new(size.width.max(1)).unwrap();
     let h = NonZeroU32::new(size.height.max(1)).unwrap();
+    // Keeps whatever alpha mode the surface was configured with.
     surface
         .resize(w, h)
         .expect("saudade: failed to resize surface");
+}
+
+/// Size a surface and set the alpha mode it presents with, which is fixed for
+/// the life of the window — a later [`resize_surface`] carries it along.
+fn configure_surface(
+    surface: &mut softbuffer::Surface<Rc<Window>, Rc<Window>>,
+    size: PhysicalSize<u32>,
+    alpha: AlphaMode,
+) {
+    let w = NonZeroU32::new(size.width.max(1)).unwrap();
+    let h = NonZeroU32::new(size.height.max(1)).unwrap();
+    surface
+        .configure(w, h, alpha)
+        .expect("saudade: failed to configure surface");
+}
+
+/// The alpha mode for a window that covers every pixel of itself.
+/// [`AlphaMode::Ignored`] says the alpha byte means nothing, which is what
+/// saudade's `0xAARRGGBB` pixels have always assumed; [`AlphaMode::Opaque`] is
+/// the same picture with a promise attached that every pixel is opaque, and is
+/// the fallback for a backend that cannot ignore alpha (only Web, today).
+fn opaque_mode(surface: &softbuffer::Surface<Rc<Window>, Rc<Window>>) -> AlphaMode {
+    if surface.supports_alpha_mode(AlphaMode::Ignored) {
+        AlphaMode::Ignored
+    } else {
+        AlphaMode::Opaque
+    }
+}
+
+/// How many pixels apart the buffer's rows are — see [`Painter::set_stride`].
+fn buffer_stride(buffer: &softbuffer::Buffer<'_>) -> i32 {
+    (buffer.byte_stride().get() / 4) as i32
+}
+
+/// A buffer's pixels as the `u32`s the painter writes.
+///
+/// softbuffer hands out `&mut [Pixel]` — four `u8` components in the order the
+/// platform's compositor wants them — where saudade paints [`Color`]s, which
+/// are `0xAARRGGBB` `u32`s. On every target we build for those are the same 32
+/// bits (`PixelFormat::Bgra8`, little-endian), so the slice is reinterpreted
+/// rather than converted pixel by pixel.
+fn buffer_pixels<'b>(buffer: &'b mut softbuffer::Buffer<'_>) -> &'b mut [u32] {
+    debug_assert_eq!(
+        softbuffer::PixelFormat::default(),
+        softbuffer::PixelFormat::Bgra8,
+        "saudade: pixels are 0xAARRGGBB u32s, which is BGRA8 in memory"
+    );
+    let pixels = buffer.pixels();
+    // SAFETY: `Pixel` is `#[repr(C)]` + `#[repr(align(4))]` over four `u8`s, so
+    // it has a `u32`'s size and alignment, and every bit pattern is valid for
+    // either type.
+    unsafe { std::slice::from_raw_parts_mut(pixels.as_mut_ptr().cast::<u32>(), pixels.len()) }
 }
 
 fn origin(logical: Size, scale: f32, physical: PhysicalSize<u32>) -> (i32, i32) {

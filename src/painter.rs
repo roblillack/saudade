@@ -196,6 +196,13 @@ pub struct Painter<'a> {
     width: i32,
     /// Physical buffer height in pixels.
     height: i32,
+    /// Pixels from the start of one row of the buffer to the start of the
+    /// next. Equal to `width` for a buffer we own; a window surface may hand
+    /// back wider rows than it displays, padded so each starts on a cache-line
+    /// boundary, and every row index has to step by this rather than by the
+    /// width or the picture shears. Only the runtime knows, so only the
+    /// runtime sets it, via [`Self::set_stride`].
+    stride: i32,
     /// Logical→physical scale. Equals winit's `scale_factor` for the current
     /// monitor (always ≥ 1 in practice).
     scale: f32,
@@ -273,6 +280,7 @@ impl<'a> Painter<'a> {
             pixels,
             width,
             height,
+            stride: width,
             scale: scale.max(0.01),
             system_scale: scale.max(0.01),
             origin_x,
@@ -417,6 +425,20 @@ impl<'a> Painter<'a> {
     /// factor the display reports.
     pub(crate) fn set_system_scale(&mut self, scale: f32) {
         self.system_scale = scale.max(0.01);
+    }
+
+    /// Backend hook: tell the painter that the buffer's rows are `stride`
+    /// pixels apart rather than [`Self::width`] apart. A window surface may
+    /// pad each row so the next one starts on a cache-line boundary — with
+    /// softbuffer, to a multiple of 16 pixels in a debug build and 4 in a
+    /// release one — and the padding is not displayed. Only the row pitch
+    /// changes: the visible area is still `width` × `height`, and everything
+    /// clips against that.
+    ///
+    /// Crate-internal, like the scale hooks: the buffer's shape belongs to
+    /// whoever handed the buffer over.
+    pub(crate) fn set_stride(&mut self, stride: i32) {
+        self.stride = stride.max(self.width);
     }
 
     /// Translate a logical-pixel `rect` to the physical-pixel rectangle it
@@ -628,7 +650,7 @@ impl<'a> Painter<'a> {
                 if dy < cy0 || dy >= cy1 {
                     continue;
                 }
-                let dst_row = (dy * self.width) as usize;
+                let dst_row = (dy * self.stride) as usize;
                 for sx in 0..src_w {
                     let px = src[src_row + sx as usize];
                     let bx = dst_x + sx * zoom;
@@ -736,7 +758,7 @@ impl<'a> Painter<'a> {
                 repeatable = None;
                 continue;
             }
-            let base = (py * self.width) as usize;
+            let base = (py * self.stride) as usize;
             let row_taps = rows.taps(dy);
             let [(sy, _)] = row_taps else {
                 // Rows to blend: the general case, a full 16-bit average.
@@ -958,12 +980,12 @@ impl<'a> Painter<'a> {
             } else {
                 [(0, self.width), (0, 0)]
             };
-            let row = (y * self.width) as usize;
+            let row = (y * self.stride) as usize;
             // A row `period` back carries the same pattern phase; when it also
             // paints the same spans, copy it rather than recompute it.
             let src = y - period;
             if src >= 0 && (src >= gy0 && src < gy1) == in_gap {
-                let src_row = (src * self.width) as usize;
+                let src_row = (src * self.stride) as usize;
                 for (x0, x1) in spans {
                     if x1 > x0 {
                         self.pixels.copy_within(
@@ -1028,7 +1050,7 @@ impl<'a> Painter<'a> {
         let fg = fg.0;
         for y in ys..ye {
             let ay = (y - self.origin_y).div_euclid(step);
-            let row = (y * self.width) as usize;
+            let row = (y * self.stride) as usize;
             for x in xs..xe {
                 let ax = (x - self.origin_x).div_euclid(step);
                 if (ax + ay).rem_euclid(2) == 0 {
@@ -1050,7 +1072,7 @@ impl<'a> Painter<'a> {
         let x1 = (x + w).min(cx1);
         let y1 = (y + h).min(cy1);
         for yy in y0..y1 {
-            let row = (yy * self.width) as usize;
+            let row = (yy * self.stride) as usize;
             for xx in x0..x1 {
                 self.pixels[row + xx as usize] = color.0;
             }
@@ -1071,23 +1093,35 @@ impl<'a> Painter<'a> {
             return;
         }
         if alpha == 255 {
-            self.pixels[(y * self.width + x) as usize] = color.0;
+            self.pixels[(y * self.stride + x) as usize] = color.0;
             return;
         }
-        let idx = (y * self.width + x) as usize;
+        let idx = (y * self.stride + x) as usize;
         let dst = self.pixels[idx];
         let a = alpha as u32;
-        let inv = 255 - a;
+        // Source-over, with the destination's own alpha in play: the weight it
+        // keeps is what the source lets through, of however much of it there
+        // was. An opaque destination — every pixel of a window that paints its
+        // own background — leaves `dw == 255 - a` and `out == 255`, which is a
+        // plain lerp between the two colours. A transparent one (the field a
+        // popup window with a real alpha channel is cleared to) leaves
+        // `dw == 0`, so the source keeps its own colour at its own coverage
+        // instead of blending toward the black behind the nothing.
+        let dw = ((dst >> 24) & 0xFF) * (255 - a) / 255;
+        let out = a + dw;
+        if out == 0 {
+            return;
+        }
         let sr = color.red() as u32;
         let sg = color.green() as u32;
         let sb = color.blue() as u32;
         let dr = (dst >> 16) & 0xFF;
         let dg = (dst >> 8) & 0xFF;
         let db = dst & 0xFF;
-        let r = (sr * a + dr * inv) / 255;
-        let g = (sg * a + dg * inv) / 255;
-        let b = (sb * a + db * inv) / 255;
-        self.pixels[idx] = 0xFF000000 | (r << 16) | (g << 8) | b;
+        let r = (sr * a + dr * dw) / out;
+        let g = (sg * a + dg * dw) / out;
+        let b = (sb * a + db * dw) / out;
+        self.pixels[idx] = (out << 24) | (r << 16) | (g << 8) | b;
     }
 
     /// Logical-coordinate single-pixel write — a 1×1 logical pixel becomes the
@@ -1163,7 +1197,7 @@ impl<'a> Painter<'a> {
                 }
                 let color = src[src_row + i];
                 for yy in py0..py1 {
-                    let base = (yy * self.width) as usize;
+                    let base = (yy * self.stride) as usize;
                     for xx in px0..px1 {
                         self.pixels[base + xx as usize] = color;
                     }

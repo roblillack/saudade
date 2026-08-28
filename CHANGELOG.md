@@ -46,6 +46,21 @@ While pre-1.0, the minor version is bumped for breaking changes.
   its own and area-averages it into a fixed on-screen box, which is what a DPI
   preview pane wants from a slider. `Checkbox::set_rect` moves a checkbox after
   construction, as `Slider` and `ScrollBar` already allow.
+- `Checkbox::set_rect` moves a checkbox after construction, as `Slider`,
+  `Dropdown`, `ProgressBar` and `ScrollBar` already allow — for a layout that
+  reflows, e.g. a control pinned to the bottom edge of a resizable window.
+
+### Changed
+
+- `softbuffer` is a **git dependency**, pinned to a `master` revision, for the
+  alpha-mode API the transparent popups below need — it is not in a release yet
+  (0.4.8 is the newest). A crate carrying a git dependency cannot go to
+  crates.io, so `cargo publish` is blocked until softbuffer 0.5 ships and the
+  pin can go back to a version requirement. The API it replaces is gone in the
+  same change: a buffer is a slice of `Pixel` rather than of `u32` (saudade
+  reinterprets it, since both are `0xAARRGGBB` on every target it builds for),
+  and its rows may be padded wider than the window, which the painter now steps
+  by.
 
 ### Removed
 
@@ -53,6 +68,30 @@ While pre-1.0, the minor version is bumped for breaking changes.
   fix than the one that replaced it: `Painter::crisp` is unconditional, so a
   widget no longer branches on the scale at all. Custom chrome that gated a
   `Painter::physical` pass on it becomes one `crisp` call.
+
+### Fixed
+
+- A popup window — every `MenuBar` drop-down, `Dropdown` list and `ContextMenu`
+  panel — is genuinely transparent on macOS, so a menu no longer carries a white
+  margin around with it. A menu panel does not fill its window: the two corners
+  inside the bend of its L-shaped drop shadow are not part of it, and the
+  compositor may round the window up past the footprint it was asked for (macOS
+  sizes windows in *points*, so 139 logical pixels at the 2.25 scale a Retina
+  Mac now draws at — 313 device pixels — comes back as 314). Those pixels used
+  to be faked by redrawing whatever the window covers, because softbuffer's
+  CoreGraphics backend built its `CGImage` with the alpha byte ignored, and that
+  only works for as long as the popup stays over the main window: a menu hanging
+  off it had nothing to redraw there, and the bare fill showed instead — a white
+  hairline down the right edge and along the bottom of a menu inside the window,
+  a white margin out over the desktop for one that wasn't. A popup window now
+  asks for a straight-alpha surface (`AlphaMode::Postmultiplied`) and leaves
+  those pixels transparent. Backends that cannot hand one over — X11 and Windows
+  today — keep the redraw, which is why it is still there, and it no longer
+  clips a pixel short of the surface either.
+- With a real alpha channel there is nothing behind the panel worth
+  reproducing, so a transparent popup pass draws through `Widget::paint_overlay`
+  alone instead of painting the whole application into every menu window: one
+  full render of the app less per popup frame.
 
 ## [0.6.1] - 2026-08-25
 

@@ -54,7 +54,15 @@ members = ["macros"]
 # tree as a side benefit. The `x11` feature is a harmless no-op off
 # free-unix (winit's X11 platform crates are themselves target-gated).
 winit = { version = "0.30.12", default-features = false, features = ["rwh_06", "x11"] }
-softbuffer = "0.4"
+# Pinned to a `master` revision, not a release: the alpha-mode API a popup
+# window needs to be genuinely transparent on macOS has landed upstream but is
+# not in 0.4.8, the newest release. Without it softbuffer builds its `CGImage`
+# with `CGImageAlphaInfo::NoneSkipFirst` and the alpha byte never reaches the
+# compositor, so a menu can only fake see-through by redrawing what is behind
+# it — which has nothing to redraw where it hangs off the window. Swap this back
+# to a version requirement the moment 0.5 ships; a git dependency cannot be
+# published to crates.io, so releases are blocked until then.
+softbuffer = { git = "https://github.com/rust-windowing/softbuffer", rev = "9a7c9caf4ac29a8ae361d68c9a5babb97e36dc70" }
 fontdue = "0.8"
 fontdb = "0.16"
 png = "0.17"
