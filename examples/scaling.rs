@@ -18,10 +18,11 @@
 //!
 //! The factor is the *absolute* logical→physical scale, the same number the OS
 //! reports. Try the fractional steps (1.25x, 1.5x): that's where saudade's
-//! crisp physical-pixel chrome pass earns its keep. The presets walk the quarter
-//! ladder the runtime itself picks from — 1.25x on a 1x display, 2.0x on Windows
-//! at 150%, 2.75x on a Retina Mac — up into the range where a logical pixel is
-//! worth two-and-a-fraction physical ones and every edge has to round.
+//! crisp physical-pixel chrome pass earns its keep. The presets walk the ladder
+//! the runtime itself picks from — the factor itself on Windows and X11, an
+//! eighth over it on a Mac (2.25x on a Retina one) — up into the range where a
+//! logical pixel is worth two-and-a-fraction physical ones and every edge has
+//! to round.
 //!
 //! Two checkboxes along the bottom pick how the rendered panel reaches the
 //! screen, and they are the two halves of what a scale factor means:
@@ -48,9 +49,9 @@
 //! (`Painter::system_scale`) — independent of the preview slider above — and,
 //! when it differs, the scale the window is really being drawn at. It differs
 //! on Wayland, where a fractional display (say 150%) is oversampled at 2.0x and
-//! resampled down by the compositor, and on every other backend, where saudade
-//! multiplies the OS factor by a correction that draws the Win 3.1 chrome a
-//! quarter over its nominal 96-dpi size.
+//! resampled down by the compositor; on macOS, where saudade corrects the factor
+//! for a point that is nearer 1/108 in than the 96-dpi pixel it draws in; and
+//! anywhere `SAUDADE_UI_DPI` has moved that pixel.
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -104,10 +105,11 @@ const MAX_PCT: i32 = 350;
 /// Preset scales, ascending, filling the grid row by row: the first row runs
 /// 1.0x to 2.0x and the second carries on to 3.0x, with a 3.5x at the end.
 ///
-/// Every one is a quarter step, which is the ladder the runtime itself snaps to:
-/// 1.25x is any 1x display, 1.5x is Windows at 125%, 2.0x at 150%, and 2.75x is
-/// a Retina Mac. Above that is headroom — a display denser than any of them, to
-/// see the chrome hold its geometry.
+/// Every one is a quarter step, which is the ladder Windows and X11 hand over
+/// and saudade passes through: 1.0x is 100%, 1.25x is 125%, 2.0x is 200% (see
+/// `saudade::ui_scale`). A Retina Mac's 2.25x is on it too, an eighth over its
+/// factor of 2; the 3.5x at the end is headroom, a display denser than any of
+/// them, to see the chrome hold its geometry.
 const PRESETS: [(&str, i32); 10] = [
     ("1.0x", 100),
     ("1.25x", 125),

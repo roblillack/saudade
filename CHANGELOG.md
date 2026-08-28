@@ -12,35 +12,39 @@ While pre-1.0, the minor version is bumped for breaking changes.
 
 ### Added
 
-- A logical pixel is now the size the chrome was actually drawn against, on
-  every backend. saudade's logical pixel is nominally a 96-dpi one — an
-  18-pixel list row, a 13-pixel checkbox — but 96 dpi was Windows' aspiration,
-  not anyone's glass: a 14" CRT at 640x480 runs 57 ppi and a 15" at 1024x768
-  runs 85, so the chrome was drawn to feel right on something coarser and came
-  out small anywhere that honestly delivers 96. It is now drawn a quarter over
-  nominal — a logical pixel of 1/77 in — with the product snapped to a quarter,
-  the scale the window is really drawn at being the number that has to look
-  right. A quarter over nominal *of what* depends on the display, the platforms
-  disagreeing about what their own logical unit stands for: 1.25 where the scale
-  factor is already a ratio against 96 dpi, as winit makes it on Windows and
-  X11, and 1.25 × 108/96 = 1.40625 in a macOS HiDPI mode, whose
-  `backingScaleFactor` is a count of device pixels per point and whose desktop
-  is laid out in a point nearer 1/108 in. A macOS 1x mode is back on the nominal
-  unit, a point being a device pixel there, so it gets 1.25 like the rest. The
-  same 27" 4K panel comes out at 2.0x on Windows (1.5 × 1.25 = 1.875) and 2.75x
-  on macOS (2.0 × 1.40625 = 2.8125); since that macOS mode renders 5120x2880 and
-  is scaled down to the panel's 3840x2160, the two land within 3% of each other
-  on the glass.
-- Deliberately constants and not a measurement: on macOS the resolution *is* the
-  size knob ("Larger Text ↔ More Space" is a list of display modes), so a
-  correction derived from measuring the panel cancels it out — a roomier mode
-  shrinks the point by exactly as much as the correction grows. A constant base
-  leaves the knob working, and on Windows and X11 the knob is the scale factor
-  itself, which is already being multiplied.
-- `App::with_ui_scale` replaces the base for a run — `1.0` takes the OS scale
-  factor as it comes — and `SAUDADE_UI_SCALE` overrides it, so a UI can be tried
-  at another size without a rebuild. The Wayland backend implements neither: it
-  renders at the integer buffer scale the compositor asks for.
+- A logical pixel now lands the size it claims to on macOS as well as
+  everywhere else. The scale a window is drawn at is two factors multiplied:
+  the density of the *platform's* own logical unit over saudade's 96-dpi
+  reference, times the scale factor the platform reports for the display. On
+  Windows and X11 the first is 1 — winit already divides the reported DPI, or
+  `Xft.dpi`, by a `BASE_DPI` of 96 — so nothing about those backends moves.
+  macOS is the one that was wrong: its `backingScaleFactor` counts device pixels
+  per point and says nothing about density, while a point is laid out at about
+  1/108 in (218 dpi over 2, on a 5K 27" and a 4.5K 24" alike), so the scale
+  there is `108/96 × factor`, an eighth over what it used to be. A Retina Mac
+  draws at 2.25x where it drew at 2.0x, and a Mac at 1x at 1.17x.
+- The product is snapped to a twelfth. Every rung either platform produces is
+  exact bar a non-Retina Mac, whose 9/8 is thirteen and a half twelfths and
+  rounds up to 1.167; a hand-set `Xft.dpi`, the one factor off the grid
+  entirely, is pulled onto it at a cost of at most half a step. That keeps the
+  scales occurring in the wild to a countable few, each of them snapshot tested.
+  Both platforms' assumptions are calibrated to a display of a particular
+  density and come out small on denser glass — a 14" MacBook Pro is 127 points
+  to the inch rather than 108, a sixth under — which is what the overrides are
+  for.
+- Two overrides sit outside that derivation. `SAUDADE_UI_SCALE`, and
+  `App::with_ui_scale`, set the scale the window is drawn at *outright* — the
+  derivation skipped, the system scale factor included — which is the only way
+  to ask for a scale off the grid: the card in `examples/credit_card` is exact
+  on a 254-dpi laptop panel at 2.65, no rung at all. `SAUDADE_UI_DPI` moves the
+  reference density instead, so every scale moves with it by 96 over whatever it
+  is set to; at `72` — the coarse end of what the 90s screens these metrics were
+  drawn for really ran, where a 13-pixel checkbox was about a sixth of an inch
+  across — the chrome comes out a third larger, and every rung either platform
+  produces is exact. Both accept `auto`, and both win over the program's own
+  choice, in the spirit of winit's `WINIT_X11_SCALE_FACTOR`, so a UI can be
+  tried at another size without a rebuild. The Wayland backend implements
+  neither: it renders at the integer buffer scale the compositor asks for.
 - `Painter::system_scale` now reports the scale the *display* is set to on
   every backend, leaving `Painter::scale` as the one the window is drawn at.
   The two differed only under Wayland's fractional scaling before; with a UI
@@ -69,6 +73,29 @@ While pre-1.0, the minor version is bumped for breaking changes.
 - `Checkbox::set_rect` moves a checkbox after construction, as `Slider`,
   `Dropdown`, `ProgressBar` and `ScrollBar` already allow — for a layout that
   reflows, e.g. a control pinned to the bottom edge of a resizable window.
+- New `credit_card` example: the check on the correction above, which nothing
+  inside the program can make — a screenshot is in pixels, the unit under test.
+  The window draws an ISO/IEC 7810 ID-1 card — 85.60 x 53.98 mm on a 3.18 mm
+  radius, the die every bank card is cut to — at the size a 1/96-in logical
+  pixel makes it, so a card off your wallet laid on the screen says whether the
+  scale is out and by how much; a readout prints the card's logical size, the
+  scale the window is drawn at against the one the display reports, and the rung
+  either side to try in `SAUDADE_UI_SCALE`. The face is painted in device pixels
+  through `Painter::physical` with every feature placed in millimetres: rounded
+  corners rasterized as spans (a logical arc would step 2.25 device pixels at a
+  time on a Retina Mac), embossed lettering faked with a dark copy of the glyphs
+  under a light one, and a two-disc network mark that draws its overlap in a
+  third colour, the painter having nothing to blend with.
+- New `sound_recorder` example: the Windows 3.1 Sound Recorder, screen for
+  screen. The status slab, the two sunken time readouts flanking a black
+  oscilloscope, the position `ScrollBar` and the five bitmap transport buttons,
+  laid out on metrics measured off the original — 294 logical pixels of content
+  between 11-pixel margins, 54 x 23 buttons — so at 1.0x the window lands within
+  a pixel of the 1992 one. The five transport marks are `include_svg!` icons
+  painted by a custom `Widget` over `Painter::button`, greyed the way a disabled
+  label is when their action isn't available; the transport itself is a scaffold
+  over a playhead and a length, with a shaped-noise trace standing in for a
+  waveform. Nothing is recorded or played.
 
 ### Changed
 
@@ -83,7 +110,7 @@ While pre-1.0, the minor version is bumped for breaking changes.
 - Button frames, bevels and focus rings are crisp at a fractional scale. A Win
   3.1 button is four or five 1-logical-pixel lines stacked on each other, and
   snapping each of them on its own — from its own position in the window —
-  rounds them to different widths: at 2.25x the same frame came out heavier
+  rounds them to different widths: at 2.33x the same frame came out heavier
   along one edge than the opposite one and different again on the button beside
   it, and a dotted focus ring degenerated into a smear of two- and three-pixel
   dots with one- and two-pixel gaps. Every frame primitive — `stroke_rect`,
@@ -95,29 +122,26 @@ While pre-1.0, the minor version is bumped for breaking changes.
   Because a `Frame` rounds each boundary's *depth* rather than each line's
   thickness, nothing accumulates: a bevel two logical pixels deep lands within
   half a device pixel of `2 × scale` however deep the chrome in front of it
-  goes — 3 device pixels at 1.5x, 5 at 2.25x and 2.5x, 6 at 3.0x. Rounding the
-  thickness to a whole `chrome_unit` and multiplying, which keeps every ring the
-  same weight, rounds the wrong quantity: it would step in whole units, giving 4
-  device pixels at 2.25x and 6 at 2.5x — a 50% jump for an 11% change of scale.
+  goes — 3 device pixels at 1.5x, 5 at 2.33x and 2.67x, 6 at 3.0x. Below 1.5x
+  the depths are pinned to the design's own instead of scaled, a logical pixel
+  still being worth a single device pixel there; the room the scale buys goes to
+  the face, so a button at 1.33x is a third bigger inside the border and bevel
+  it is drawn with.
 
-  Below 1.5x the depths are pinned to the design's own instead of scaled. A
-  logical pixel is still worth a single device pixel there, so half a device
-  pixel of rounding is most of a 1-pixel line, and scaling the depths anyway
-  would put a 3-pixel bevel under a 1-pixel border at 1.25x where the design
-  says 2 and 1. The room the scale buys goes to the face instead: a button at
-  1.25x is a quarter bigger around the border and bevel it is drawn with.
-
-  Chrome at 1.0x, at 1.25x and at integer scales is byte-for-byte unchanged —
+  Chrome at 1.0x, below 1.5x and at integer scales is byte-for-byte unchanged —
   the depths there are the drawn ones or an exact multiple of them. 1.5x moves,
-  and so does `etched_h_line` at 1.25x, it having had no crisp pass before: its
+  and so does `etched_h_line` below it, it having had no crisp pass before: its
   two tones were 2 device pixels and 1, or 1 and 2, depending on the row the
   divider landed on, and are now 1 apiece.
-- Snapshot tests run at 2.75x as well as 1.0x / 1.25x / 1.5x / 2.0x. Bar the
-  identity, each is a configuration the runtime actually picks: 1.25x on any 1x
-  display, 1.5x on Windows at 125%, 2.0x at 150%, and 2.75x on a Retina Mac —
-  the hardest case for the chrome, a logical pixel being worth 2.75 device ones.
-  The painter's own frame tests walk the whole quarter ladder to 3.0x, asserting
-  each band's exact device-pixel depth.
+- Snapshot tests run at eight scales — 1.0x / 1.33x / 1.5x / 1.67x / 2.0x /
+  2.33x / 2.67x / 3.0x — where they ran at five. Each is a configuration the
+  runtime picks under one reference density or the other: the whole and half
+  steps are Windows and X11 at 100%, 150%, 200% and 300%, the thirds the same
+  knob under `SAUDADE_UI_DPI=72`. The thirds are the hard cases for the chrome,
+  a logical pixel worth 2.67 device ones landing nowhere near a pixel boundary.
+  The painter's own frame tests walk a wider set still — the quarters, a Mac's
+  1.17x and 2.25x, and those thirds — asserting each band's exact device-pixel
+  depth without rendering anything.
 
 ### Removed
 

@@ -1984,12 +1984,28 @@ mod tests {
         assert_eq!(at(3, 3), 0, "outside the clip stays untouched");
     }
 
-    /// Every scale a saudade window is plausibly drawn at: the ladder Windows
-    /// and X11 hand over, plus the quarter steps a Mac lands on once the
-    /// platform's UI scale is folded in (see [`crate::ui_scale`]). The frame
-    /// primitives have to hold their geometry on all of them, in order, which
-    /// is what a [`Frame`]'s depths are for.
-    const CHROME_SCALES: &[f32] = &[1.0, 1.25, 1.5, 2.0, 2.25, 2.5, 2.75, 3.0];
+    /// Every scale a saudade window is plausibly drawn at: the quarters Windows
+    /// and X11 hand over untouched, the eighth-over rungs a Mac lands on, and
+    /// the thirds that come of aiming a logical pixel at 72 dpi rather than 96
+    /// (`SAUDADE_UI_DPI`) — see [`crate::ui_scale`]. The frame primitives have
+    /// to hold their geometry on all of them, in order, which is what a
+    /// [`Frame`]'s depths are for.
+    const CHROME_SCALES: &[f32] = &[
+        1.0,
+        7.0 / 6.0,
+        1.25,
+        4.0 / 3.0,
+        1.5,
+        5.0 / 3.0,
+        1.75,
+        2.0,
+        2.25,
+        7.0 / 3.0,
+        2.5,
+        8.0 / 3.0,
+        2.75,
+        3.0,
+    ];
 
     /// Paint `f` into a fresh `w × h` *device-pixel* buffer at `scale`.
     fn chrome_buffer(w: i32, h: i32, scale: f32, f: impl FnOnce(&mut Painter)) -> Vec<u32> {
@@ -2042,11 +2058,17 @@ mod tests {
     fn a_chrome_unit_is_the_scale_rounded_to_a_whole_pixel() {
         let expected = [
             (1.0, 1),
+            (7.0 / 6.0, 1),
             (1.25, 1),
+            (4.0 / 3.0, 1),
             (1.5, 2),
+            (5.0 / 3.0, 2),
+            (1.75, 2),
             (2.0, 2),
             (2.25, 2),
+            (7.0 / 3.0, 2),
             (2.5, 3),
+            (8.0 / 3.0, 3),
             (2.75, 3),
             (3.0, 3),
         ];

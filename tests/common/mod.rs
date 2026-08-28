@@ -2,14 +2,19 @@
 //!
 //! All tests render against the bundled DejaVu fonts so glyph rasterization
 //! is stable regardless of which fonts happen to be installed on the host.
-//! Tests run at five scales (1.0x, 1.25x, 1.5x, 2.0x, 2.75x) so we catch
-//! regressions in fractional-DPI snapping as well as integer-DPI layout. Bar
-//! the identity, each is a configuration the runtime actually picks (see
-//! `saudade::ui_scale`): 1.25x on any 1x display, 1.5x on Windows at 125%, 2.0x
-//! at 150%, and 2.75x on a Retina Mac. That last one is the hardest case for
-//! the chrome — a logical pixel is worth 2.75 device ones, so every frame line
-//! has to take its weight from `Painter::chrome_unit` rather than from wherever
-//! its own edges happened to round to.
+//! Tests run at eight scales — 1.0x, 1.33x, 1.5x, 1.67x, 2.0x, 2.33x, 2.67x,
+//! 3.0x — so we catch regressions in fractional-DPI snapping as well as
+//! integer-DPI layout. Every one is a configuration the runtime picks under one
+//! reference density or the other (see `saudade::ui_scale`): the whole and half
+//! steps are Windows and X11 at 100%, 150%, 200% and 300%, and the thirds are
+//! the same knob under `SAUDADE_UI_DPI=72`, which draws the chrome the third
+//! over nominal its metrics were designed to feel like. The thirds are the hard
+//! cases — a logical pixel worth 2.67 device ones lands nowhere near a pixel
+//! boundary, so every frame line has to take its weight from
+//! `Painter::chrome_unit` rather than from wherever its own edges happened to
+//! round to. The rungs no image covers (a Mac's 1.17x and 2.25x, Windows' 1.25x
+//! and 1.75x) are asserted pixel-exactly by the painter's own frame tests,
+//! which walk a wider ladder without rendering anything.
 //!
 //! Each rendered frame is compared to a checked-in baseline PNG. In practice
 //! fontdue rasterizes identically across the dev and CI machines — measured
@@ -42,8 +47,19 @@ pub fn mono_font() -> Font {
         .expect("bundled DejaVuSansMono.ttf failed to load")
 }
 
-/// The fractional and integer scales every widget should look correct at.
-pub const SCALES: &[f32] = &[1.0, 1.25, 1.5, 2.0, 2.75];
+/// The fractional and integer scales every widget should look correct at:
+/// rungs `saudade::ui_scale` hands a window at the default reference density,
+/// and at the 72-dpi one.
+pub const SCALES: &[f32] = &[
+    1.0,
+    4.0 / 3.0,
+    1.5,
+    5.0 / 3.0,
+    2.0,
+    7.0 / 3.0,
+    8.0 / 3.0,
+    3.0,
+];
 
 /// Per-pixel amount of difference we tolerate: a channel may be off by up to
 /// this many levels (0–255) without counting as a change. Measured cross-machine

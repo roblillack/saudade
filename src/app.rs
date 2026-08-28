@@ -92,21 +92,16 @@ impl App {
         self
     }
 
-    /// How large a logical pixel is, over the platform's own logical unit.
+    /// The scale to draw at: how many physical pixels a saudade logical pixel
+    /// is worth, outright.
     ///
-    /// saudade's chrome carries Windows 3.1 metrics, drawn against glass much
-    /// coarser than the 96 dpi they are nominally in — so by default the
-    /// runtime draws them a quarter over nominal, against whatever dpi the
-    /// platform's own logical unit stands for: 1.25 on Windows and X11, and
-    /// 1.25 × 108/96 in a macOS HiDPI mode, whose point is denser. The product
-    /// is then snapped to a quarter, so the same 27" 4K panel comes out at 2.0x
-    /// on Windows and 2.75x on a Mac. Pass `1.0` to take the OS scale factor as
-    /// it comes, or another number for a deliberately larger or smaller UI.
-    ///
-    /// The value multiplies the OS scale factor rather than replacing it: the
-    /// OS still owns how many physical pixels a point is worth. The
-    /// `SAUDADE_UI_SCALE` environment variable overrides it, so a UI can be
-    /// tried at other sizes without a rebuild.
+    /// It *replaces* what the runtime would work out, the system scale factor
+    /// included, so `with_ui_scale(3.0)` draws at 3.0 on any display. Left
+    /// alone, the runtime aims a logical pixel at 1/96 in and multiplies that
+    /// alignment by the factor the platform reports — a Windows display at 150%
+    /// draws at 1.5x, a Retina Mac at 2.25x. `SAUDADE_UI_SCALE` overrides this,
+    /// and `SAUDADE_UI_DPI` moves the reference density instead of pinning one
+    /// display: see [`ui_scale`](crate::ui_scale).
     ///
     /// Has no effect under the Wayland backend, which renders at the integer
     /// buffer scale the compositor asks for — and whose logical unit is already
@@ -181,9 +176,15 @@ struct AppHandler {
     /// own logical units, folded into [`Self::scale`]. A function of the OS
     /// scale factor, so it moves with it: see [`ui_scale`](crate::ui_scale).
     ui_scale: f32,
-    /// A UI scale the app or the environment pinned, used verbatim in place of
+    /// A scale the app or the environment pinned, drawn at verbatim in place of
     /// the per-display default. `None` means "take the default".
-    ui_scale_pin: Option<f32>,
+    scale_pin: Option<f32>,
+    /// The density a logical pixel is aimed at — [`REFERENCE_DPI`] unless
+    /// `SAUDADE_UI_DPI` says otherwise. Read once at startup, since it is a
+    /// property of this run and not of any display.
+    ///
+    /// [`REFERENCE_DPI`]: crate::ui_scale
+    reference_dpi: f32,
 
     // Per-frame state:
     cursor: Option<Point>,
@@ -332,7 +333,8 @@ impl AppHandler {
             physical: PhysicalSize::new(0, 0),
             scale: 1.0,
             ui_scale: 1.0,
-            ui_scale_pin: crate::ui_scale::pinned(app.ui_scale),
+            scale_pin: crate::ui_scale::pinned(app.ui_scale),
+            reference_dpi: crate::ui_scale::reference_dpi(),
             cursor: None,
             cursor_icon: Cursor::Default,
             buttons: PointerButtons::default(),
@@ -361,7 +363,7 @@ impl ApplicationHandler for AppHandler {
         // will open on can only be guessed at before there is a window to ask.
         // The primary monitor is that guess, and is right for the single-display
         // case and for the usual multi-display one; a window that lands
-        // somewhere else is corrected below, once there is something to measure.
+        // somewhere else is corrected below, once there is a window to ask.
         if let Some(monitor) = event_loop.primary_monitor() {
             let (scale, ui_scale) = self.scales_for(monitor.scale_factor() as f32);
             self.scale = scale;
@@ -1092,18 +1094,17 @@ impl AppHandler {
     /// and the UI scale that implies — what the app or the environment pinned,
     /// else the ladder in [`ui_scale`](crate::ui_scale).
     ///
-    /// The drawn scale comes first because it is the one that has to be exact:
-    /// the snapped quarter itself, rather than `os_scale` multiplied by a ratio
-    /// divided back out of it, which would leave a clean 2.0 a hair off.
+    /// The drawn scale is the primary of the two, pinned or derived: it is what
+    /// the window is really drawn at and has to be exact. The UI scale falls out
+    /// of it as the ratio to the platform's own unit, which is all it is ever
+    /// used for — carrying a bound or an inset across the two.
     fn scales_for(&self, os_scale: f32) -> (f32, f32) {
         let os = os_scale.max(0.01);
-        match self.ui_scale_pin {
-            Some(ui) => ((os * ui).max(0.01), ui),
-            None => {
-                let scale = crate::ui_scale::effective_for(os);
-                (scale, scale / os)
-            }
-        }
+        let scale = self
+            .scale_pin
+            .unwrap_or_else(|| crate::ui_scale::effective_for(os, self.reference_dpi))
+            .max(0.01);
+        (scale, scale / os)
     }
 
     /// `logical` saudade pixels in the platform's own logical unit — the one
@@ -1149,9 +1150,11 @@ impl AppHandler {
     /// scale that display calls for, keeping the window's *logical* size where
     /// it was.
     ///
-    /// Both halves move together on macOS, where crossing between a HiDPI
-    /// screen and a 1x one changes the backing factor and, with it, whether a
-    /// point is denser than 1/96 in.
+    /// The drawn scale is the half that normally moves: the UI scale between
+    /// them is the platform's own ratio — 1 on Windows and X11, 9/8 on macOS —
+    /// wherever the snap has no work to do, so crossing between a Retina screen
+    /// and a 1x one moves the scale from 2.25 to 1.17 and barely touches the
+    /// ratio. Only a factor the snap rounds can move it, so both are checked.
     ///
     /// A no-op when neither half has moved, which is not a redundant check: the
     /// macOS backend reports `ScaleFactorChanged` when a new window settles as
