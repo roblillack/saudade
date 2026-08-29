@@ -46,6 +46,9 @@ While pre-1.0, the minor version is bumped for breaking changes.
   its own and area-averages it into a fixed on-screen box, which is what a DPI
   preview pane wants from a slider. `Checkbox::set_rect` moves a checkbox after
   construction, as `Slider` and `ScrollBar` already allow.
+- `Checkbox::set_rect` moves a checkbox after construction, as `Slider`,
+  `Dropdown`, `ProgressBar` and `ScrollBar` already allow — for a layout that
+  reflows, e.g. a control pinned to the bottom edge of a resizable window.
 
 ### Removed
 
