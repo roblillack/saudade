@@ -74,6 +74,7 @@ pub struct App {
     window: WindowConfig,
     theme: Theme,
     root: Box<dyn Widget>,
+    ui_scale: Option<f32>,
 }
 
 impl App {
@@ -82,11 +83,31 @@ impl App {
             window,
             theme: Theme::default(),
             root: Box::new(root),
+            ui_scale: None,
         }
     }
 
     pub fn with_theme(mut self, theme: Theme) -> Self {
         self.theme = theme;
+        self
+    }
+
+    /// The scale to draw at: how many physical pixels a saudade logical pixel
+    /// is worth, outright.
+    ///
+    /// It *replaces* what the runtime would work out, the system scale factor
+    /// included, so `with_ui_scale(3.0)` draws at 3.0 on any display. Left
+    /// alone, the runtime aims a logical pixel at 1/96 in and multiplies that
+    /// alignment by the factor the platform reports — a Windows display at 150%
+    /// draws at 1.5x, a Retina Mac at 2.25x. `SAUDADE_UI_SCALE` overrides this,
+    /// and `SAUDADE_UI_DPI` moves the reference density instead of pinning one
+    /// display: see [`ui_scale`](crate::ui_scale).
+    ///
+    /// Has no effect under the Wayland backend, which renders at the integer
+    /// buffer scale the compositor asks for — and whose logical unit is already
+    /// normalized against 96 dpi.
+    pub fn with_ui_scale(mut self, scale: f32) -> Self {
+        self.ui_scale = Some(scale.max(0.01));
         self
     }
 
@@ -143,14 +164,27 @@ struct AppHandler {
     context: Option<softbuffer::Context<Rc<Window>>>,
     main_surface: Option<softbuffer::Surface<Rc<Window>, Rc<Window>>>,
     physical: PhysicalSize<u32>,
-    /// Logical→physical scale factor, owned by the OS: adopted from
-    /// [`Window::scale_factor`] at startup and refreshed only when the
-    /// compositor reports a
+    /// Logical→physical scale factor: [`Window::scale_factor`], which the OS
+    /// owns, times [`Self::ui_scale`], which follows from it. Refreshed when
+    /// the platform reports a
     /// [`ScaleFactorChanged`](winit::event::WindowEvent::ScaleFactorChanged)
     /// event. Widget code cannot override it — a widget that wants to render
     /// at a different scale paints into a sub-region with
     /// [`Painter::with_scale`](crate::Painter::with_scale) instead.
     scale: f32,
+    /// How much bigger a saudade logical pixel is than one of the platform's
+    /// own logical units, folded into [`Self::scale`]. A function of the OS
+    /// scale factor, so it moves with it: see [`ui_scale`](crate::ui_scale).
+    ui_scale: f32,
+    /// A scale the app or the environment pinned, drawn at verbatim in place of
+    /// the per-display default. `None` means "take the default".
+    scale_pin: Option<f32>,
+    /// The density a logical pixel is aimed at — [`REFERENCE_DPI`] unless
+    /// `SAUDADE_UI_DPI` says otherwise. Read once at startup, since it is a
+    /// property of this run and not of any display.
+    ///
+    /// [`REFERENCE_DPI`]: crate::ui_scale
+    reference_dpi: f32,
 
     // Per-frame state:
     cursor: Option<Point>,
@@ -298,6 +332,9 @@ impl AppHandler {
             main_surface: None,
             physical: PhysicalSize::new(0, 0),
             scale: 1.0,
+            ui_scale: 1.0,
+            scale_pin: crate::ui_scale::pinned(app.ui_scale),
+            reference_dpi: crate::ui_scale::reference_dpi(),
             cursor: None,
             cursor_icon: Cursor::Default,
             buttons: PointerButtons::default(),
@@ -321,15 +358,23 @@ impl ApplicationHandler for AppHandler {
         if self.main_win.is_some() {
             return; // already initialized; ignore redundant resumes
         }
+        // Both sizes are in the *platform's* logical unit, which is only
+        // saudade's own until a UI scale applies — and the display the window
+        // will open on can only be guessed at before there is a window to ask.
+        // The primary monitor is that guess, and is right for the single-display
+        // case and for the usual multi-display one; a window that lands
+        // somewhere else is corrected below, once there is a window to ask.
+        if let Some(monitor) = event_loop.primary_monitor() {
+            let (scale, ui_scale) = self.scales_for(monitor.scale_factor() as f32);
+            self.scale = scale;
+            self.ui_scale = ui_scale;
+        }
         let mut attrs = WindowAttributes::default()
             .with_title(&self.window_config.title)
-            .with_inner_size(LogicalSize::new(
-                self.window_config.size.w as f64,
-                self.window_config.size.h as f64,
-            ))
+            .with_inner_size(self.to_platform(self.window_config.size))
             .with_resizable(self.window_config.resizable);
         if let Some(min) = self.window_config.min_size {
-            attrs = attrs.with_min_inner_size(LogicalSize::new(min.w as f64, min.h as f64));
+            attrs = attrs.with_min_inner_size(self.to_platform(min));
         }
         let win = event_loop
             .create_window(attrs)
@@ -342,8 +387,18 @@ impl ApplicationHandler for AppHandler {
         let mut surface = softbuffer::Surface::new(&context, win.clone())
             .expect("saudade: failed to create softbuffer surface");
 
-        self.physical = win.inner_size();
-        self.scale = win.scale_factor() as f32;
+        // Now that there is a window there is a display to take a scale from,
+        // rather than the guess above. Re-ask for the size the design wants only
+        // if that guess was wrong, since asking is a visible resize.
+        let (scale, ui_scale) = self.scales_for(win.scale_factor() as f32);
+        let guessed_right = ui_scale == self.ui_scale;
+        self.ui_scale = ui_scale;
+        self.scale = scale;
+        self.physical = if guessed_right {
+            win.inner_size()
+        } else {
+            self.fit_window(&win, self.design_size)
+        };
         resize_surface(&mut surface, self.physical);
         relayout(&mut self.root, self.physical, self.scale, self.design_size);
         // Give the first focusable widget in the tree keyboard focus by
@@ -448,17 +503,7 @@ impl AppHandler {
                 self.needs_redraw = true;
             }
             WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
-                self.scale = scale_factor as f32;
-                if let Some(win) = self.main_win.as_ref() {
-                    self.physical = win.inner_size();
-                }
-                if let Some(s) = self.main_surface.as_mut() {
-                    resize_surface(s, self.physical);
-                }
-                relayout(&mut self.root, self.physical, self.scale, self.design_size);
-                // The screen rect is in logical units, so a new scale rescales
-                // it even when the display is the same one.
-                self.refresh_screen();
+                self.adopt_scale(scale_factor as f32);
                 self.needs_redraw = true;
             }
             WindowEvent::CursorMoved { position, .. } => {
@@ -791,11 +836,14 @@ impl AppHandler {
     /// winit applies the new inner size either synchronously (returning the new
     /// physical size, which we adopt right away) or by emitting a later
     /// `Resized` event — which runs the same surface-resize + relayout path.
+    ///
+    /// Asked for in physical pixels, since `size` counts *saudade's* logical
+    /// pixels and a UI scale makes those larger than the platform's own unit.
     fn apply_resize(&mut self, size: Size) {
         let Some(win) = self.main_win.clone() else {
             return;
         };
-        let requested = LogicalSize::new(size.w as f64, size.h as f64);
+        let requested = self.to_physical(size);
         if let Some(new_phys) = win.request_inner_size(requested) {
             self.physical = new_phys;
             if let Some(s) = self.main_surface.as_mut() {
@@ -942,6 +990,7 @@ impl AppHandler {
     fn paint_main(&mut self) {
         let content = self.root.bounds().into();
         let (origin_x, origin_y) = origin(content, self.scale, self.physical);
+        let system_scale = self.os_scale();
         let Some(surface) = self.main_surface.as_mut() else {
             return;
         };
@@ -963,6 +1012,10 @@ impl AppHandler {
             None,
         )
         .with_screen(self.screen);
+        // `scale` above is saudade's logical→physical factor, which a UI scale
+        // lifts above the display's own; widgets asking what the *display* is
+        // set to want that one.
+        painter.set_system_scale(system_scale);
         // A root that paints its own background covers the pattern anyway, so
         // only the letterbox around it is worth laying down — usually nothing.
         if self.root.paints_own_background() {
@@ -982,6 +1035,7 @@ impl AppHandler {
     }
 
     fn paint_popup(&mut self, idx: usize) {
+        let system_scale = self.os_scale();
         let Some(p) = self.popups.get_mut(idx) else {
             return;
         };
@@ -1010,6 +1064,7 @@ impl AppHandler {
             Some(anchor),
         )
         .with_screen(screen);
+        painter.set_system_scale(system_scale);
         painter.fill(self.theme.background);
         painter.set_clip_phys(0, 0, popup_phys_w, popup_phys_h);
         self.root.paint(&mut painter, &self.theme);
@@ -1028,6 +1083,113 @@ impl AppHandler {
         self.screen = self.compute_screen();
     }
 
+    /// The scale factor the OS itself reports — [`Self::scale`] with the UI
+    /// scale taken back out. What a native app on this display would see, and
+    /// what [`Painter::system_scale`] hands to widgets.
+    fn os_scale(&self) -> f32 {
+        self.scale / self.ui_scale.max(0.01)
+    }
+
+    /// The scale to draw at on a display whose OS scale factor is `os_scale`,
+    /// and the UI scale that implies — what the app or the environment pinned,
+    /// else the ladder in [`ui_scale`](crate::ui_scale).
+    ///
+    /// The drawn scale is the primary of the two, pinned or derived: it is what
+    /// the window is really drawn at and has to be exact. The UI scale falls out
+    /// of it as the ratio to the platform's own unit, which is all it is ever
+    /// used for — carrying a bound or an inset across the two.
+    fn scales_for(&self, os_scale: f32) -> (f32, f32) {
+        let os = os_scale.max(0.01);
+        let scale = self
+            .scale_pin
+            .unwrap_or_else(|| crate::ui_scale::effective_for(os, self.reference_dpi))
+            .max(0.01);
+        (scale, scale / os)
+    }
+
+    /// `logical` saudade pixels in the platform's own logical unit — the one
+    /// every *bound* handed to winit is counted in.
+    ///
+    /// Scale-factor-independent, so a minimum set in it survives a
+    /// [`ScaleFactorChanged`](winit::event::WindowEvent::ScaleFactorChanged)
+    /// without being re-set: both units are logical, and only the UI scale
+    /// stands between them.
+    fn to_platform(&self, logical: Size) -> LogicalSize<f64> {
+        let ui = self.ui_scale as f64;
+        LogicalSize::new(
+            (logical.w as f64 * ui).max(1.0),
+            (logical.h as f64 * ui).max(1.0),
+        )
+    }
+
+    /// `logical` saudade pixels in physical ones, at the current scale.
+    fn to_physical(&self, logical: Size) -> PhysicalSize<u32> {
+        PhysicalSize::new(
+            ((logical.w as f32) * self.scale).round().max(1.0) as u32,
+            ((logical.h as f32) * self.scale).round().max(1.0) as u32,
+        )
+    }
+
+    /// Size `win` to hold `logical` saudade pixels, carrying the configured
+    /// minimum over into the platform's unit, and report the size it took.
+    ///
+    /// The size itself is asked for in physical pixels: this runs while a scale
+    /// factor is changing under us, and a physical size means the same thing
+    /// whichever of the two winit has adopted by now.
+    fn fit_window(&self, win: &Window, logical: Size) -> PhysicalSize<u32> {
+        if let Some(min) = self.window_config.min_size {
+            win.set_min_inner_size(Some(self.to_platform(min)));
+        }
+        let want = self.to_physical(logical);
+        // `None` means the platform will report the new size in a `Resized`
+        // event instead; take the requested size until it does.
+        win.request_inner_size(want).unwrap_or(want)
+    }
+
+    /// Adopt `os_scale` for the display the window is on now, along with the UI
+    /// scale that display calls for, keeping the window's *logical* size where
+    /// it was.
+    ///
+    /// The drawn scale is the half that normally moves: the UI scale between
+    /// them is the platform's own ratio — 1 on Windows and X11, 9/8 on macOS —
+    /// wherever the snap has no work to do, so crossing between a Retina screen
+    /// and a 1x one moves the scale from 2.25 to 1.17 and barely touches the
+    /// ratio. Only a factor the snap rounds can move it, so both are checked.
+    ///
+    /// A no-op when neither half has moved, which is not a redundant check: the
+    /// macOS backend reports `ScaleFactorChanged` when a new window settles as
+    /// well as when it changes display, and at startup that lands while our own
+    /// resize request is still in flight. Re-deriving a logical size from a
+    /// [`Self::physical`] that predates the request would preserve the wrong
+    /// size and then undo the request — leaving the window at the platform
+    /// size, a UI scale too small.
+    fn adopt_scale(&mut self, os_scale: f32) {
+        let Some(win) = self.main_win.clone() else {
+            return;
+        };
+        let (scale, ui_scale) = self.scales_for(os_scale);
+        if scale == self.scale && ui_scale == self.ui_scale {
+            return;
+        }
+        // Whatever the window currently holds, in the unit the layout has been
+        // working in — the size to preserve across the change.
+        let old = self.scale.max(0.01);
+        let logical = Size::new(
+            (self.physical.width as f32 / old).round() as i32,
+            (self.physical.height as f32 / old).round() as i32,
+        );
+        self.ui_scale = ui_scale;
+        self.scale = scale;
+        self.physical = self.fit_window(&win, logical);
+        if let Some(s) = self.main_surface.as_mut() {
+            resize_surface(s, self.physical);
+        }
+        relayout(&mut self.root, self.physical, self.scale, self.design_size);
+        // The screen rect is in logical units, so a new scale rescales it even
+        // when the display is the same one.
+        self.refresh_screen();
+    }
+
     fn compute_screen(&self) -> Option<Rect> {
         let win = self.main_win.as_ref()?;
         let monitor = win.current_monitor()?;
@@ -1039,7 +1201,18 @@ impl AppHandler {
         // The desktop reserves some of the display for its own furniture — the
         // macOS menu bar and Dock. A menu clamped over the Dock would hide its
         // own last row, and with it the arrow saying there is more.
+        //
+        // Those come back in the *platform's* logical unit (AppKit points),
+        // which a UI scale above 1.0 makes smaller than one of ours, so they
+        // need converting like any other borrowed measurement.
+        let ui = self.ui_scale.max(0.01);
         let (left, top, right, bottom) = desktop_insets(win);
+        let (left, top, right, bottom) = (
+            (left as f32 / ui).round() as i32,
+            (top as f32 / ui).round() as i32,
+            (right as f32 / ui).round() as i32,
+            (bottom as f32 / ui).round() as i32,
+        );
         Some(Rect::new(
             logical(origin.x - inner.x) + left,
             logical(origin.y - inner.y) + top,

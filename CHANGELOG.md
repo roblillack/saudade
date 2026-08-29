@@ -10,6 +10,50 @@ While pre-1.0, the minor version is bumped for breaking changes.
 
 ## [Unreleased] - ReleaseDate
 
+### Fixed
+
+- Button frames, bevels, focus rings and etched dividers are crisp at a
+  fractional scale. Each chrome line used to snap on its own, from its own
+  position in the window: at 2.33x a frame came out heavier along one edge than
+  the opposite one and different again on the button beside it, and a dotted
+  focus ring degenerated into a smear of two- and three-pixel dots. Every frame
+  primitive — `stroke_rect`, `raised_bevel`, `sunken_bevel`, `button`,
+  `light_button`, `focus_rect`, `etched_h_line` — now draws in device pixels off
+  a `Frame` that rounds each boundary's *depth* rather than each line's
+  thickness, so a ring is the same thickness on all four sides and the same on
+  every widget at that scale, and nothing accumulates. Chrome at 1.0x, below
+  1.5x and at integer scales is byte-for-byte unchanged; 1.5x moves, and so does
+  `etched_h_line` below it, it having had no crisp pass before.
+- A logical pixel now lands the size it claims to on macOS. Its
+  `backingScaleFactor` counts device pixels per point and says nothing about
+  density, while a point is laid out at about 1/108 in, so the scale a window is
+  drawn at there is `108/96 × factor` — a Retina Mac draws at 2.25x where it
+  drew at 2.0x. Windows and X11 are unaffected. Two overrides sit outside that
+  derivation: `SAUDADE_UI_SCALE`, and `App::with_ui_scale`, set the drawn scale
+  outright, and `SAUDADE_UI_DPI` moves the 96-dpi reference density every scale
+  is derived against. Both accept `auto` and both win over the program's own
+  choice, so a UI can be tried at another size without a rebuild. The Wayland
+  backend implements neither: it renders at the integer buffer scale the
+  compositor asks for.
+
+### Added
+
+- `Painter::crisp(rect, |p, frame| …)` runs a frame recipe in device pixels,
+  against a `Frame` (`depth`, `ring`, `inside`) that scales and rounds each
+  boundary on the way to the buffer — the mechanism behind the fix above, for
+  custom chrome. `Painter::chrome_unit` is the scale rounded to a whole pixel,
+  for a lone thin line. `Painter::draw_resampled` renders content at a scale of
+  its own and area-averages it into a fixed on-screen box, which is what a DPI
+  preview pane wants from a slider. `Checkbox::set_rect` moves a checkbox after
+  construction, as `Slider` and `ScrollBar` already allow.
+
+### Removed
+
+- `Painter::wants_1x_crispness`, whose `[0.9, 1.5)` range described a narrower
+  fix than the one that replaced it: `Painter::crisp` is unconditional, so a
+  widget no longer branches on the scale at all. Custom chrome that gated a
+  `Painter::physical` pass on it becomes one `crisp` call.
+
 ## [0.6.1] - 2026-08-25
 
 ### Fixed

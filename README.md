@@ -31,24 +31,24 @@ apart from this huge ~~braindump~~ README.
 Reference apps live under `examples/`. Run any of them with
 `cargo run --example <name>`:
 
-| Example         | What it shows                                                                                                                                                                                                                                                                                                                                                                                    |
-| --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `notepad`       | Editor window with menu bar (`MenuBar`, `TextEditor`); File → Open / Save As drive a `FileDialog`.                                                                                                                                                                                                                                                                                                |
-| `filer`         | Filesystem browser using `List` with folder/file icons. Drag an entry out of the window to drop it onto another app (drag *source* via `EventCtx::start_drag`; Wayland only).                                                                                                                                                                                                                       |
-| `dnd`           | A drop zone that highlights while a file drag hovers and lists the paths dropped onto it. Demonstrates OS file drag-and-drop (`DragEnter` / `DragMove` / `DragLeave` / `Drop`) across macOS, Windows, X11, and Wayland.                                                                                                                                                                            |
-| `picker`        | Pick-an-item dialog: `List` + buttons + `Dialog`, with Tab/Shift+Tab focus cycling.                                                                                                                                                                                                                                                                                                              |
-| `focus_form`    | `FocusLabel` buddy labels: Alt+letter mnemonics jump focus to the next field.                                                                                                                                                                                                                                                                                                                    |
-| `counter`       | [7GUIs](https://eugenkiss.github.io/7guis/) task 1 — a `Label` field and a `Button`.                                                                                                                                                                                                                                                                                                             |
-| `temperature`   | 7GUIs task 2 — two `TextInput`s converting Celsius ↔ Fahrenheit live.                                                                                                                                                                                                                                                                                                                            |
-| `flight_booker` | 7GUIs task 3 — a `Dropdown` picks the flight type and reactively enables / disables the return-date field and the Book `Button`.                                                                                                                                                                                                                                                                 |
-| `timer`         | 7GUIs task 4 — a `ProgressBar` gauge, a duration `Slider`, and a reset `Button`.                                                                                                                                                                                                                                                                                                                 |
-| `crud`          | 7GUIs task 5 — a `List` as a live, prefix-filtered database view with Create / Update / Delete `Button`s that enable themselves reactively.                                                                                                                                                                                                                                                      |
-| `circle_drawer` | 7GUIs task 6 — a custom canvas (no circle primitive: midpoint outlines, span-filled disks) with hover selection, a `ContextMenu` right-click menu, a real modal dialog (`Modal`) hosting the diameter `Slider`, and snapshot undo/redo.                                                                                                                                                                        |
-| `cells`         | 7GUIs task 7 — a scrollable A–Z / 0–99 spreadsheet `Grid` (built on `ScrollBar` + `TextInput`) with a formula engine: cell refs, `+ - * /`, ranges, `SUM`/`AVG`/…, reactive recompute and cycle detection.                                                                                                                                                                                       |
-| `patterns`      | Previews the window background patterns (`none`, `solid`, `dots`, `lines`, `diagonal`, `cross-stitch`): press `p` to cycle the pattern and `c` to cycle the color. Every app draws one behind its widgets — default `superlight` `diagonal`, overridable with `SAUDADE_WINDOW_PATTERN` / `SAUDADE_WINDOW_PATTERN_COLOR` (e.g. `SAUDADE_WINDOW_PATTERN=dots SAUDADE_WINDOW_PATTERN_COLOR=light`). |
-| `scaling`       | Previews widgets at an arbitrary logical→physical scale via `Painter::draw_scaled`: a `Slider` and preset `Button`s (1.0x / 1.25x / … / 3.0x) drive a "preview scale" — starting at the display's OS scale — that a small panel of real widgets (`TextInput`, `Dropdown`, `Checkbox`, `Button`s, `ProgressBar`) redraws at, plus a "zoom in 2x" `Checkbox` that magnifies the result. The window resizes itself (via `EventCtx::request_window_size`) to fit the preview at the chosen scale. The window's own (OS-owned) scale is never touched.                                  |
-| `svg`           | Compares `include_svg!` (SVG baked to polygons at compile time, filled at runtime — no SVG crate in the binary) against `include_str!` + `resvg` (parse + rasterize at runtime). Draws six icons both ways for a side-by-side fidelity check and prints a micro-benchmark to the console (run with `--release`). Needs `resvg` only as a dev-dependency, for the comparison.                                                                                                                                                |
-| `chrome`        | Renders an "about box" offscreen and wraps it in Canoe-style window chrome (title bar, frame, drop shadow on a teal desktop) via `MockBackend::render_framed`, writing one PNG per frame style (`Resizable` / `Fixed` / `Dialog`). Opens no window — it generates screenshots.                                                                                                                    |
+| Example         | What it shows                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| --------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `notepad`       | Editor window with menu bar (`MenuBar`, `TextEditor`); File → Open / Save As drive a `FileDialog`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| `filer`         | Filesystem browser using `List` with folder/file icons. Drag an entry out of the window to drop it onto another app (drag _source_ via `EventCtx::start_drag`; Wayland only).                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| `dnd`           | A drop zone that highlights while a file drag hovers and lists the paths dropped onto it. Demonstrates OS file drag-and-drop (`DragEnter` / `DragMove` / `DragLeave` / `Drop`) across macOS, Windows, X11, and Wayland.                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| `picker`        | Pick-an-item dialog: `List` + buttons + `Dialog`, with Tab/Shift+Tab focus cycling.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| `focus_form`    | `FocusLabel` buddy labels: Alt+letter mnemonics jump focus to the next field.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| `counter`       | [7GUIs](https://eugenkiss.github.io/7guis/) task 1 — a `Label` field and a `Button`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| `temperature`   | 7GUIs task 2 — two `TextInput`s converting Celsius ↔ Fahrenheit live.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| `flight_booker` | 7GUIs task 3 — a `Dropdown` picks the flight type and reactively enables / disables the return-date field and the Book `Button`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| `timer`         | 7GUIs task 4 — a `ProgressBar` gauge, a duration `Slider`, and a reset `Button`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| `crud`          | 7GUIs task 5 — a `List` as a live, prefix-filtered database view with Create / Update / Delete `Button`s that enable themselves reactively.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| `circle_drawer` | 7GUIs task 6 — a custom canvas (no circle primitive: midpoint outlines, span-filled disks) with hover selection, a `ContextMenu` right-click menu, a real modal dialog (`Modal`) hosting the diameter `Slider`, and snapshot undo/redo.                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| `cells`         | 7GUIs task 7 — a scrollable A–Z / 0–99 spreadsheet `Grid` (built on `ScrollBar` + `TextInput`) with a formula engine: cell refs, `+ - * /`, ranges, `SUM`/`AVG`/…, reactive recompute and cycle detection.                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| `patterns`      | Previews the window background patterns (`none`, `solid`, `dots`, `lines`, `diagonal`, `cross-stitch`): press `p` to cycle the pattern and `c` to cycle the color. Every app draws one behind its widgets — default `superlight` `diagonal`, overridable with `SAUDADE_WINDOW_PATTERN` / `SAUDADE_WINDOW_PATTERN_COLOR` (e.g. `SAUDADE_WINDOW_PATTERN=dots SAUDADE_WINDOW_PATTERN_COLOR=light`).                                                                                                                                                                                                                                                         |
+| `scaling`       | Previews widgets at an arbitrary logical→physical scale via `Painter::draw_scaled`: a `Slider` and two rows of preset `Button`s walking a quarter ladder (1.0x / 1.25x / … / 3.0x, plus 3.5x) drive a "preview scale" — starting at the display's OS scale — that a small panel of real widgets (`TextInput`, `Dropdown`, `Checkbox`, `Button`s including a focused one for its dotted focus rectangle, `ProgressBar`) redraws at, plus a "zoom in 2x" `Checkbox` that magnifies the result. The window resizes itself (via `EventCtx::request_window_size`) to fit the preview at the chosen scale. The window's own (OS-owned) scale is never touched. |
+| `svg`           | Compares `include_svg!` (SVG baked to polygons at compile time, filled at runtime — no SVG crate in the binary) against `include_str!` + `resvg` (parse + rasterize at runtime). Draws six icons both ways for a side-by-side fidelity check and prints a micro-benchmark to the console (run with `--release`). Needs `resvg` only as a dev-dependency, for the comparison.                                                                                                                                                                                                                                                                             |
+| `chrome`        | Renders an "about box" offscreen and wraps it in Canoe-style window chrome (title bar, frame, drop shadow on a teal desktop) via `MockBackend::render_framed`, writing one PNG per frame style (`Resizable` / `Fixed` / `Dialog`). Opens no window — it generates screenshots.                                                                                                                                                                                                                                                                                                                                                                           |
 
 ```console
 $ cargo run --example notepad        # or: filer, dnd, picker, counter, temperature,
@@ -117,19 +117,19 @@ to an object-oriented UI framework.
 
 ## Module map
 
-| Module   | Contents                                                                                                                                                                                                 |
-| -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| geometry | `Point`, `Size`, `Rect`, `Color`                                                                                                                                                                         |
-| event    | `Event`, `DragData`, `MouseButton`, `Key`, `NamedKey`, `Modifiers`, `EventCtx`                                                                                                                           |
-| theme    | `Theme`, default `Theme::windows_31()` palette                                                                                                                                                           |
-| painter  | `Painter` — drawing primitives + Win 3.1 chrome helpers                                                                                                                                                  |
-| svg      | `SvgImage`, `SvgPolygon`, `FillRule` + the `include_svg!` macro — compile-time vector icons                                                                                                              |
-| font     | `Font` — system font lookup + glyph rasterization                                                                                                                                                        |
-| widget   | `Widget` trait (paint / event / focus / overlay hooks)                                                                                                                                                   |
+| Module   | Contents                                                                                                                                                                                                                                            |
+| -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| geometry | `Point`, `Size`, `Rect`, `Color`                                                                                                                                                                                                                    |
+| event    | `Event`, `DragData`, `MouseButton`, `Key`, `NamedKey`, `Modifiers`, `EventCtx`                                                                                                                                                                      |
+| theme    | `Theme`, default `Theme::windows_31()` palette                                                                                                                                                                                                      |
+| painter  | `Painter` — drawing primitives + Win 3.1 chrome helpers                                                                                                                                                                                             |
+| svg      | `SvgImage`, `SvgPolygon`, `FillRule` + the `include_svg!` macro — compile-time vector icons                                                                                                                                                         |
+| font     | `Font` — system font lookup + glyph rasterization                                                                                                                                                                                                   |
+| widget   | `Widget` trait (paint / event / focus / overlay hooks)                                                                                                                                                                                              |
 | widgets  | `Container`, `Column`, `Row`, `Label`, `FocusLabel`, `Button`, `Checkbox`, `Bevel`, `Image`, `MenuBar`, `Menu`, `MenuItem`, `ContextMenu`, `ScrollBar`, `Slider`, `ProgressBar`, `List`, `Modal`, `Dialog`, `FileDialog`, `TextInput`, `TextEditor` |
-| app      | `App`, `WindowConfig` — runtime entry point                                                                                                                                                              |
-| mock     | `MockBackend`, `Snapshot` — offscreen rendering to a pixel buffer / PNG                                                                                                                                   |
-| chrome   | `WindowChrome`, `WindowFrame` — Canoe-style title bar + frame for screenshots                                                                                                                             |
+| app      | `App`, `WindowConfig` — runtime entry point                                                                                                                                                                                                         |
+| mock     | `MockBackend`, `Snapshot` — offscreen rendering to a pixel buffer / PNG                                                                                                                                                                             |
+| chrome   | `WindowChrome`, `WindowFrame` — Canoe-style title bar + frame for screenshots                                                                                                                                                                       |
 
 Everything user-facing is re-exported from the crate root; you generally
 just `use saudade::*;`.
@@ -236,12 +236,12 @@ Saudade receives **file drops from the OS** on every backend — drag files from
 Finder / Explorer / your file manager onto a window and the runtime turns the
 drag into the same typed events everything else uses:
 
-| Event       | When                                            | Carries          |
-| ----------- | ----------------------------------------------- | ---------------- |
-| `DragEnter` | a file drag entered the window                  | `pos`            |
-| `DragMove`  | the drag moved (Wayland only)                   | `pos`            |
-| `DragLeave` | the drag left / was cancelled without dropping  | —                |
-| `Drop`      | the files were released                         | `pos` + `DragData` |
+| Event       | When                                           | Carries            |
+| ----------- | ---------------------------------------------- | ------------------ |
+| `DragEnter` | a file drag entered the window                 | `pos`              |
+| `DragMove`  | the drag moved (Wayland only)                  | `pos`              |
+| `DragLeave` | the drag left / was cancelled without dropping | —                  |
+| `Drop`      | the files were released                        | `pos` + `DragData` |
 
 A widget opts in by matching these in its `event` handler — there's no separate
 trait method. `DragEnter` / `DragMove` / `Drop` carry a `pos` and route to the
@@ -250,7 +250,7 @@ position and is broadcast to every widget (like `PointerLeave`), so any drop
 target can clear a highlight. A drop target **must call `ctx.accept_drop()`**
 while handling `DragEnter` / `DragMove` to declare it will take a drop there;
 without it the runtime treats the widget as uninterested and the drag falls
-through. That's also what tells the *source* app the spot is a valid target —
+through. That's also what tells the _source_ app the spot is a valid target —
 its drag cursor reflects it — so windows with no drop zone correctly read as
 "no drop". A typical drop target accepts + highlights on `DragEnter`,
 un-highlights on `DragLeave`, and consumes `data.paths` on `Drop`:
@@ -289,7 +289,7 @@ Two per-backend caveats:
   is no `DragMove`, so treat the whole window as one drop zone there.
 - **Paths only, copy only.** A drop currently resolves to local file paths
   (`text/uri-list` on Wayland; winit's `HoveredFile` / `DroppedFile`
-  elsewhere). On Wayland we always accept the *copy* action, never move, so a
+  elsewhere). On Wayland we always accept the _copy_ action, never move, so a
   drop never makes the source delete the user's file.
 
 See `examples/dnd.rs` (`cargo run --example dnd`) for a working drop zone.
@@ -312,7 +312,7 @@ fn event(&mut self, event: &Event, ctx: &mut EventCtx) {
 }
 ```
 
-This is **Wayland-only**: winit exposes no API to *initiate* a drag on any of
+This is **Wayland-only**: winit exposes no API to _initiate_ a drag on any of
 its platforms (macOS, Windows, X11), so `start_drag` is a no-op there. The drag
 offers `text/uri-list` and copies (never moves) the files. Receiving drops, by
 contrast, works on every backend. See `examples/filer.rs` (`cargo run --example
@@ -352,13 +352,13 @@ pub struct Theme {
     pub disabled_text: Color,
     pub highlight_bg: Color,    // selected-item bg (Win 3.1: navy)
     pub highlight_text: Color,  // selected-item fg (Win 3.1: white)
-    pub font_size: f32,
+    pub font_size: f32,         // all chrome text
 }
 ```
 
 The default is `Theme::windows_31()`: white workspace, light-gray button
 face, white top/left highlight, mid-gray bottom/right shadow, black outer
-border, navy/white selection, 11pt text. Pass an alternative via
+border, navy/white selection, 13pt text. Pass an alternative via
 `App::with_theme(...)` if you want to skin the same widgets differently.
 
 ## Built-in widgets
@@ -490,9 +490,9 @@ rectangle it was constructed with.
 
 A single-line caption that carries a keyboard **mnemonic** and moves focus to
 the field beside it. Mark the accelerator with `&`, exactly like a menu label:
-`"Last &name:"` renders *Last name:* with the **n** underlined and binds
+`"Last &name:"` renders _Last name:_ with the **n** underlined and binds
 **Alt+N**. Pressing that combination anywhere in the surrounding container
-hands focus to the *next focusable widget added to the same parent* — the
+hands focus to the _next focusable widget added to the same parent_ — the
 classic "buddy label" convention — so a caption simply precedes its field:
 
 ```rust
@@ -695,18 +695,18 @@ after the event returns.
 
 **Mouse behavior.** Moving the cursor highlights rows; a left-click
 fires one and closes the menu. A press outside dismisses it — and a
-*right*-press outside is deliberately left unconsumed, so it can open a
+_right_-press outside is deliberately left unconsumed, so it can open a
 fresh menu on whatever it landed on in a single gesture.
 
 **Keyboard navigation** (active while the menu is open):
 
-| Key        | Effect                                                       |
-| ---------- | ------------------------------------------------------------ |
+| Key        | Effect                                                        |
+| ---------- | ------------------------------------------------------------- |
 | ↑ / ↓      | move highlight (skipping separators and disabled rows; wraps) |
-| Home / End | jump to first / last item                                    |
-| Enter      | fire the highlighted item                                    |
-| letter     | fire the item whose mnemonic matches                         |
-| Esc        | dismiss the menu                                             |
+| Home / End | jump to first / last item                                     |
+| Enter      | fire the highlighted item                                     |
+| letter     | fire the item whose mnemonic matches                          |
+| Esc        | dismiss the menu                                              |
 
 As with a menu bar, no keystroke reaches the widget below while the menu
 is up.
@@ -714,7 +714,7 @@ is up.
 **Placement.** The panel opens down and to the right of the anchor. The
 window it lives in is not the app's, so it may hang off the main
 window's edges — which is what a menu right-clicked near a border should
-do. What *does* bound it is the screen (`Painter::screen_area`): the
+do. What _does_ bound it is the screen (`Painter::screen_area`): the
 panel flips to the other side of the anchor rather than crossing an edge
 of the display, and a menu taller than the display is capped to it and
 scrolls. The wheel and the arrow keys move that window of rows, a click
@@ -977,15 +977,15 @@ selected filter, and switching the "File types" dropdown re-filters in place.
 
 Interaction:
 
-| Input                                 | Effect                                       |
-| ------------------------------------- | -------------------------------------------- |
-| click a file                          | put its name in the **File name** field      |
-| double-click a file / Enter / OK      | open it (resolve the field to a path)        |
-| double-click a folder or `..`         | descend / ascend                             |
-| Enter (a folder selected in the list) | descend into the selected folder             |
-| type a directory name + Enter         | descend into it                              |
-| type a wildcard (e.g. `*.rs`) + Enter | re-filter the list rather than open          |
-| Alt+L / Alt+N / Alt+T                 | focus the list / File name / File types      |
+| Input                                 | Effect                                  |
+| ------------------------------------- | --------------------------------------- |
+| click a file                          | put its name in the **File name** field |
+| double-click a file / Enter / OK      | open it (resolve the field to a path)   |
+| double-click a folder or `..`         | descend / ascend                        |
+| Enter (a folder selected in the list) | descend into the selected folder        |
+| type a directory name + Enter         | descend into it                         |
+| type a wildcard (e.g. `*.rs`) + Enter | re-filter the list rather than open     |
+| Alt+L / Alt+N / Alt+T                 | focus the list / File name / File types |
 
 The picker lives in its own window with server-side decorations, so its title
 ("Open" / "Save As") rides along on the `PopupRequest`; its "File types" dropdown
@@ -1149,7 +1149,7 @@ The geometry is resolution-independent, so the same constant fills crisply
 at any size or scale factor. The supported SVG subset is the practical one —
 `path` / `rect` / `circle` / `ellipse` / `line`, groups with inherited
 fills/strokes, solid colors, the usual path commands, and `transform`s (usvg
-folds these into the baked coordinates). What it *can't* bake — gradients and
+folds these into the baked coordinates). What it _can't_ bake — gradients and
 pattern fills, `clipPath`/`mask`/`filter`, group opacity, embedded raster
 `<image>`s, and `<text>` — is **dropped with a compile-time warning** at the
 `include_svg!` call site naming exactly what was skipped, so a surprising SVG
@@ -1174,7 +1174,7 @@ families the same way — the serif preferring Times New Roman → Georgia →
 Courier → Liberation Mono → DejaVu Sans Mono → Menlo → Monaco (with
 fontdb's monospace flag as a last-ditch fallback). Each `Font` is a whole
 family: alongside the regular face, the loader also pulls the host's real
-**bold**, *italic*, and ***bold-italic*** faces of that family (verified
+**bold**, _italic_, and **_bold-italic_** faces of that family (verified
 against fontdb so a regular face is never passed off as styled). A style
 the system has no face for falls back to the nearest real face — never a
 synthesized smear or shear.
@@ -1214,6 +1214,7 @@ WindowConfig::new("Notepad", 520, 340).resizable(true);
 ```rust
 App::new(window_cfg, root_widget)
    .with_theme(Theme::windows_31())   // optional
+   .with_ui_scale(2.0)                // optional; see "How big a logical pixel is"
    .run();                            // blocks until window closes
 ```
 
@@ -1284,11 +1285,11 @@ std::fs::write("window.png", snap.to_png()).unwrap();
 Pick the frame style with `WindowChrome`; the three mirror Canoe's window
 paints and differ in their window controls and border:
 
-| `WindowFrame`         | Constructor               | Controls            | Border                          |
-| --------------------- | ------------------------- | ------------------- | ------------------------------- |
-| `Resizable`           | `WindowChrome::resizable` | minimize + maximize | full multi-layer resize border  |
-| `Fixed`               | `WindowChrome::fixed`     | minimize only       | single 1px outline              |
-| `Dialog`              | `WindowChrome::dialog`    | none                | bulk layer takes the title color |
+| `WindowFrame` | Constructor               | Controls            | Border                           |
+| ------------- | ------------------------- | ------------------- | -------------------------------- |
+| `Resizable`   | `WindowChrome::resizable` | minimize + maximize | full multi-layer resize border   |
+| `Fixed`       | `WindowChrome::fixed`     | minimize only       | single 1px outline               |
+| `Dialog`      | `WindowChrome::dialog`    | none                | bulk layer takes the title color |
 
 `with_desktop_background` and `with_margin` override the teal backdrop and the
 desktop padding around the window; everything else stays Canoe's default. See
@@ -1301,11 +1302,16 @@ transformation to physical pixels itself.
 
 - The window is requested at `LogicalSize(size.w, size.h)`. winit + the
   compositor pick the physical buffer for the monitor's actual DPI.
-- The `Painter` uses `winit.scale_factor()` (a possibly-fractional `f32`,
-  e.g. 1.0, 1.25, 1.5, 2.0) directly.
+- The `Painter` draws at that factor times saudade's reference
+  alignment (see "How big a logical pixel is" below), a
+  possibly-fractional `f32` — 1.0, 1.25, 1.5, 2.0, 2.25.
 - Rectangle edges are snapped independently to physical pixels —
   adjacent rects always share an exact pixel boundary, so chrome stays
   crisp regardless of DPI.
+- Frames — button borders, bevels, field outlines, focus rings — are
+  drawn in physical pixels from scaled _depths_ instead (see "Frames as
+  vectors" below), because a stack of 1-logical-pixel lines snapped one
+  at a time comes out uneven.
 - Text is rasterized once at `font_size × scale` physical pixels via
   fontdue. No upscale, no resample, no blur.
 
@@ -1324,23 +1330,158 @@ around it depends on the root widget:
 Resize **never** scales pixels — it only changes how much space is
 available for layout decisions.
 
-Trade-off to be aware of: at non-integer scale factors (1.25, 1.5,…) a
-1-logical-pixel chrome line can land on a y-coordinate where the
-physical width rounds to 1 vs 2 pixels. The variation is invisible in
-practice on the dialogs we've built; if you hit a case where it
-matters, draw chrome at a fixed `round(scale)` thickness using
-`Painter::scale()`.
-
 The window's scale factor is owned by the OS — adopted at startup and
-refreshed only when the compositor reports a change. There is no API
-to override it: density independence comes from designing in logical
-pixels, not from forcing a particular scale.
+refreshed when the platform reports a change. There is no API to
+override it: density independence comes from designing in logical
+pixels, not from forcing a particular scale. How big a logical pixel
+itself is follows from the display — see below.
 
-What a widget *can* do is render content at a scale of its own
+### Frames as vectors
+
+Independent edge snapping is right for one rectangle and wrong for a
+frame. A Win 3.1 button is four or five 1-logical-pixel lines sitting
+directly on top of each other — black outline, an extra ring if it is
+the default button, then a bevel two pixels deep — and at a fractional
+scale each of them rounds on its own, from its own position in the
+window. At 2.25x such a line covers two device pixels or three purely
+by where its edges fall, so a frame that should read as one object
+comes out heavier along one edge than the opposite one. A dotted focus
+ring is worse, because there the error lands in the _pitch_: dots of
+two and three pixels separated by gaps of two and one stop reading as
+dots at all.
+
+So the frame primitives don't snap line by line. `Painter::crisp` drops
+the painter to device pixels, snaps the rect once, and hands the recipe
+a `Frame`, which places chrome the way `include_svg!` marks are
+rasterized: the geometry is written in resolution-independent units and
+each boundary is scaled and rounded on the way to the buffer.
+
+```rust
+painter.crisp(box_rect, |p, f| {
+    p.fill_rect(f.inside(1), fill);                      // the field
+    p.fill_ring(f.ring(0), theme.border, theme.border);  // 1px outline
+});
+```
+
+A `Frame` answers in _depths_: `f.depth(d)` is how many device pixels
+in from the widget's edge logical depth `d` lands, `f.ring(d)` is the
+four sides of the ring between `depth(d)` and `depth(d + 1)`, and
+`f.inside(d)` is what is left for the face. Nothing accumulates —
+every boundary is measured from the widget's own edge, and adjacent
+rings meet on the one they share — so a band lands within half a
+device pixel of its drawn depth no matter how deep the chrome goes:
+
+| scale | 2px bevel, nominal | drawn |
+| ----- | ------------------ | ----- |
+| 1.25x | 2.5                | 2     |
+| 1.5x  | 3.0                | 3     |
+| 2.0x  | 4.0                | 4     |
+| 2.25x | 4.5                | 5     |
+| 2.5x  | 5.0                | 5     |
+| 2.75x | 5.5                | 5     |
+| 3.0x  | 6.0                | 6     |
+
+Below 1.5x the depths are pinned to the design's own rather than
+scaled, which is where that 2 at 1.25x comes from: a logical pixel is
+still worth a single device pixel there, so scaling the depths would
+put a 3-pixel bevel under a 1-pixel border where the design says 2
+and 1.
+
+A few consequences:
+
+- A band two pixels deep is drawn as two rings rather than one taller
+  rect, because each ring is inset by its own depth: that is the
+  staircase a Win 3.1 bevel steps down at its corners. Sharing the
+  boundary between them is what keeps the pair exact.
+- `Painter::chrome_unit` — a line _thickness_ rounded to whole units —
+  is the right answer for a lone thin line (a divider, a caret, a grid
+  rule) and nothing else. Across a frame the error compounds with depth
+  and steps in whole units: 4 device pixels at 2.25x, 6 at 2.5x, a 50%
+  jump for an 11% change of scale.
+- `stroke_rect`, `raised_bevel`, `sunken_bevel`, `button`,
+  `light_button`, `focus_rect` and `etched_h_line` all go through
+  `crisp`, so widgets get this for free; a widget drawing chrome of its
+  own asks for the pass directly, as above. Inside the closure the
+  painter is at `scale == 1.0`, so those primitives are no help there —
+  each would draw a single device pixel. Take the geometry from the
+  `Frame`.
+- The dotted focus ring is placed by weight rather than by depth: the
+  dot is `depth(1)` square and the pitch exactly twice that, because
+  what the eye reads in a dash is its rhythm. A dash has no geometry
+  riding on it, so a pitch up to a pixel off nominal costs nothing.
+
+### How big a logical pixel is
+
+Widgets are laid out in logical pixels at a **reference density of 96
+dpi**: a `List` row is 18 of them, a checkbox 13, the padding either
+side of a menu-bar label 8 — Windows 3.1 metrics, drawn for a display
+where 96 of them span an inch.
+
+The scale a window is drawn at is two factors multiplied together:
+
+1. **Reference alignment** — the density of the platform's own logical
+   unit over saudade's reference. Windows and X11 report a scale factor
+   that is already a ratio against 96 dpi (winit divides the reported
+   DPI, or `Xft.dpi`, by 96), so their unit is ours and the alignment is
+   1. A macOS point is nearer 1/108 in — about how Apple lays a desktop
+      out, 218 dpi over a `backingScaleFactor` of 2 — so there it is
+      108/96 = 1.125.
+2. **The system factor** — `winit`'s `scale_factor()`, which carries
+   both the display's own density and whatever scaling the user set in
+   the OS: the percentage in Windows' Display Settings, `Xft.dpi` on
+   X11, `backingScaleFactor` on macOS.
+
+The product is snapped to a twelfth, a grid the platforms nearly live
+on already, which keeps the scales that occur in practice to a
+countable few:
+
+| display          | alignment | system | scale |
+| ---------------- | --------- | ------ | ----- |
+| Windows/X11 100% | 1.0       | 1.00   | 1.0   |
+| Windows/X11 125% | 1.0       | 1.25   | 1.25  |
+| Windows/X11 150% | 1.0       | 1.50   | 1.5   |
+| Windows/X11 200% | 1.0       | 2.00   | 2.0   |
+| macOS 1x         | 1.125     | 1.00   | 1.167 |
+| macOS Retina     | 1.125     | 2.00   | 2.25  |
+
+Every rung is exact bar the non-Retina Mac, whose 9/8 is thirteen and a
+half twelfths and rounds up to fourteen — a 3% inflation of the
+sparsest display macOS has.
+
+Both halves of that are configurable, from code or from the
+environment; the environment wins, in the spirit of winit's
+`WINIT_X11_SCALE_FACTOR`, so a UI can be tried at another size without
+touching the program.
+
+- **The scale, outright** — `App::with_ui_scale(2.0)` or
+  `SAUDADE_UI_SCALE=2.65`. This _replaces_ everything above, the system
+  factor included, and is the only way to ask for a scale off the grid.
+  Range 0.25–8.0.
+- **The reference density** — `SAUDADE_UI_DPI=72`. Every scale moves
+  with it, by 96 over whatever it is set to, and both platforms'
+  factors go on working underneath. A coarser reference makes the whole
+  UI larger, and 72 dpi is arguably where these metrics belong: they
+  were drawn for screens running 57–85 ppi, where a 13-pixel checkbox
+  was a sixth of an inch across, so 72 draws the chrome a third larger
+  than an honest 96 dpi does. Range 48–192.
+
+Either variable also accepts `auto`, meaning the default; anything else
+is ignored with a warning. `Painter::scale()` reports the scale the
+window draws at and `Painter::system_scale()` the factor the display
+reported. The Wayland backend implements neither knob — it renders at
+the integer buffer scale the compositor asks for.
+
+Note what a physical pixel is on a Mac: the framebuffer, which is not
+always the glass. A 27" 4K panel in the 2560x1440 mode macOS picks for
+it renders 5120x2880 and is scaled down to 3840x2160 on the way out, so
+every edge saudade snaps is resampled by 0.75. That softness belongs to
+the display mode, not to the scale factor, and no scale undoes it.
+
+What a widget _can_ do is render content at a scale of its own
 choosing. `Painter::draw_scaled(area, scale, zoom, bg, |p| …)` draws
 the closure as a real window at `scale` DPI would — snapped chrome,
 re-rasterized text, no resampling — into `area`, then magnifies the
-*result* by the integer `zoom` (a nearest-neighbor pixel copy that
+_result_ by the integer `zoom` (a nearest-neighbor pixel copy that
 never feeds back into `scale`). `zoom == 1` draws in place; `zoom > 1`
 renders once offscreen and blits it enlarged, which on a HiDPI display
 lets you actually see the per-pixel snapping a scale produced. It's
@@ -1414,31 +1555,31 @@ A more complete version, including Open/Save against a path passed as
 
 Saudade deliberately does **not** aim to:
 
-* target mobile platforms
-* support declarative UI definitions
-* embed or target a full browser engine
-* provide an immediate-mode API
-* rely on heavy procedural-macro DSLs
-* hide Rust's ownership model
+- target mobile platforms
+- support declarative UI definitions
+- embed or target a full browser engine
+- provide an immediate-mode API
+- rely on heavy procedural-macro DSLs
+- hide Rust's ownership model
 
 ## Probably out of scope
 
 The following features currently don't seem like a good fit for a small toolkit such as Saudade, so don't expect them anytime soon:
 
-* GPU rendering
-* right-to-left (RTL) text support
-* accessibility features
+- GPU rendering
+- right-to-left (RTL) text support
+- accessibility features
 
 ## Roadmap
 
 Features that fit Saudade's philosophy but haven't been implemented yet:
 
-* `Grid` container (`Row` is already available alongside `Column`)
-* `RadioButton` (`TextInput`, `Checkbox`, and `List` already exist)
-* Horizontal scrolling in `TextEditor` (the horizontal `ScrollBar` is already implemented; the editor just needs to use it)
-* Undo/redo in `TextEditor`
-* Multi-window support
-* Native menu bars on platforms that provide them
+- `Grid` container (`Row` is already available alongside `Column`)
+- `RadioButton` (`TextInput`, `Checkbox`, and `List` already exist)
+- Horizontal scrolling in `TextEditor` (the horizontal `ScrollBar` is already implemented; the editor just needs to use it)
+- Undo/redo in `TextEditor`
+- Multi-window support
+- Native menu bars on platforms that provide them
 
 ## License
 

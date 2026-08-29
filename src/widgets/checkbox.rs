@@ -90,6 +90,12 @@ impl Checkbox {
         self.checked = checked;
     }
 
+    /// Move the checkbox to `rect` — for a layout that reflows, e.g. a control
+    /// anchored to the bottom of a resizable window.
+    pub fn set_rect(&mut self, rect: Rect) {
+        self.rect = rect;
+    }
+
     fn toggle(&mut self, ctx: &mut EventCtx) {
         self.checked = !self.checked;
         ctx.request_paint();
@@ -125,20 +131,15 @@ impl Widget for Checkbox {
         };
 
         // 1px black outline around a flat field — enough to stay visible on a
-        // white window background without leaning on a sunken bevel. The fill +
-        // outline are kept together in one physical-pixel pass in the crisp
-        // range: the inset face fill must snap against the *same* physical box
-        // as the outline, so it can't be pulled out to a plain logical call
-        // without shifting an edge pixel.
-        if painter.wants_1x_crispness() {
-            painter.physical(box_rect, |p, r| {
-                p.fill_rect(r.inset(1), box_fill);
-                p.stroke_rect(r, theme.border);
-            });
-        } else {
-            painter.fill_rect(box_rect.inset(1), box_fill);
-            painter.stroke_rect(box_rect, theme.border);
-        }
+        // white window background without leaning on a sunken bevel. The fill
+        // and the outline go in one crisp pass: the outline wants the uniform
+        // weight every frame gets, and the inset fill has to be measured off
+        // the *same* physical box, so it can't be pulled out to a plain logical
+        // call without shifting an edge pixel.
+        painter.crisp(box_rect, |p, f| {
+            p.fill_rect(f.inside(1), box_fill);
+            p.fill_ring(f.ring(0), theme.border, theme.border);
+        });
         // The check glyph rides on top as a baked SVG; `draw_tinted` runs its
         // own crisp physical-pixel pass, so it stays out of the box's.
         if self.checked {
