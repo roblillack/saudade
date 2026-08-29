@@ -10,138 +10,42 @@ While pre-1.0, the minor version is bumped for breaking changes.
 
 ## [Unreleased] - ReleaseDate
 
+### Fixed
+
+- Button frames, bevels, focus rings and etched dividers are crisp at a
+  fractional scale. Each chrome line used to snap on its own, from its own
+  position in the window: at 2.33x a frame came out heavier along one edge than
+  the opposite one and different again on the button beside it, and a dotted
+  focus ring degenerated into a smear of two- and three-pixel dots. Every frame
+  primitive — `stroke_rect`, `raised_bevel`, `sunken_bevel`, `button`,
+  `light_button`, `focus_rect`, `etched_h_line` — now draws in device pixels off
+  a `Frame` that rounds each boundary's *depth* rather than each line's
+  thickness, so a ring is the same thickness on all four sides and the same on
+  every widget at that scale, and nothing accumulates. Chrome at 1.0x, below
+  1.5x and at integer scales is byte-for-byte unchanged; 1.5x moves, and so does
+  `etched_h_line` below it, it having had no crisp pass before.
+- A logical pixel now lands the size it claims to on macOS. Its
+  `backingScaleFactor` counts device pixels per point and says nothing about
+  density, while a point is laid out at about 1/108 in, so the scale a window is
+  drawn at there is `108/96 × factor` — a Retina Mac draws at 2.25x where it
+  drew at 2.0x. Windows and X11 are unaffected. Two overrides sit outside that
+  derivation: `SAUDADE_UI_SCALE`, and `App::with_ui_scale`, set the drawn scale
+  outright, and `SAUDADE_UI_DPI` moves the 96-dpi reference density every scale
+  is derived against. Both accept `auto` and both win over the program's own
+  choice, so a UI can be tried at another size without a rebuild. The Wayland
+  backend implements neither: it renders at the integer buffer scale the
+  compositor asks for.
+
 ### Added
 
-- A logical pixel now lands the size it claims to on macOS as well as
-  everywhere else. The scale a window is drawn at is two factors multiplied:
-  the density of the *platform's* own logical unit over saudade's 96-dpi
-  reference, times the scale factor the platform reports for the display. On
-  Windows and X11 the first is 1 — winit already divides the reported DPI, or
-  `Xft.dpi`, by a `BASE_DPI` of 96 — so nothing about those backends moves.
-  macOS is the one that was wrong: its `backingScaleFactor` counts device pixels
-  per point and says nothing about density, while a point is laid out at about
-  1/108 in (218 dpi over 2, on a 5K 27" and a 4.5K 24" alike), so the scale
-  there is `108/96 × factor`, an eighth over what it used to be. A Retina Mac
-  draws at 2.25x where it drew at 2.0x, and a Mac at 1x at 1.17x.
-- The product is snapped to a twelfth. Every rung either platform produces is
-  exact bar a non-Retina Mac, whose 9/8 is thirteen and a half twelfths and
-  rounds up to 1.167; a hand-set `Xft.dpi`, the one factor off the grid
-  entirely, is pulled onto it at a cost of at most half a step. That keeps the
-  scales occurring in the wild to a countable few, each of them snapshot tested.
-  Both platforms' assumptions are calibrated to a display of a particular
-  density and come out small on denser glass — a 14" MacBook Pro is 127 points
-  to the inch rather than 108, a sixth under — which is what the overrides are
-  for.
-- Two overrides sit outside that derivation. `SAUDADE_UI_SCALE`, and
-  `App::with_ui_scale`, set the scale the window is drawn at *outright* — the
-  derivation skipped, the system scale factor included — which is the only way
-  to ask for a scale off the grid: the card in `examples/credit_card` is exact
-  on a 254-dpi laptop panel at 2.65, no rung at all. `SAUDADE_UI_DPI` moves the
-  reference density instead, so every scale moves with it by 96 over whatever it
-  is set to; at `72` — the coarse end of what the 90s screens these metrics were
-  drawn for really ran, where a 13-pixel checkbox was about a sixth of an inch
-  across — the chrome comes out a third larger, and every rung either platform
-  produces is exact. Both accept `auto`, and both win over the program's own
-  choice, in the spirit of winit's `WINIT_X11_SCALE_FACTOR`, so a UI can be
-  tried at another size without a rebuild. The Wayland backend implements
-  neither: it renders at the integer buffer scale the compositor asks for.
-- `Painter::system_scale` now reports the scale the *display* is set to on
-  every backend, leaving `Painter::scale` as the one the window is drawn at.
-  The two differed only under Wayland's fractional scaling before; with a UI
-  scale applied they now differ as a matter of course.
 - `Painter::crisp(rect, |p, frame| …)` runs a frame recipe in device pixels,
-  against a `Frame` that places chrome the way `include_svg!` marks are
-  rasterized: the geometry is written in resolution-independent units and each
-  boundary is scaled and rounded on the way to the buffer. `Frame::depth(d)` is
-  how far in from the widget's edge logical depth `d` lands, `Frame::ring(d)`
-  the four sides of the ring between two depths (as a `Ring`, filled with
-  `Painter::fill_ring` or side by side), `Frame::inside(d)` what is left for the
-  face. `Painter::chrome_unit` is the scale rounded to a whole pixel, for a lone
-  thin line — a divider, a caret, a grid rule — and nothing deeper.
-- `Painter::draw_resampled(area, content, scale, bg, |p| …)` renders content at
-  a scale of its own choosing and resamples the result into a fixed on-screen
-  box, where `Painter::draw_scaled` lands it at the size that scale makes it.
-  Holding the box still while the scale moves is what a denser display of the
-  same physical size does: the content keeps its size and gains resolution,
-  which is what a DPI preview pane wants from a slider. The resample is an area
-  average — a destination pixel is the mean of the source pixels it covers, each
-  weighted by how much of it the destination covers, to a 256th of a pixel — so
-  downscaling blends rather than drops pixels, and a whole-number magnification
-  comes out identical to `draw_scaled`'s nearest-neighbor blocks. The `scaling`
-  example drives it from a new "scale to fit" toggle, in a window the user can
-  now resize.
-- `Checkbox::set_rect` moves a checkbox after construction, as `Slider`,
-  `Dropdown`, `ProgressBar` and `ScrollBar` already allow — for a layout that
-  reflows, e.g. a control pinned to the bottom edge of a resizable window.
-- New `credit_card` example: the check on the correction above, which nothing
-  inside the program can make — a screenshot is in pixels, the unit under test.
-  The window draws an ISO/IEC 7810 ID-1 card — 85.60 x 53.98 mm on a 3.18 mm
-  radius, the die every bank card is cut to — at the size a 1/96-in logical
-  pixel makes it, so a card off your wallet laid on the screen says whether the
-  scale is out and by how much; a readout prints the card's logical size, the
-  scale the window is drawn at against the one the display reports, and the rung
-  either side to try in `SAUDADE_UI_SCALE`. The face is painted in device pixels
-  through `Painter::physical` with every feature placed in millimetres: rounded
-  corners rasterized as spans (a logical arc would step 2.25 device pixels at a
-  time on a Retina Mac), embossed lettering faked with a dark copy of the glyphs
-  under a light one, and a two-disc network mark that draws its overlap in a
-  third colour, the painter having nothing to blend with.
-- New `sound_recorder` example: the Windows 3.1 Sound Recorder, screen for
-  screen. The status slab, the two sunken time readouts flanking a black
-  oscilloscope, the position `ScrollBar` and the five bitmap transport buttons,
-  laid out on metrics measured off the original — 294 logical pixels of content
-  between 11-pixel margins, 54 x 23 buttons — so at 1.0x the window lands within
-  a pixel of the 1992 one. The five transport marks are `include_svg!` icons
-  painted by a custom `Widget` over `Painter::button`, greyed the way a disabled
-  label is when their action isn't available; the transport itself is a scaffold
-  over a playhead and a length, with a shaped-noise trace standing in for a
-  waveform. Nothing is recorded or played.
-
-### Changed
-
-- Dev builds of saudade itself now compile at `opt-level = 2` (a
-  `[profile.dev.package.saudade]` override; dependencies keep the dev default).
-  Every frame here is a per-pixel loop, and unoptimized those run about eight
-  times slower — a full-window preview resample measured 78 ms against 10 ms —
-  while a touched `painter.rs` rebuilds in the same ~3 s either way. An app
-  depending on saudade wants the same stanza in its own `Cargo.toml`, since
-  profiles only apply from the workspace being built; unset it for a build you
-  intend to step through in a debugger.
-- Button frames, bevels and focus rings are crisp at a fractional scale. A Win
-  3.1 button is four or five 1-logical-pixel lines stacked on each other, and
-  snapping each of them on its own — from its own position in the window —
-  rounds them to different widths: at 2.33x the same frame came out heavier
-  along one edge than the opposite one and different again on the button beside
-  it, and a dotted focus ring degenerated into a smear of two- and three-pixel
-  dots with one- and two-pixel gaps. Every frame primitive — `stroke_rect`,
-  `raised_bevel`, `sunken_bevel`, `button`, `light_button`, `focus_rect`,
-  `etched_h_line` — now draws in device pixels off a `Frame`, so a ring is the
-  same thickness on all four sides of a frame and the same on every widget at
-  that scale, and a dash keeps its pitch.
-
-  Because a `Frame` rounds each boundary's *depth* rather than each line's
-  thickness, nothing accumulates: a bevel two logical pixels deep lands within
-  half a device pixel of `2 × scale` however deep the chrome in front of it
-  goes — 3 device pixels at 1.5x, 5 at 2.33x and 2.67x, 6 at 3.0x. Below 1.5x
-  the depths are pinned to the design's own instead of scaled, a logical pixel
-  still being worth a single device pixel there; the room the scale buys goes to
-  the face, so a button at 1.33x is a third bigger inside the border and bevel
-  it is drawn with.
-
-  Chrome at 1.0x, below 1.5x and at integer scales is byte-for-byte unchanged —
-  the depths there are the drawn ones or an exact multiple of them. 1.5x moves,
-  and so does `etched_h_line` below it, it having had no crisp pass before: its
-  two tones were 2 device pixels and 1, or 1 and 2, depending on the row the
-  divider landed on, and are now 1 apiece.
-- Snapshot tests run at eight scales — 1.0x / 1.33x / 1.5x / 1.67x / 2.0x /
-  2.33x / 2.67x / 3.0x — where they ran at five. Each is a configuration the
-  runtime picks under one reference density or the other: the whole and half
-  steps are Windows and X11 at 100%, 150%, 200% and 300%, the thirds the same
-  knob under `SAUDADE_UI_DPI=72`. The thirds are the hard cases for the chrome,
-  a logical pixel worth 2.67 device ones landing nowhere near a pixel boundary.
-  The painter's own frame tests walk a wider set still — the quarters, a Mac's
-  1.17x and 2.25x, and those thirds — asserting each band's exact device-pixel
-  depth without rendering anything.
+  against a `Frame` (`depth`, `ring`, `inside`) that scales and rounds each
+  boundary on the way to the buffer — the mechanism behind the fix above, for
+  custom chrome. `Painter::chrome_unit` is the scale rounded to a whole pixel,
+  for a lone thin line. `Painter::draw_resampled` renders content at a scale of
+  its own and area-averages it into a fixed on-screen box, which is what a DPI
+  preview pane wants from a slider. `Checkbox::set_rect` moves a checkbox after
+  construction, as `Slider` and `ScrollBar` already allow.
 
 ### Removed
 
