@@ -2,7 +2,7 @@ use std::time::{Duration, Instant};
 
 use crate::event::{Event, EventCtx, Key, Modifiers, MouseButton, NamedKey};
 use crate::geometry::{Color, Point, Rect};
-use crate::painter::Painter;
+use crate::painter::{Merged, Painter};
 use crate::svg::SvgImage;
 use crate::theme::Theme;
 use crate::widget::Widget;
@@ -530,20 +530,31 @@ impl Widget for List {
     fn paint(&mut self, painter: &mut Painter, theme: &Theme) {
         self.sync_scrollbar();
         let text = self.text_area();
+        // The field's right edge sits on the scrollbar's own left border (see
+        // `text_area`), so it is a merged edge: the border line lands on the
+        // very device pixels the scrollbar's line occupies at every scale.
+        let merged = if self.v_scrollbar.rect().w > 0 {
+            Merged::RIGHT
+        } else {
+            Merged::NONE
+        };
 
         // Field background stays at the full logical bounds; the chrome edges
         // (sunken bevel + 1-px outer border) self-manage the crisp physical-
         // pixel pass so they don't alias against the row separators or the
         // scrollbar gutter.
         painter.fill_rect(text, Color::WHITE);
-        painter.sunken_bevel(text, theme.highlight, theme.shadow);
-        painter.stroke_rect(text, theme.border);
+        painter.sunken_bevel_merged(text, merged, theme.highlight, theme.shadow);
+        painter.stroke_rect_merged(text, merged, theme.border);
 
         // Confine every row to the field interior so a label wider than the
         // row (or a forced partial row in a field too short for one) is clipped
         // at the border instead of bleeding into the scrollbar gutter or past
         // the widget — the same overflow guard `TextInput`/`Dropdown` apply.
-        let saved_clip = painter.push_clip(text.inset(1));
+        // Clipped to the *frame's* interior, so at fractional scales a row
+        // fill stops exactly at the border line instead of a device pixel
+        // inside or outside it.
+        let saved_clip = painter.push_clip_frame(text, 1, merged);
 
         let text_x = text.x + TEXT_PAD_X;
         let text_y0 = text.y + TEXT_PAD_Y;
@@ -991,6 +1002,39 @@ mod tests {
         click(&mut l, 2, plain()); // second click of the pair → activation
         assert_eq!(l.selected_indices(), &[2]);
         assert_eq!(l.take_activated(), Some(2));
+    }
+
+    /// At a fractional scale the field's right border must land on the very
+    /// device-pixel columns the scrollbar's own left border occupies. The
+    /// list is 29 logical pixels wide so the scrollbar starts at x = 13 — an
+    /// odd column, where at 1.5x `snap(14) - snap(13)` is 1 device pixel while
+    /// the border line is 2, which is exactly where the unmerged frame used to
+    /// poke a stray black column out of the scrollbar's left edge.
+    #[test]
+    fn the_field_border_collapses_onto_the_scrollbar_line_at_fractional_scale() {
+        use crate::mock::MockBackend;
+
+        let rect = Rect::new(0, 0, 29, 40);
+        let be = MockBackend::new(rect.w, rect.h).with_scale(1.5);
+        let mut l = List::new(rect).with_items(vec![ListItem::new("row")]);
+        l.layout(rect);
+        let shot = be.render(&mut l);
+        let (w, px) = (shot.width(), shot.pixels());
+        let at = |x: i32, y: i32| Color(px[(y * w + x) as usize]);
+
+        // The scrollbar's left border: depth(1) = 2 device pixels from its
+        // snapped left edge, snap(13) = 20.
+        let mid = shot.height() / 2;
+        assert_eq!(at(20, mid), Color::BLACK, "the shared line's first column");
+        assert_eq!(at(21, mid), Color::BLACK, "the shared line's second column");
+        // And nothing of the field's border to the left of it — the field's
+        // face runs right up to the shared line.
+        assert_eq!(at(19, mid), Color::WHITE, "the field face touches the line");
+        assert_eq!(
+            at(18, mid),
+            Color::WHITE,
+            "no stray border column further in"
+        );
     }
 
     /// A wheel-scrolled list with a selection must not jump back to that

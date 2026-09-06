@@ -35,9 +35,28 @@ While pre-1.0, the minor version is bumped for breaking changes.
   choice, so a UI can be tried at another size without a rebuild. The Wayland
   backend implements neither: it renders at the integer buffer scale the
   compositor asks for.
+- Two widgets that share a border — a list or editor field against its
+  scrollbar, a scrollbar thumb parked flush on an arrow button — now share it
+  at every scale. The convention is to overlap the neighbour by one logical
+  pixel so the two 1-pixel borders collapse into a single line, but each crisp
+  frame drew its line `depth(1)` device pixels thick from its own snapped edge,
+  and at a fractional scale `snap(x + 1) - snap(x)` disagrees with that
+  thickness at about every other position: the two borders landed a device
+  pixel apart, reading as a doubled or ragged divider. A frame can now mark the
+  shared edge as *merged* (`Merged`, `Painter::crisp_merged`, and merged
+  variants of `stroke_rect`, `raised_bevel` / `sunken_bevel`, `light_button`),
+  which re-anchors that edge to the very device pixels the neighbour's line
+  occupies. `List`, `TextEditor` and the scrollbar thumb use it; integer scales
+  are byte-for-byte unchanged.
 
 ### Added
 
+- `Painter::push_clip_frame(rect, depth, merged)` clips to a crisp frame's
+  interior — the same `Frame::inside(depth)` a recipe paints — where
+  `push_clip(rect.inset(depth))` snapped its boundary logically and could land
+  a device pixel inside or outside the frame line at a fractional scale,
+  letting a row fill overwrite the line's inner pixel or leave a seam of stale
+  background along it. `List` clips its rows with it.
 - `Painter::crisp(rect, |p, frame| …)` runs a frame recipe in device pixels,
   against a `Frame` (`depth`, `ring`, `inside`) that scales and rounds each
   boundary on the way to the buffer — the mechanism behind the fix above, for
