@@ -28,7 +28,7 @@ pub(crate) const POPUP_PADDING_X: i32 = 18;
 /// Breathing room above the first row and below the last — also the strip the
 /// scroll arrows are drawn in when a panel is too short for its items.
 pub(crate) const POPUP_PADDING_Y: i32 = 3;
-pub(crate) const ITEM_HEIGHT: i32 = 18;
+pub(crate) const ITEM_HEIGHT: i32 = 16;
 /// Gap between an item's label and its right-aligned accelerator hint.
 const ACCEL_GAP: i32 = 24;
 const ITEM_TEXT_INSET_Y: i32 = 1;

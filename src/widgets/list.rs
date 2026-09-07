@@ -8,7 +8,7 @@ use crate::theme::Theme;
 use crate::widget::Widget;
 use crate::widgets::scrollbar::{SCROLLBAR_THICKNESS, ScrollBar};
 
-const ROW_HEIGHT: i32 = 18;
+const ROW_HEIGHT: i32 = 16;
 const ICON_SIZE: i32 = 16;
 const ICON_PAD: i32 = 4;
 const TEXT_PAD_X: i32 = 4;
@@ -558,7 +558,6 @@ impl Widget for List {
 
         let text_x = text.x + TEXT_PAD_X;
         let text_y0 = text.y + TEXT_PAD_Y;
-        let row_w = text.w - TEXT_PAD_X * 2;
         let visible = self.visible_rows() as usize;
         let scroll_top = self.scroll_top();
 
@@ -584,7 +583,10 @@ impl Widget for List {
                 theme.disabled_text
             };
             if selected && self.enabled {
-                painter.fill_rect(Rect::new(text_x, y, row_w.max(0), ROW_HEIGHT), bg_color);
+                // The band spans the full field width, border to border — the
+                // classic list-box look — with the frame clip trimming it to
+                // the interior's exact device pixels.
+                painter.fill_rect(Rect::new(text.x, y, text.w, ROW_HEIGHT), bg_color);
             }
 
             let item = &self.items[row];
@@ -614,7 +616,13 @@ impl Widget for List {
             && idx < scroll_top + visible
         {
             let y = text_y0 + (idx - scroll_top) as i32 * ROW_HEIGHT;
-            painter.focus_rect(Rect::new(text_x, y, row_w.max(0), ROW_HEIGHT), theme.text);
+            // The ring hugs the band: one logical pixel inside the field, so
+            // its side dashes sit in the interior's first and last columns
+            // rather than being clipped away under the border.
+            painter.focus_rect(
+                Rect::new(text.x + 1, y, (text.w - 2).max(0), ROW_HEIGHT),
+                theme.text,
+            );
         }
 
         painter.restore_clip(saved_clip);
@@ -1035,6 +1043,33 @@ mod tests {
             Color::WHITE,
             "no stray border column further in"
         );
+    }
+
+    /// The selection band spans the field border to border — the classic
+    /// list-box look — trimmed by the frame clip to the interior's exact
+    /// device pixels: at 1.5x the band's first column is right inside the
+    /// 2-px border and its last column touches the scrollbar's line.
+    #[test]
+    fn the_selection_band_spans_the_field_border_to_border() {
+        use crate::mock::MockBackend;
+
+        let rect = Rect::new(0, 0, 29, 40);
+        let be = MockBackend::new(rect.w, rect.h).with_scale(1.5);
+        let mut l = List::new(rect).with_items(vec![ListItem::new("row")]);
+        l.layout(rect);
+        // Selected but unfocused: the muted `theme.face` band, with no dotted
+        // focus ring drawn over its edge columns.
+        l.set_selected(Some(0));
+        let shot = be.render(&mut l);
+        let (w, px) = (shot.width(), shot.pixels());
+        let at = |x: i32, y: i32| Color(px[(y * w + x) as usize]);
+
+        // Row 0 spans logical y 2..20 → device 3..30; probe its middle.
+        let y = 16;
+        assert_eq!(at(1, y), Color::BLACK, "the field's own left border");
+        assert_eq!(at(2, y), Color::LIGHT_GRAY, "the band starts on the border");
+        assert_eq!(at(19, y), Color::LIGHT_GRAY, "and runs to the shared line");
+        assert_eq!(at(20, y), Color::BLACK, "the scrollbar's line right after");
     }
 
     /// A wheel-scrolled list with a selection must not jump back to that

@@ -46,7 +46,7 @@ const DPI_RANGE: std::ops::RangeInclusive<f32> = 48.0..=192.0;
 
 /// The density saudade's logical pixel is drawn for unless [`DPI_VAR`] says
 /// otherwise.
-const REFERENCE_DPI: f32 = 96.0;
+const REFERENCE_DPI: f32 = 72.0;
 
 /// What a logical unit stands for where the platform's scale factor is already
 /// a ratio against 96 dpi — Windows and X11/Wayland.

@@ -10,6 +10,23 @@ While pre-1.0, the minor version is bumped for breaking changes.
 
 ## [Unreleased] - ReleaseDate
 
+### Changed
+
+- Push buttons now set their labels in the **bold** face of the theme font,
+  greyed ones included (both the engraved white copy and the grey one over
+  it) — a button is the one thing on a panel you press, and the weight says
+  so at a glance. The face is `Theme::button_style`, so a theme after a
+  lighter look sets it back to `FontStyle::Regular`, and a family the host
+  ships no real bold for falls back to its own regular face rather than to a
+  synthesized one. Nothing else moves: menus, captions, fields, list rows and
+  dialog text are untouched. The label is measured in the face it is drawn
+  in, so a wider one still centers on the button.
+- A `List`'s selection band now spans the full field width, border to border —
+  the classic list-box look — instead of stopping at the 4-px text padding,
+  and the dotted focus ring hugs the band one logical pixel inside the field.
+  Both are trimmed by the frame clip, so they stop on exactly the border
+  line's device pixels at every scale. Icons and labels keep their padding.
+
 ### Fixed
 
 - Button frames, bevels, focus rings and etched dividers are crisp at a
@@ -51,6 +68,11 @@ While pre-1.0, the minor version is bumped for breaking changes.
 
 ### Added
 
+- `Theme::button_style` — the `FontStyle` a push button sets its label in,
+  bold by default (see *Changed* above).
+- `Painter::text_centered_styled` — `text_centered` in a given family and
+  style, which stays the sans-regular shorthand. It measures the very face it
+  draws with, so a bold label sits centered on its own width.
 - `Painter::push_clip_frame(rect, depth, merged)` clips to a crisp frame's
   interior — the same `Frame::inside(depth)` a recipe paints — where
   `push_clip(rect.inset(depth))` snapped its boundary logically and could land

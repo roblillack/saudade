@@ -1614,13 +1614,36 @@ impl<'a> Painter<'a> {
     }
 
     pub fn text_centered(&mut self, rect: Rect, text: &str, size: f32, color: Color) {
-        let Some(font) = self.fonts.sans else {
+        self.text_centered_styled(
+            rect,
+            text,
+            size,
+            color,
+            FontFamily::Sans,
+            FontStyle::Regular,
+        );
+    }
+
+    /// [`text_centered`](Self::text_centered) in a given family and style. The
+    /// centering measures the very face it draws with, so a bold label sits
+    /// centered on its own — wider — width rather than on the regular face's,
+    /// which would park it a pixel or two left of center.
+    pub fn text_centered_styled(
+        &mut self,
+        rect: Rect,
+        text: &str,
+        size: f32,
+        color: Color,
+        family: FontFamily,
+        style: FontStyle,
+    ) {
+        let Some(font) = self.family_font(family) else {
             return;
         };
-        let (w, h) = font.measure(text, size);
+        let (w, h) = font.measure_styled(text, size, style);
         let tx = rect.x + ((rect.w as f32 - w) / 2.0).round() as i32;
         let ty = rect.y + ((rect.h as f32 - h) / 2.0).round() as i32;
-        self.text(tx, ty, text, size, color);
+        self.text_styled(tx, ty, text, size, color, family, style);
     }
 
     pub fn measure_text(&self, text: &str, size: f32) -> Size {

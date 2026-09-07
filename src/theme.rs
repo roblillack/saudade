@@ -1,3 +1,4 @@
+use crate::font::FontStyle;
 use crate::geometry::Color;
 
 /// Visual style palette. Widgets read from this rather than hard-coding colors,
@@ -20,6 +21,14 @@ pub struct Theme {
     /// visually consistent; content widgets that want a different size (e.g.
     /// `TextEditor`) carry their own override.
     pub font_size: f32,
+    /// Face a push button sets its label in. Bold by default: a button is the
+    /// one thing on a panel you press, and the weight is what says so at a
+    /// glance. Menus, captions, fields and list rows stay regular — this is a
+    /// button knob, not a chrome-wide weight. A theme after a lighter look sets
+    /// it to `FontStyle::Regular`; a family the host ships no real bold for
+    /// falls back to its regular face on its own (see [`Font`](crate::Font)),
+    /// never to a synthesized smear.
+    pub button_style: FontStyle,
 }
 
 impl Theme {
@@ -36,7 +45,8 @@ impl Theme {
             disabled_text: Color::MID_GRAY,
             highlight_bg: Color::NAVY,
             highlight_text: Color::WHITE,
-            font_size: 13.0,
+            font_size: 11.0,
+            button_style: FontStyle::Bold,
         }
     }
 }

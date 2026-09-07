@@ -354,6 +354,7 @@ pub struct Theme {
     pub highlight_bg: Color,    // selected-item bg (Win 3.1: navy)
     pub highlight_text: Color,  // selected-item fg (Win 3.1: white)
     pub font_size: f32,         // all chrome text
+    pub button_style: FontStyle, // face a push button's label is set in
 }
 ```
 
@@ -361,6 +362,15 @@ The default is `Theme::windows_31()`: white workspace, light-gray button
 face, white top/left highlight, mid-gray bottom/right shadow, black outer
 border, navy/white selection, 13pt text. Pass an alternative via
 `App::with_theme(...)` if you want to skin the same widgets differently.
+
+`button_style` is the face a push button sets its label in. It defaults to
+`FontStyle::Bold` — a button is the one thing on a panel you press, and the
+weight says so at a glance — and `FontStyle::Regular` gives a lighter look.
+It is a button knob and nothing more: menus, captions, fields, list rows and
+dialog text stay regular either way. A family the host ships no real bold for
+falls back to its own regular face rather than to a synthesized one, and the
+label is measured in whichever face it is drawn in, so a wider one still
+centers on the button.
 
 ## Built-in widgets
 
@@ -1187,7 +1197,9 @@ family, style)` / `Painter::measure_text_styled(.., family, style)`,
 choosing a `FontFamily` (`Sans` / `Serif` / `Mono`) and a `FontStyle`
 (`Regular` / `Bold` / `Italic` / `BoldItalic`). `Painter::text` /
 `Painter::measure_text` are the sans-regular shorthand; the text editors
-draw with the mono family.
+draw with the mono family. The chrome itself asks for a face this way: a
+push button draws its label in `Theme::button_style`, the sans family's bold
+by default.
 
 Saudade does **not** ship a bundled bitmap font, so its text rendering
 inherits the local system font. The Win 3.1 chrome still looks right,
