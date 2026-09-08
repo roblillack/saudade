@@ -50,6 +50,10 @@ While pre-1.0, the minor version is bumped for breaking changes.
   `Dropdown`, `ProgressBar` and `ScrollBar` already allow — for a layout that
   reflows, e.g. a control pinned to the bottom edge of a resizable window.
 
+### Changed
+
+- Slightly improve folder icon. (#55)
+
 ### Removed
 
 - `Painter::wants_1x_crispness`, whose `[0.9, 1.5)` range described a narrower
