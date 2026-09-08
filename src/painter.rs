@@ -8,6 +8,66 @@ use crate::theme::Theme;
 #[derive(Clone, Copy)]
 pub struct SavedClip(Option<(i32, i32, i32, i32)>);
 
+/// Which edges of a widget's frame lie on a *neighbouring* widget's own
+/// frame line.
+///
+/// Widgets that abut share their border by overlapping one logical pixel — a
+/// list field's right edge sits on the column its scrollbar's left border
+/// occupies, a scrollbar thumb parked against an arrow button reaches one
+/// pixel into it — so the two 1-pixel borders collapse into a single line
+/// instead of stacking into a 2-pixel band. At integer scales that is the
+/// whole story. At fractional scales it stops lining up: each widget's
+/// [`Frame`] draws its line [`Frame::depth(1)`](Frame::depth) device pixels
+/// thick *from its own snapped edge*, and the two edges snap independently, so
+/// `snap(x + 1) - snap(x)` is one device pixel more or less than the line's
+/// thickness at about every other position — and the two borders land a device
+/// pixel apart instead of on top of each other.
+///
+/// Marking the shared edge as merged re-anchors it to the very device pixels
+/// the *neighbour's* line occupies, which is knowable without asking the
+/// neighbour: its line is `depth(1)` thick, measured inward from its own
+/// snapped edge, and its edge is one logical pixel inside ours. Everything
+/// else about the frame — every other edge, every depth — is untouched, so the
+/// border keeps its uniform thickness and the face reaches exactly to the
+/// shared line.
+///
+/// Pass it to [`Painter::crisp_merged`] or to the merged variants of the frame
+/// recipes ([`Painter::stroke_rect_merged`],
+/// [`Painter::sunken_bevel_merged`], …), and to
+/// [`Painter::push_clip_frame`] so content is clipped to the same interior the
+/// merged frame painted. [`Merged::NONE`] everywhere is exactly the unmerged
+/// behaviour, so the plain entry points just delegate with it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Merged {
+    pub left: bool,
+    pub top: bool,
+    pub right: bool,
+    pub bottom: bool,
+}
+
+impl Merged {
+    /// No shared edges: the frame is freestanding.
+    pub const NONE: Self = Self::new(false, false, false, false);
+    /// The left edge sits on the frame line of a neighbour to the left.
+    pub const LEFT: Self = Self::new(true, false, false, false);
+    /// The top edge sits on the frame line of a neighbour above.
+    pub const TOP: Self = Self::new(false, true, false, false);
+    /// The right edge sits on the frame line of a neighbour to the right —
+    /// the field-with-a-scrollbar composition.
+    pub const RIGHT: Self = Self::new(false, false, true, false);
+    /// The bottom edge sits on the frame line of a neighbour below.
+    pub const BOTTOM: Self = Self::new(false, false, false, true);
+
+    const fn new(left: bool, top: bool, right: bool, bottom: bool) -> Self {
+        Self {
+            left,
+            top,
+            right,
+            bottom,
+        }
+    }
+}
+
 /// A widget's frame, in device pixels, ready to be measured in the *depths* its
 /// design is written in.
 ///
@@ -30,6 +90,11 @@ pub struct SavedClip(Option<(i32, i32, i32, i32)>);
 ///
 /// Below 1.5x the depths are the design's own instead of scaled ones, for the
 /// reason [`Frame::new`] gives.
+///
+/// A frame whose widget shares an edge with a neighbouring frame — the
+/// 1-logical-pixel-overlap composition — is built over a rect whose shared
+/// edges are re-anchored to the neighbour's own line first: see [`Merged`] and
+/// [`Painter::crisp_merged`].
 ///
 /// The price is that the rings *within* one band can differ by a device pixel —
 /// at 2.5x a button's bevel is a ring 2 deep over a ring 3 deep. Nothing shows,
@@ -344,11 +409,43 @@ impl<'a> Painter<'a> {
     /// uses this to keep overflow text from leaking past its field edges
     /// without having to know its own physical-pixel placement.
     pub fn push_clip(&mut self, rect: Rect) -> SavedClip {
-        let prev = SavedClip(self.clip);
         let x0 = self.origin_x + self.snap(rect.x);
         let y0 = self.origin_y + self.snap(rect.y);
         let x1 = self.origin_x + self.snap(rect.x + rect.w);
         let y1 = self.origin_y + self.snap(rect.y + rect.h);
+        self.intersect_clip(x0, y0, x1, y1)
+    }
+
+    /// Restrict subsequent draws to what is left of a widget's rect inside `d`
+    /// logical pixels of crisp chrome: the same interior
+    /// [`Frame::inside`]`(d)` hands a frame recipe, as a clip. The
+    /// device-accurate companion to `push_clip(rect.inset(d))`, whose
+    /// logically-snapped boundary can sit a device pixel inside or outside the
+    /// frame line at fractional scales — enough for a fill clipped by it to
+    /// either overwrite the line's inner pixel or leave a seam of stale
+    /// background along it.
+    ///
+    /// `merged` names the edges shared with a neighbouring frame, and must
+    /// match what the chrome was painted with, so the clip reaches exactly to
+    /// the shared line. Returns the previous clip state — pass it to
+    /// [`Painter::restore_clip`] when done.
+    pub fn push_clip_frame(&mut self, rect: Rect, d: i32, merged: Merged) -> SavedClip {
+        let phys = self.rect_to_physical_merged(rect, merged);
+        let inner = Frame::new(phys, self.scale).inside(d);
+        self.intersect_clip(
+            self.origin_x + inner.x,
+            self.origin_y + inner.y,
+            self.origin_x + inner.x + inner.w,
+            self.origin_y + inner.y + inner.h,
+        )
+    }
+
+    /// Install the intersection of the physical-pixel bounds `x0..x1` /
+    /// `y0..y1` and any clip already in effect, handing back the previous
+    /// state for [`Painter::restore_clip`]. The shared tail of both
+    /// `push_clip` entry points.
+    fn intersect_clip(&mut self, x0: i32, y0: i32, x1: i32, y1: i32) -> SavedClip {
+        let prev = SavedClip(self.clip);
         let combined = match self.clip {
             Some((px0, py0, px1, py1)) => (x0.max(px0), y0.max(py0), x1.min(px1), y1.min(py1)),
             None => (x0, y0, x1, y1),
@@ -431,6 +528,42 @@ impl<'a> Painter<'a> {
         Rect::new(x0, y0, x1 - x0, y1 - y0)
     }
 
+    /// [`Self::rect_to_physical`] with each [`Merged`] edge re-anchored to the
+    /// neighbouring frame line it shares — the device pixels the *neighbour's*
+    /// own crisp frame puts that line on, worked out from this side of the
+    /// overlap: the neighbour's edge is one logical pixel inside ours, and its
+    /// line runs one [`Self::chrome_unit`] inward from where that edge snaps.
+    /// A frame built over the result lands its `ring(0)` on the shared edge
+    /// exactly on top of the neighbour's line, and measures every depth from
+    /// it, so the face reaches the line with neither a seam nor an overwrite.
+    fn rect_to_physical_merged(&self, rect: Rect, merged: Merged) -> Rect {
+        // The thickness the neighbour's line is drawn at: `Frame::depth(1)` at
+        // this scale, which `chrome_unit` equals at every scale (both round
+        // the scale, both pin to 1 below 1.5x).
+        let line = self.chrome_unit();
+        let x0 = if merged.left {
+            self.snap(rect.x + 1) - line
+        } else {
+            self.snap(rect.x)
+        };
+        let y0 = if merged.top {
+            self.snap(rect.y + 1) - line
+        } else {
+            self.snap(rect.y)
+        };
+        let x1 = if merged.right {
+            self.snap(rect.right() - 1) + line
+        } else {
+            self.snap(rect.right())
+        };
+        let y1 = if merged.bottom {
+            self.snap(rect.bottom() - 1) + line
+        } else {
+            self.snap(rect.bottom())
+        };
+        Rect::new(x0, y0, x1 - x0, y1 - y0)
+    }
+
     /// Device pixels one logical pixel of chrome is worth on its own: the scale
     /// rounded to a whole pixel, never less than one. The same `unit` the window
     /// chrome in [`crate::chrome`] draws its frame lines at, and what a widget
@@ -504,8 +637,31 @@ impl<'a> Painter<'a> {
     /// self-managing primitives above are no use there — each would draw a
     /// single device pixel. Take the geometry from the `Frame`.
     pub fn crisp(&mut self, rect: Rect, f: impl FnOnce(&mut Painter, Frame)) {
+        self.crisp_merged(rect, Merged::NONE, f);
+    }
+
+    /// [`Self::crisp`] for a frame that shares its `merged` edges with a
+    /// neighbouring widget's own frame line — the 1-logical-pixel-overlap
+    /// composition [`Merged`] describes. Each merged edge of the [`Frame`] is
+    /// re-anchored to the device pixels the neighbour's line occupies, so the
+    /// recipe's `ring(0)` lands exactly on that line and its deeper rings and
+    /// face measure from it. With [`Merged::NONE`] this *is* `crisp`.
+    pub fn crisp_merged(
+        &mut self,
+        rect: Rect,
+        merged: Merged,
+        f: impl FnOnce(&mut Painter, Frame),
+    ) {
         let scale = self.scale;
-        self.physical(rect, |p, r| f(p, Frame::new(r, scale)));
+        if scale == 1.0 {
+            // Pass-through, like `physical`: at 1.0x the snap is the identity
+            // and a merged edge re-derives the same coordinate.
+            return f(self, Frame::new(rect, scale));
+        }
+        let phys = self.rect_to_physical_merged(rect, merged);
+        self.scale = 1.0;
+        f(self, Frame::new(phys, scale));
+        self.scale = scale.max(0.01);
     }
 
     /// Render `f` into the logical-pixel region `area` as though the painter
@@ -1186,22 +1342,54 @@ impl<'a> Painter<'a> {
     }
 
     pub fn stroke_rect(&mut self, rect: Rect, color: Color) {
+        self.stroke_rect_merged(rect, Merged::NONE, color);
+    }
+
+    /// [`Self::stroke_rect`] for an outline whose `merged` edges sit on a
+    /// neighbouring widget's own frame line — see [`Merged`].
+    pub fn stroke_rect_merged(&mut self, rect: Rect, merged: Merged, color: Color) {
         if rect.w <= 0 || rect.h <= 0 {
             return;
         }
-        self.crisp(rect, |p, f| p.fill_ring(f.ring(0), color, color));
+        self.crisp_merged(rect, merged, |p, f| p.fill_ring(f.ring(0), color, color));
     }
 
     /// Raised 3D bevel: light highlight on top/left, dark shadow on bottom/right.
     pub fn raised_bevel(&mut self, rect: Rect, highlight: Color, shadow: Color) {
+        self.raised_bevel_merged(rect, Merged::NONE, highlight, shadow);
+    }
+
+    /// [`Self::raised_bevel`] for a bevel whose `merged` edges sit on a
+    /// neighbouring widget's own frame line — see [`Merged`].
+    pub fn raised_bevel_merged(
+        &mut self,
+        rect: Rect,
+        merged: Merged,
+        highlight: Color,
+        shadow: Color,
+    ) {
         if rect.w <= 0 || rect.h <= 0 {
             return;
         }
-        self.crisp(rect, |p, f| p.fill_ring(f.ring(0), highlight, shadow));
+        self.crisp_merged(rect, merged, |p, f| {
+            p.fill_ring(f.ring(0), highlight, shadow)
+        });
     }
 
     pub fn sunken_bevel(&mut self, rect: Rect, highlight: Color, shadow: Color) {
         self.raised_bevel(rect, shadow, highlight);
+    }
+
+    /// [`Self::sunken_bevel`] for a bevel whose `merged` edges sit on a
+    /// neighbouring widget's own frame line — see [`Merged`].
+    pub fn sunken_bevel_merged(
+        &mut self,
+        rect: Rect,
+        merged: Merged,
+        highlight: Color,
+        shadow: Color,
+    ) {
+        self.raised_bevel_merged(rect, merged, shadow, highlight);
     }
 
     /// Two-tone horizontal etched line (dark + light) — the divider above the
@@ -1278,10 +1466,25 @@ impl<'a> Painter<'a> {
     /// — the inverse of the raised look, the way a held scrollbar arrow sinks
     /// in Win 3.1.
     pub fn light_button(&mut self, rect: Rect, theme: &Theme, pressed: bool) {
+        self.light_button_merged(rect, Merged::NONE, theme, pressed);
+    }
+
+    /// [`Self::light_button`] for a button whose `merged` edges sit on a
+    /// neighbouring widget's own frame line — what the scrollbar thumb uses
+    /// when it is parked flush against an arrow button, so its outline
+    /// collapses onto the button's rather than landing a device pixel off it
+    /// at fractional scales. See [`Merged`].
+    pub fn light_button_merged(
+        &mut self,
+        rect: Rect,
+        merged: Merged,
+        theme: &Theme,
+        pressed: bool,
+    ) {
         if rect.w <= 0 || rect.h <= 0 {
             return;
         }
-        self.crisp(rect, |p, f| {
+        self.crisp_merged(rect, merged, |p, f| {
             p.fill_ring(f.ring(0), theme.border, theme.border);
             p.fill_rect(f.inside(1), theme.face);
             let inner = f.ring(1);
@@ -1411,13 +1614,36 @@ impl<'a> Painter<'a> {
     }
 
     pub fn text_centered(&mut self, rect: Rect, text: &str, size: f32, color: Color) {
-        let Some(font) = self.fonts.sans else {
+        self.text_centered_styled(
+            rect,
+            text,
+            size,
+            color,
+            FontFamily::Sans,
+            FontStyle::Regular,
+        );
+    }
+
+    /// [`text_centered`](Self::text_centered) in a given family and style. The
+    /// centering measures the very face it draws with, so a bold label sits
+    /// centered on its own — wider — width rather than on the regular face's,
+    /// which would park it a pixel or two left of center.
+    pub fn text_centered_styled(
+        &mut self,
+        rect: Rect,
+        text: &str,
+        size: f32,
+        color: Color,
+        family: FontFamily,
+        style: FontStyle,
+    ) {
+        let Some(font) = self.family_font(family) else {
             return;
         };
-        let (w, h) = font.measure(text, size);
+        let (w, h) = font.measure_styled(text, size, style);
         let tx = rect.x + ((rect.w as f32 - w) / 2.0).round() as i32;
         let ty = rect.y + ((rect.h as f32 - h) / 2.0).round() as i32;
-        self.text(tx, ty, text, size, color);
+        self.text_styled(tx, ty, text, size, color, family, style);
     }
 
     pub fn measure_text(&self, text: &str, size: f32) -> Size {
@@ -2315,6 +2541,154 @@ mod tests {
                 ],
                 "the two tones of an etched line at {scale}x"
             );
+        }
+    }
+
+    /// A field overlapping a scrollbar-like neighbour by one logical pixel,
+    /// its right edge merged: the field's right border line must occupy
+    /// exactly the device pixels the neighbour's own left line does — however
+    /// the snap's parity falls at the shared position, which is why every
+    /// position in a range is tried.
+    #[test]
+    fn a_merged_right_edge_lands_on_the_neighbours_frame_line() {
+        for &scale in CHROME_SCALES {
+            let unit = depth(1, scale);
+            for nx in 5..25 {
+                // Where the neighbour's left border line sits: `depth(1)`
+                // device pixels inward from its own snapped left edge.
+                let line = (nx as f32 * scale).round() as i32;
+                let w = line + unit + 4;
+                let h = (8.0 * scale).round() as i32;
+                let px = chrome_buffer(w, h, scale, |p| {
+                    p.stroke_rect_merged(Rect::new(0, 0, nx + 1, 8), Merged::RIGHT, Color::BLACK)
+                });
+                // A row through the field's middle, clear of both horizontal
+                // border bands.
+                let mid = h / 2;
+                for x in 0..w {
+                    let expected = x < unit || (line..line + unit).contains(&x);
+                    let painted = px[(mid * w + x) as usize] == Color::BLACK.0;
+                    assert_eq!(
+                        painted,
+                        expected,
+                        "column {x} of a right-merged field ending at {} at {scale}x \
+                         (the neighbour's line runs {line}..{})",
+                        nx + 1,
+                        line + unit
+                    );
+                }
+            }
+        }
+    }
+
+    /// The other direction of the overlap — the scrollbar thumb parked flush
+    /// under an arrow button, reaching one logical pixel up into it: a merged
+    /// top edge must land on the button's own bottom line, which runs
+    /// `depth(1)` device pixels *up* from the button's snapped bottom edge.
+    #[test]
+    fn a_merged_top_edge_lands_on_the_neighbours_frame_line() {
+        for &scale in CHROME_SCALES {
+            let unit = depth(1, scale);
+            for ny in 5..25 {
+                // The neighbour above ends at `ny`; its bottom line's top row.
+                let edge = (ny as f32 * scale).round() as i32;
+                let line = edge - unit;
+                let h = edge + (10.0 * scale).round() as i32 + 4;
+                let w = (8.0 * scale).round() as i32;
+                let px = chrome_buffer(w, h, scale, |p| {
+                    p.stroke_rect_merged(Rect::new(0, ny - 1, 8, 10), Merged::TOP, Color::BLACK)
+                });
+                let bottom = ((ny - 1 + 10) as f32 * scale).round() as i32;
+                // A column through the frame's middle, clear of both vertical
+                // border bands.
+                let mid = w / 2;
+                for y in 0..h {
+                    let expected =
+                        (line..line + unit).contains(&y) || (bottom - unit..bottom).contains(&y);
+                    let painted = px[(y * w + mid) as usize] == Color::BLACK.0;
+                    assert_eq!(
+                        painted,
+                        expected,
+                        "row {y} of a top-merged frame starting at {} at {scale}x \
+                         (the neighbour's line runs {line}..{edge})",
+                        ny - 1
+                    );
+                }
+            }
+        }
+    }
+
+    /// At 1.0x — and at any integer scale, where the snap and the depths agree
+    /// everywhere — a merged edge re-derives the very coordinate the plain
+    /// snap gives, so merging changes nothing.
+    #[test]
+    fn merged_edges_change_nothing_at_integer_scales() {
+        let all = Merged {
+            left: true,
+            top: true,
+            right: true,
+            bottom: true,
+        };
+        for scale in [1.0, 2.0, 3.0] {
+            let (w, h) = phys(20, 12, scale);
+            let rect = Rect::new(3, 2, 14, 8);
+            let plain = chrome_buffer(w, h, scale, |p| p.stroke_rect(rect, Color::BLACK));
+            let merged = chrome_buffer(w, h, scale, |p| {
+                p.stroke_rect_merged(rect, all, Color::BLACK)
+            });
+            assert_eq!(plain, merged, "merged vs plain outline at {scale}x");
+        }
+    }
+
+    /// The frame clip confines a fill to exactly the frame's interior: not a
+    /// device pixel of the border line is overwritten and not a device pixel
+    /// of the face goes unpainted — where `push_clip(rect.inset(1))` snapped
+    /// its boundary a pixel to either side of the line at fractional scales.
+    #[test]
+    fn a_frame_clip_stops_fills_exactly_at_the_border() {
+        let red = Color::rgb(0xFF, 0, 0);
+        for &scale in CHROME_SCALES {
+            for x in 0..3 {
+                let rect = Rect::new(x, 0, 20, 12);
+                let unit = depth(1, scale);
+                let w = (rect.right() as f32 * scale).round() as i32 + 2;
+                let h = (rect.bottom() as f32 * scale).round() as i32 + 2;
+                let px = chrome_buffer(w, h, scale, |p| {
+                    p.stroke_rect(rect, Color::BLACK);
+                    let saved = p.push_clip_frame(rect, 1, Merged::NONE);
+                    // A fill far larger than the field: the clip must trim it
+                    // to the frame's interior.
+                    p.fill_rect(Rect::new(-50, -50, 200, 200), red);
+                    p.restore_clip(saved);
+                });
+                let (x0, y0) = ((rect.x as f32 * scale).round() as i32, 0);
+                let (x1, y1) = (
+                    (rect.right() as f32 * scale).round() as i32,
+                    (rect.bottom() as f32 * scale).round() as i32,
+                );
+                for py in 0..h {
+                    for pxx in 0..w {
+                        let inside_frame = pxx >= x0 && pxx < x1 && py >= y0 && py < y1;
+                        let on_border = inside_frame
+                            && (pxx < x0 + unit
+                                || pxx >= x1 - unit
+                                || py < y0 + unit
+                                || py >= y1 - unit);
+                        let expected = if on_border {
+                            Color::BLACK.0
+                        } else if inside_frame {
+                            red.0
+                        } else {
+                            0
+                        };
+                        assert_eq!(
+                            px[(py * w + pxx) as usize],
+                            expected,
+                            "pixel ({pxx}, {py}) of a clipped fill at {scale}x, field at x={x}"
+                        );
+                    }
+                }
+            }
         }
     }
 

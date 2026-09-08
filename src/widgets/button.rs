@@ -1,4 +1,5 @@
 use crate::event::{Event, EventCtx, Key, MouseButton, NamedKey};
+use crate::font::FontFamily;
 use crate::geometry::Rect;
 use crate::painter::Painter;
 use crate::theme::Theme;
@@ -123,20 +124,39 @@ impl Widget for Button {
             label_rect.x += 1;
             label_rect.y += 1;
         }
+        // The label is set in the theme's button face — bold by default, and
+        // measured in it, so a wider face still centers on the button.
+        let style = theme.button_style;
         if self.enabled {
-            painter.text_centered(label_rect, &self.label, theme.font_size, theme.text);
+            painter.text_centered_styled(
+                label_rect,
+                &self.label,
+                theme.font_size,
+                theme.text,
+                FontFamily::Sans,
+                style,
+            );
         } else {
             // Engraved disabled label: a white copy nudged down-right, with the
             // grey text laid over it — the classic Win 3.1 greyed look.
             let mut emboss = label_rect;
             emboss.x += 1;
             emboss.y += 1;
-            painter.text_centered(emboss, &self.label, theme.font_size, theme.highlight);
-            painter.text_centered(
+            painter.text_centered_styled(
+                emboss,
+                &self.label,
+                theme.font_size,
+                theme.highlight,
+                FontFamily::Sans,
+                style,
+            );
+            painter.text_centered_styled(
                 label_rect,
                 &self.label,
                 theme.font_size,
                 theme.disabled_text,
+                FontFamily::Sans,
+                style,
             );
         }
 

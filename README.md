@@ -46,6 +46,7 @@ Reference apps live under `examples/`. Run any of them with
 | `circle_drawer` | 7GUIs task 6 — a custom canvas (no circle primitive: midpoint outlines, span-filled disks) with hover selection, a `ContextMenu` right-click menu, a real modal dialog (`Modal`) hosting the diameter `Slider`, and snapshot undo/redo.                                                                                                                                                                                                                                                                                                                                                                                                                  |
 | `cells`         | 7GUIs task 7 — a scrollable A–Z / 0–99 spreadsheet `Grid` (built on `ScrollBar` + `TextInput`) with a formula engine: cell refs, `+ - * /`, ranges, `SUM`/`AVG`/…, reactive recompute and cycle detection.                                                                                                                                                                                                                                                                                                                                                                                                                                               |
 | `patterns`      | Previews the window background patterns (`none`, `solid`, `dots`, `lines`, `diagonal`, `cross-stitch`): press `p` to cycle the pattern and `c` to cycle the color. Every app draws one behind its widgets — default `superlight` `diagonal`, overridable with `SAUDADE_WINDOW_PATTERN` / `SAUDADE_WINDOW_PATTERN_COLOR` (e.g. `SAUDADE_WINDOW_PATTERN=dots SAUDADE_WINDOW_PATTERN_COLOR=light`).                                                                                                                                                                                                                                                         |
+| `fonts`         | A type specimen: all twelve faces — sans / serif / monospace, each in regular, bold, italic and bold-italic — drawn at nine sizes in one large scrolling table (`Painter::text_styled`, columns sized from `measure_text_styled`, size header and style column frozen). The column matching `Theme::font_size` is highlighted; a family the host has no font for says so in place of its four rows.                                                                                                                                                                                                                                                    |
 | `scaling`       | Previews widgets at an arbitrary logical→physical scale via `Painter::draw_scaled`: a `Slider` and two rows of preset `Button`s walking a quarter ladder (1.0x / 1.25x / … / 3.0x, plus 3.5x) drive a "preview scale" — starting at the display's OS scale — that a small panel of real widgets (`TextInput`, `Dropdown`, `Checkbox`, `Button`s including a focused one for its dotted focus rectangle, `ProgressBar`) redraws at, plus a "zoom in 2x" `Checkbox` that magnifies the result. The window resizes itself (via `EventCtx::request_window_size`) to fit the preview at the chosen scale. The window's own (OS-owned) scale is never touched. |
 | `svg`           | Compares `include_svg!` (SVG baked to polygons at compile time, filled at runtime — no SVG crate in the binary) against `include_str!` + `resvg` (parse + rasterize at runtime). Draws six icons both ways for a side-by-side fidelity check and prints a micro-benchmark to the console (run with `--release`). Needs `resvg` only as a dev-dependency, for the comparison.                                                                                                                                                                                                                                                                             |
 | `chrome`        | Renders an "about box" offscreen and wraps it in Canoe-style window chrome (title bar, frame, drop shadow on a teal desktop) via `MockBackend::render_framed`, writing one PNG per frame style (`Resizable` / `Fixed` / `Dialog`). Opens no window — it generates screenshots.                                                                                                                                                                                                                                                                                                                                                                           |
@@ -53,7 +54,7 @@ Reference apps live under `examples/`. Run any of them with
 ```console
 $ cargo run --example notepad        # or: filer, dnd, picker, counter, temperature,
                                      #     flight_booker, timer, crud, circle_drawer,
-                                     #     cells, patterns, scaling, svg
+                                     #     cells, patterns, fonts, scaling, svg
 ```
 
 Saudade was extracted from
@@ -354,6 +355,7 @@ pub struct Theme {
     pub highlight_bg: Color,    // selected-item bg (Win 3.1: navy)
     pub highlight_text: Color,  // selected-item fg (Win 3.1: white)
     pub font_size: f32,         // all chrome text
+    pub button_style: FontStyle, // face a push button's label is set in
 }
 ```
 
@@ -361,6 +363,15 @@ The default is `Theme::windows_31()`: white workspace, light-gray button
 face, white top/left highlight, mid-gray bottom/right shadow, black outer
 border, navy/white selection, 13pt text. Pass an alternative via
 `App::with_theme(...)` if you want to skin the same widgets differently.
+
+`button_style` is the face a push button sets its label in. It defaults to
+`FontStyle::Bold` — a button is the one thing on a panel you press, and the
+weight says so at a glance — and `FontStyle::Regular` gives a lighter look.
+It is a button knob and nothing more: menus, captions, fields, list rows and
+dialog text stay regular either way. A family the host ships no real bold for
+falls back to its own regular face rather than to a synthesized one, and the
+label is measured in whichever face it is drawn in, so a wider one still
+centers on the button.
 
 ## Built-in widgets
 
@@ -1192,7 +1203,9 @@ family, style)` / `Painter::measure_text_styled(.., family, style)`,
 choosing a `FontFamily` (`Sans` / `Serif` / `Mono`) and a `FontStyle`
 (`Regular` / `Bold` / `Italic` / `BoldItalic`). `Painter::text` /
 `Painter::measure_text` are the sans-regular shorthand; the text editors
-draw with the mono family.
+draw with the mono family. The chrome itself asks for a face this way: a
+push button draws its label in `Theme::button_style`, the sans family's bold
+by default.
 
 Saudade does **not** ship a bundled bitmap font, so its text rendering
 inherits the local system font. The Win 3.1 chrome still looks right,

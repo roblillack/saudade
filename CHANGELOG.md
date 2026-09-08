@@ -10,6 +10,24 @@ While pre-1.0, the minor version is bumped for breaking changes.
 
 ## [Unreleased] - ReleaseDate
 
+### Changed
+
+- Push buttons now set their labels in the **bold** face of the theme font,
+  greyed ones included (both the engraved white copy and the grey one over
+  it) — a button is the one thing on a panel you press, and the weight says
+  so at a glance. The face is `Theme::button_style`, so a theme after a
+  lighter look sets it back to `FontStyle::Regular`, and a family the host
+  ships no real bold for falls back to its own regular face rather than to a
+  synthesized one. Nothing else moves: menus, captions, fields, list rows and
+  dialog text are untouched. The label is measured in the face it is drawn
+  in, so a wider one still centers on the button. (#54)
+- A `List`'s selection band now spans the full field width, border to border —
+  the classic list-box look — instead of stopping at the 4-px text padding,
+  and the dotted focus ring hugs the band one logical pixel inside the field.
+  Both are trimmed by the frame clip, so they stop on exactly the border
+  line's device pixels at every scale. Icons and labels keep their padding.
+  (#54)
+
 ### Fixed
 
 - Button frames, bevels, focus rings and etched dividers are crisp at a
@@ -35,9 +53,33 @@ While pre-1.0, the minor version is bumped for breaking changes.
   choice, so a UI can be tried at another size without a rebuild. The Wayland
   backend implements neither: it renders at the integer buffer scale the
   compositor asks for. (#53)
+- Two widgets that share a border — a list or editor field against its
+  scrollbar, a scrollbar thumb parked flush on an arrow button — now share it
+  at every scale. The convention is to overlap the neighbour by one logical
+  pixel so the two 1-pixel borders collapse into a single line, but each crisp
+  frame drew its line `depth(1)` device pixels thick from its own snapped edge,
+  and at a fractional scale `snap(x + 1) - snap(x)` disagrees with that
+  thickness at about every other position: the two borders landed a device
+  pixel apart, reading as a doubled or ragged divider. A frame can now mark the
+  shared edge as *merged* (`Merged`, `Painter::crisp_merged`, and merged
+  variants of `stroke_rect`, `raised_bevel` / `sunken_bevel`, `light_button`),
+  which re-anchors that edge to the very device pixels the neighbour's line
+  occupies. `List`, `TextEditor` and the scrollbar thumb use it; integer scales
+  are byte-for-byte unchanged. (#54)
 
 ### Added
 
+- `Theme::button_style` — the `FontStyle` a push button sets its label in,
+  bold by default (see *Changed* above). (#54)
+- `Painter::text_centered_styled` — `text_centered` in a given family and
+  style, which stays the sans-regular shorthand. It measures the very face it
+  draws with, so a bold label sits centered on its own width. (#54)
+- `Painter::push_clip_frame(rect, depth, merged)` clips to a crisp frame's
+  interior — the same `Frame::inside(depth)` a recipe paints — where
+  `push_clip(rect.inset(depth))` snapped its boundary logically and could land
+  a device pixel inside or outside the frame line at a fractional scale,
+  letting a row fill overwrite the line's inner pixel or leave a seam of stale
+  background along it. `List` clips its rows with it. (#54)
 - `WindowConfig::icon(SvgImage)` gives a program the icon the desktop shows for
   it. One `include_svg!` mark goes to every place that wants one: the Windows
   title bar (`ICON_SMALL`) and taskbar / Alt-Tab switcher (`ICON_BIG`), both
