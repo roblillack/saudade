@@ -6,12 +6,17 @@ use std::rc::Rc;
 
 use saudade::{
     App, Column, Dialog, Event, EventCtx, FileDialog, FileFilter, Menu, MenuBar, MenuItem, Painter,
-    PopupRequest, Rect, TextEditor, Theme, Widget, WindowConfig,
+    PopupRequest, Rect, SvgImage, TextEditor, Theme, Widget, WindowConfig, include_svg,
 };
 
 const WINDOW_W: i32 = 520;
 const WINDOW_H: i32 = 340;
 const MENU_BAR_H: i32 = 20;
+
+/// The program's icon: the Windows title bar and taskbar, an X11 window
+/// manager, a Wayland window switcher, the macOS dock. Vectors, so each of
+/// them rasterizes it at the size it actually draws.
+const ICON: SvgImage = include_svg!("assets/icons/notepad.svg");
 
 fn main() {
     // First positional argument (if any) is the file we open and save to.
@@ -182,7 +187,9 @@ fn main() {
         .add_overlay(SharedFileDialog(file_dialog.clone()));
 
     App::new(
-        WindowConfig::new("Notepad", WINDOW_W, WINDOW_H).resizable(true),
+        WindowConfig::new("Notepad", WINDOW_W, WINDOW_H)
+            .resizable(true)
+            .icon(ICON),
         root,
     )
     .with_theme(Theme::windows_31())

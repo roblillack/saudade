@@ -23,7 +23,7 @@ While pre-1.0, the minor version is bumped for breaking changes.
   thickness, so a ring is the same thickness on all four sides and the same on
   every widget at that scale, and nothing accumulates. Chrome at 1.0x, below
   1.5x and at integer scales is byte-for-byte unchanged; 1.5x moves, and so does
-  `etched_h_line` below it, it having had no crisp pass before.
+  `etched_h_line` below it, it having had no crisp pass before. (#53)
 - A logical pixel now lands the size it claims to on macOS. Its
   `backingScaleFactor` counts device pixels per point and says nothing about
   density, while a point is laid out at about 1/108 in, so the scale a window is
@@ -34,10 +34,25 @@ While pre-1.0, the minor version is bumped for breaking changes.
   is derived against. Both accept `auto` and both win over the program's own
   choice, so a UI can be tried at another size without a rebuild. The Wayland
   backend implements neither: it renders at the integer buffer scale the
-  compositor asks for.
+  compositor asks for. (#53)
 
 ### Added
 
+- `WindowConfig::icon(SvgImage)` gives a program the icon the desktop shows for
+  it. One `include_svg!` mark goes to every place that wants one: the Windows
+  title bar (`ICON_SMALL`) and taskbar / Alt-Tab switcher (`ICON_BIG`), both
+  rasterized at the window's own DPI, so a 150% display gets a 24-pixel icon
+  drawn as 24 pixels rather than a 16-pixel one stretched; `_NET_WM_ICON` on
+  X11; `xdg_toplevel_icon_v1` on Wayland, at the sizes the compositor asks for
+  (with a 16→128 ladder for compositors that name none, and nothing at all for
+  those without the protocol, where the app_id's desktop-entry file is the only
+  icon there is); and the dock tile on macOS, whose windows have no icon of
+  their own. Dialog windows get it too, so one doesn't sit beside the main
+  window wearing the system default. Vectors rather than a bitmap precisely
+  because that list spans 16 px to 512: every size is rasterized from the
+  geometry, so none of them is a resample. `SvgImage::rasterize_rgba(size)`
+  is that rasterization on its own, for anything else that wants an image
+  rather than a draw call. (#56)
 - `Painter::crisp(rect, |p, frame| …)` runs a frame recipe in device pixels,
   against a `Frame` (`depth`, `ring`, `inside`) that scales and rounds each
   boundary on the way to the buffer — the mechanism behind the fix above, for
@@ -45,10 +60,11 @@ While pre-1.0, the minor version is bumped for breaking changes.
   for a lone thin line. `Painter::draw_resampled` renders content at a scale of
   its own and area-averages it into a fixed on-screen box, which is what a DPI
   preview pane wants from a slider. `Checkbox::set_rect` moves a checkbox after
-  construction, as `Slider` and `ScrollBar` already allow.
+  construction, as `Slider` and `ScrollBar` already allow. (#53)
 - `Checkbox::set_rect` moves a checkbox after construction, as `Slider`,
   `Dropdown`, `ProgressBar` and `ScrollBar` already allow — for a layout that
   reflows, e.g. a control pinned to the bottom edge of a resizable window.
+  (#53)
 
 ### Changed
 
@@ -59,7 +75,7 @@ While pre-1.0, the minor version is bumped for breaking changes.
 - `Painter::wants_1x_crispness`, whose `[0.9, 1.5)` range described a narrower
   fix than the one that replaced it: `Painter::crisp` is unconditional, so a
   widget no longer branches on the scale at all. Custom chrome that gated a
-  `Painter::physical` pass on it becomes one `crisp` call.
+  `Painter::physical` pass on it becomes one `crisp` call. (#53)
 
 ## [0.6.1] - 2026-08-25
 

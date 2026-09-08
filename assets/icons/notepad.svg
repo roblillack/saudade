@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <!-- Program icon for the notepad example: a ruled page with a folded
+       top-right corner. Same construction as the file-row mark in file.svg —
+       a black silhouette with a white face drawn inside it, so the black reads
+       as an outline — on a 32-unit box, at even coordinates throughout, so
+       every edge still lands on a pixel boundary when a title bar rasterizes
+       it at 16. The navy rules are what tell it apart from a plain document at
+       a glance. -->
+  <path d="M6 2 H20 L26 8 V30 H6 Z" fill="#000000"/>
+  <path d="M8 4 H18 V10 H24 V28 H8 Z" fill="#ffffff"/>
+  <!-- The fold: the page's underside, shaded so the corner reads as lifted. -->
+  <path d="M20 4 V8 H24 Z" fill="#808080"/>
+  <!-- Text rules. The last one is short, the way a paragraph ends. -->
+  <rect x="10" y="14" width="12" height="2" fill="#000080"/>
+  <rect x="10" y="18" width="12" height="2" fill="#000080"/>
+  <rect x="10" y="22" width="8" height="2" fill="#000080"/>
+</svg>

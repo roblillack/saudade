@@ -63,6 +63,10 @@ use wayland_protocols::xdg::dialog::v1::client::xdg_dialog_v1::XdgDialogV1;
 use wayland_protocols::xdg::dialog::v1::client::xdg_wm_dialog_v1::XdgWmDialogV1;
 use wayland_protocols::xdg::shell::client::xdg_positioner::{Anchor, Gravity, XdgPositioner};
 use wayland_protocols::xdg::shell::client::xdg_surface::XdgSurface as XdgSurfaceObj;
+use wayland_protocols::xdg::toplevel_icon::v1::client::xdg_toplevel_icon_manager_v1::{
+    self, XdgToplevelIconManagerV1,
+};
+use wayland_protocols::xdg::toplevel_icon::v1::client::xdg_toplevel_icon_v1::XdgToplevelIconV1;
 
 use crate::app::{App, KeySwallow};
 use crate::background::BackgroundState;
@@ -73,8 +77,17 @@ use crate::event::{
 use crate::font::{Font, FontSet};
 use crate::geometry::{Color, Point, Rect, Size};
 use crate::painter::Painter;
+use crate::svg::SvgImage;
 use crate::theme::Theme;
 use crate::widget::{PopupKind, PopupRequest, Widget};
+
+/// Icon sizes handed to the compositor before it has said which it wants —
+/// the ladder a desktop icon theme ships, from a title bar's 16 up to the
+/// large tiles a window overview draws. Compositors that do announce their
+/// preferences replace this with exactly those (see the
+/// `xdg_toplevel_icon_manager_v1` dispatch); the ones that announce nothing
+/// pick from here.
+const DEFAULT_ICON_SIZES: &[u32] = &[16, 24, 32, 48, 64, 128];
 
 pub(crate) fn run(app: App) {
     let (window_cfg, theme, root) = app.into_parts();
@@ -119,6 +132,14 @@ pub(crate) fn run(app: App) {
     // without it just keep their default cursor during a drag.
     let cursor_shape_mgr: Option<WpCursorShapeManagerV1> = globals
         .bind::<WpCursorShapeManagerV1, _, _>(&qh, 1..=1, ())
+        .ok();
+    // Optional: xdg_toplevel_icon_v1 (another staging extension) is how a
+    // toplevel gets an icon of its own on Wayland. Without it a compositor has
+    // only the app_id below to go on, and shows whatever icon the matching
+    // desktop-entry file names — or a placeholder, for a program that hasn't
+    // been installed with one.
+    let toplevel_icon_mgr: Option<XdgToplevelIconManagerV1> = globals
+        .bind::<XdgToplevelIconManagerV1, _, _>(&qh, 1..=1, ())
         .ok();
 
     let surface = compositor.create_surface(&qh);
@@ -198,6 +219,10 @@ pub(crate) fn run(app: App) {
         drag_icon: None,
         cursor_shape_mgr,
         cursor_shape_device: None,
+        toplevel_icon_mgr,
+        icon_image: window_cfg.icon,
+        icon_sizes: Vec::new(),
+        icons: Vec::new(),
         modifiers: Modifiers::default(),
         bg: BackgroundState::from_env(),
         cursor: None,
@@ -209,6 +234,12 @@ pub(crate) fn run(app: App) {
         swallow: KeySwallow::default(),
     };
     drop(conn);
+
+    // Give the toplevel an icon straight away, at the sizes a desktop usually
+    // wants. A compositor that has its own preferences announces them on the
+    // manager and we redo this from those (see the dispatch); one that
+    // announces none keeps what it gets here.
+    state.set_toplevel_icon(DEFAULT_ICON_SIZES);
 
     while !state.exit {
         event_loop
@@ -299,6 +330,18 @@ struct State {
     /// the drag still works, just with the compositor's default cursor.
     cursor_shape_mgr: Option<WpCursorShapeManagerV1>,
     cursor_shape_device: Option<WpCursorShapeDeviceV1>,
+    /// `xdg_toplevel_icon` plumbing. `toplevel_icon_mgr` is the bound global —
+    /// `None` on compositors without the protocol, where the app_id and its
+    /// desktop-entry file are the only icon there is. `icon_image` is the
+    /// vector artwork every size is rasterized from, and `icons` holds each
+    /// icon object we have set, with its shm storage: see [`ToplevelIcon`] for
+    /// why none of them is ever dropped. `icon_sizes` accumulates the sizes
+    /// the compositor announces a preference for, until the `done` that ends
+    /// the run.
+    toplevel_icon_mgr: Option<XdgToplevelIconManagerV1>,
+    icon_image: Option<SvgImage>,
+    icon_sizes: Vec<u32>,
+    icons: Vec<ToplevelIcon>,
     modifiers: Modifiers,
     /// Background pattern + color for the main window, toggled with the
     /// `p` / `c` debug keys. Popups/dialogs ignore it and stay white.
@@ -444,7 +487,92 @@ struct DragIcon {
     feedback: DragFeedback,
 }
 
+/// One `xdg_toplevel_icon_v1` we have handed the compositor, plus everything
+/// that has to stay alive behind it.
+///
+/// The protocol is strict about lifetime: a buffer added to an icon must not be
+/// destroyed, and the shm storage behind it must not be rewritten, for as long
+/// as that icon exists — `no_buffer` is a fatal protocol error, and the
+/// compositor may read the pixels at any point, since it never sends
+/// `wl_buffer.release` for them. So the pool is private to this one icon (never
+/// the frame pool, which recycles slots every redraw), written once at
+/// construction, and neither it nor the icon object is ever dropped: the
+/// compositor may still be holding the previous icon when it is handed a new
+/// one. There are at most two of these in a process's life, at a few dozen KB
+/// each.
+struct ToplevelIcon {
+    _obj: XdgToplevelIconV1,
+    _pool: SlotPool,
+    _buffers: Vec<Buffer>,
+}
+
 impl State {
+    /// Rasterize the app's icon at each of `sizes` and set the result on the
+    /// toplevel, replacing any icon set before.
+    ///
+    /// Every size is a fresh rasterization of the same vectors rather than a
+    /// resample of one bitmap — the reason an icon is specified as an
+    /// [`SvgImage`] in the first place. All buffers go on at scale 1, so the
+    /// sizes are read as both surface-local and pixel sizes; a compositor that
+    /// wants a HiDPI icon asks for the larger size rather than the same size at
+    /// a larger scale.
+    ///
+    /// Does nothing when the app named no icon, or when the compositor lacks
+    /// `xdg_toplevel_icon_v1` — there the desktop-entry file behind the app_id
+    /// is the only icon source, and it isn't ours to write.
+    fn set_toplevel_icon(&mut self, sizes: &[u32]) {
+        // Both taken by value up front, so the borrow of `self` ends here and
+        // the new icon can be pushed onto `self.icons` at the bottom.
+        let (Some(mgr), Some(image)) = (self.toplevel_icon_mgr.clone(), self.icon_image) else {
+            return;
+        };
+        let mut sizes: Vec<u32> = sizes.iter().copied().filter(|&s| s > 0).collect();
+        sizes.sort_unstable();
+        sizes.dedup();
+        if sizes.is_empty() {
+            return;
+        }
+
+        let bytes: usize = sizes.iter().map(|&s| s as usize * s as usize * 4).sum();
+        let Ok(mut pool) = SlotPool::new(bytes, &self.shm) else {
+            return;
+        };
+        let obj = mgr.create_icon(&self.qh, ());
+        let mut buffers = Vec::with_capacity(sizes.len());
+        for size in sizes {
+            let edge = size as i32;
+            let Ok((buffer, canvas)) =
+                pool.create_buffer(edge, edge, edge * 4, wl_shm::Format::Argb8888)
+            else {
+                continue;
+            };
+            let rgba = image.rasterize_rgba(size);
+            write_premultiplied(&rgba, bytes_as_u32_mut(canvas));
+            obj.add_buffer(buffer.wl_buffer(), 1);
+            buffers.push(buffer);
+        }
+        if buffers.is_empty() {
+            obj.destroy();
+            return;
+        }
+
+        mgr.set_icon(self.window.xdg_toplevel(), Some(&obj));
+        // `set_icon` is double-buffered like any other toplevel state: it takes
+        // effect on the next commit of the toplevel's surface. Before the first
+        // configure that commit is the one the initial handshake is waiting on,
+        // and the frame it answers with carries the icon along — so only a call
+        // made later needs a commit of its own, and gets one here rather than
+        // sitting invisible until something else happens to redraw.
+        if self.configured {
+            self.window.commit();
+        }
+        self.icons.push(ToplevelIcon {
+            _obj: obj,
+            _pool: pool,
+            _buffers: buffers,
+        });
+    }
+
     /// Per-loop housekeeping: sync popup window state with the widget
     /// tree, then redraw any surface that asked for it. Idle iterations
     /// (no state changes since the last frame) do nothing — without
@@ -2166,6 +2294,17 @@ fn bytes_as_u32_mut(bytes: &mut [u8]) -> &mut [u32] {
     unsafe { std::slice::from_raw_parts_mut(bytes.as_mut_ptr() as *mut u32, len) }
 }
 
+/// Convert straight-alpha RGBA8 (what [`SvgImage::rasterize_rgba`] returns)
+/// into the `wl_shm` `Argb8888` a Wayland buffer wants: `0xAARRGGBB` per pixel,
+/// with the color channels premultiplied by alpha.
+fn write_premultiplied(rgba: &[u8], dst: &mut [u32]) {
+    for (px, out) in rgba.as_chunks::<4>().0.iter().zip(dst.iter_mut()) {
+        let a = px[3] as u32;
+        let scaled = |c: u8| (c as u32 * a + 127) / 255;
+        *out = (a << 24) | (scaled(px[0]) << 16) | (scaled(px[1]) << 8) | scaled(px[2]);
+    }
+}
+
 // xdg_positioner has no incoming events; SCTK doesn't manage it for us
 // because we create it ad-hoc per popup. An empty Dispatch impl
 // satisfies the queue-handle requirement.
@@ -2269,6 +2408,52 @@ impl Dispatch<WpFractionalScaleV1, ()> for State {
                 state.mark_popups_dirty();
             }
         }
+    }
+}
+
+// The compositor announces the icon sizes it would rather have as a run of
+// `icon_size` events terminated by `done` (a compositor with no preference
+// still sends the `done`). Because the artwork is vectors, we can give it
+// exactly those — so collect the run and re-set the icon at the end of it,
+// over the ladder guessed at startup.
+impl Dispatch<XdgToplevelIconManagerV1, ()> for State {
+    fn event(
+        state: &mut Self,
+        _proxy: &XdgToplevelIconManagerV1,
+        event: xdg_toplevel_icon_manager_v1::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qhandle: &QueueHandle<Self>,
+    ) {
+        match event {
+            xdg_toplevel_icon_manager_v1::Event::IconSize { size } if size > 0 => {
+                state.icon_sizes.push(size as u32);
+            }
+            xdg_toplevel_icon_manager_v1::Event::Done => {
+                // Taken rather than read, so a compositor that announces a
+                // second time replaces its preferences instead of adding to
+                // them.
+                let sizes = std::mem::take(&mut state.icon_sizes);
+                if !sizes.is_empty() {
+                    state.set_toplevel_icon(&sizes);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+// xdg_toplevel_icon_v1 is sender-only — we create it, fill it, and hand it
+// over. An empty Dispatch satisfies the queue handle.
+impl Dispatch<XdgToplevelIconV1, ()> for State {
+    fn event(
+        _state: &mut Self,
+        _proxy: &XdgToplevelIconV1,
+        _event: <XdgToplevelIconV1 as Proxy>::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qhandle: &QueueHandle<Self>,
+    ) {
     }
 }
 
