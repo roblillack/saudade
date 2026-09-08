@@ -99,7 +99,46 @@ impl SvgImage {
     /// Fill into the physical-pixel rectangle `phys` (origin-relative device
     /// coordinates, as handed in by [`Painter::physical`]).
     fn fill_phys(&self, painter: &mut Painter, phys: Rect, tint: Option<Color>) {
-        if phys.w <= 0 || phys.h <= 0 {
+        self.scan(phys, tint, |x, y, color, alpha| {
+            painter.blend_pixel_phys(x, y, color, alpha)
+        });
+    }
+
+    /// Rasterize the image into a `size` × `size` **straight-alpha RGBA8**
+    /// buffer, row-major, composited over full transparency.
+    ///
+    /// This is the fill [`draw`](Self::draw) performs, only onto nothing rather
+    /// than onto a window: the image is aspect-fit and centered, and a
+    /// non-square one leaves its margins transparent. It is what window icons
+    /// are built from — see [`WindowConfig::icon`](crate::WindowConfig::icon) —
+    /// since every platform that takes an icon takes it as loose RGBA pixels,
+    /// and each wants its own sizes. The geometry is resolution-independent, so
+    /// asking for another size re-rasterizes rather than resamples.
+    ///
+    /// A zero `size`, or an image with nothing in it, yields a fully
+    /// transparent buffer of the size asked for.
+    pub fn rasterize_rgba(&self, size: u32) -> Vec<u8> {
+        let px = size as usize;
+        let mut rgba = vec![0u8; px * px * 4];
+        let edge = size as i32;
+        self.scan(Rect::new(0, 0, edge, edge), None, |x, y, color, alpha| {
+            if x < 0 || y < 0 || x >= edge || y >= edge {
+                return;
+            }
+            let idx = (y as usize * px + x as usize) * 4;
+            blend_over(&mut rgba[idx..idx + 4], color, alpha);
+        });
+        rgba
+    }
+
+    /// Shared rasterization core: aspect-fit the viewBox into the physical-pixel
+    /// rectangle `phys` and hand every covered device pixel to `blend` as
+    /// `(x, y, color, alpha)`, `alpha` being the polygon's own alpha scaled by
+    /// that pixel's anti-aliased coverage. Polygons arrive in document order, so
+    /// a sink that composites in the order it is called reproduces the painter's
+    /// algorithm.
+    fn scan(&self, phys: Rect, tint: Option<Color>, mut blend: impl FnMut(i32, i32, Color, u8)) {
+        if phys.w <= 0 || phys.h <= 0 || self.width <= 0.0 || self.height <= 0.0 {
             return;
         }
         // Aspect-fit the viewBox into the footprint and center it.
@@ -112,9 +151,40 @@ impl SvgImage {
 
         let mut raster = Rasterizer::new(phys);
         for poly in self.polygons {
-            raster.fill(painter, poly, scale, tx, ty, tint);
+            raster.fill(&mut blend, poly, scale, tx, ty, tint);
         }
     }
+}
+
+/// Composite `color` at `alpha` over one straight-alpha RGBA8 pixel — `dst` is
+/// exactly its four bytes — with Porter-Duff *over*.
+///
+/// Straight rather than premultiplied alpha, because that is the form every
+/// icon consumer wants back: winit's `Icon::from_rgba`, `_NET_WM_ICON`, and
+/// macOS' `NSImage`. Wayland's `xdg_toplevel_icon` buffers are the one
+/// exception (ARGB8888 there is premultiplied), so that path converts on the
+/// way into the buffer.
+fn blend_over(dst: &mut [u8], color: Color, alpha: u8) {
+    let sa = alpha as u32;
+    if sa == 0 {
+        return;
+    }
+    let da = dst[3] as u32;
+    // Both terms are an alpha times 255, so `out_a` is the composited alpha
+    // scaled by 255 — exactly the denominator the color channels, weighted by
+    // the same two alphas, divide back out.
+    let out_a = sa * 255 + da * (255 - sa);
+    if out_a == 0 {
+        return;
+    }
+    let mix = |s: u8, d: u8| {
+        let num = s as u32 * sa * 255 + d as u32 * da * (255 - sa);
+        (num / out_a) as u8
+    };
+    dst[0] = mix(color.red(), dst[0]);
+    dst[1] = mix(color.green(), dst[1]);
+    dst[2] = mix(color.blue(), dst[2]);
+    dst[3] = ((out_a + 127) / 255) as u8;
 }
 
 /// A single non-horizontal polygon edge, oriented top-to-bottom, plus the
@@ -160,11 +230,11 @@ impl Rasterizer {
     }
 
     /// Fill one polygon, transforming its rings by `p * scale + (tx, ty)` and
-    /// blending the result onto `painter`. `tint`, when `Some`, replaces the
+    /// handing each covered pixel to `blend`. `tint`, when `Some`, replaces the
     /// polygon's own color (its alpha still scales the anti-aliased coverage).
     fn fill(
         &mut self,
-        painter: &mut Painter,
+        blend: &mut impl FnMut(i32, i32, Color, u8),
         poly: &SvgPolygon,
         scale: f32,
         tx: f32,
@@ -275,7 +345,7 @@ impl Rasterizer {
                 if alpha <= 0 {
                     continue;
                 }
-                painter.blend_pixel_phys(col_lo + k as i32, iy, color, alpha.min(255) as u8);
+                blend(col_lo + k as i32, iy, color, alpha.min(255) as u8);
             }
         }
     }
@@ -430,5 +500,89 @@ mod tests {
             mid != Color::BLACK && mid != Color::WHITE,
             "half-covered column should be a gray blend, got {mid:?}",
         );
+    }
+
+    /// One RGBA pixel of `rgba`, as `(r, g, b, a)`.
+    fn rgba_at(rgba: &[u8], size: u32, x: u32, y: u32) -> (u8, u8, u8, u8) {
+        let i = ((y * size + x) * 4) as usize;
+        (rgba[i], rgba[i + 1], rgba[i + 2], rgba[i + 3])
+    }
+
+    #[test]
+    fn rasterize_rgba_fills_the_square_opaquely() {
+        let size = 16;
+        let rgba = SQUARE.rasterize_rgba(size);
+        assert_eq!(rgba.len(), (size * size * 4) as usize);
+        for (x, y) in [(0, 0), (15, 0), (0, 15), (15, 15), (8, 8)] {
+            assert_eq!(
+                rgba_at(&rgba, size, x, y),
+                (0, 0, 0, 255),
+                "({x},{y}) should be opaque black",
+            );
+        }
+    }
+
+    #[test]
+    fn rasterize_rgba_leaves_the_letterbox_transparent() {
+        // A 3:1 image aspect-fits a square as a band across the middle: at
+        // size 12 it scales by 4 and lands on rows 4..8, leaving four fully
+        // transparent rows above and below. Nothing writes those, so their
+        // color bytes stay zero along with their alpha.
+        const WIDE: SvgImage = SvgImage {
+            width: 3.0,
+            height: 1.0,
+            polygons: &[SvgPolygon {
+                color: Color::RED,
+                fill_rule: FillRule::NonZero,
+                rings: &[&[(0.0, 0.0), (3.0, 0.0), (3.0, 1.0), (0.0, 1.0)]],
+            }],
+        };
+        let size = 12;
+        let rgba = WIDE.rasterize_rgba(size);
+        for y in [0, 3, 8, 11] {
+            assert_eq!(
+                rgba_at(&rgba, size, 6, y),
+                (0, 0, 0, 0),
+                "row {y} is outside the fitted image and should be transparent",
+            );
+        }
+        for y in [4, 7] {
+            let (r, g, b, a) = rgba_at(&rgba, size, 6, y);
+            assert_eq!(
+                (r, g, b),
+                (Color::RED.red(), 0, 0),
+                "row {y} keeps its color"
+            );
+            assert_eq!(a, 255, "row {y} is inside the image and fully covered");
+        }
+    }
+
+    #[test]
+    fn rasterize_rgba_keeps_a_translucent_fill_translucent() {
+        // Straight alpha out, so a 50%-alpha fill over nothing stays a
+        // 50%-alpha pixel of its own color — not that color blended halfway to
+        // black, which is what a buffer without an alpha channel would give.
+        const GHOST: SvgImage = SvgImage {
+            width: 1.0,
+            height: 1.0,
+            polygons: &[SvgPolygon {
+                color: Color::argb(0x80, 0x00, 0xA0, 0x00),
+                fill_rule: FillRule::NonZero,
+                rings: &[&[(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)]],
+            }],
+        };
+        let rgba = GHOST.rasterize_rgba(4);
+        assert_eq!(rgba_at(&rgba, 4, 2, 2), (0x00, 0xA0, 0x00, 0x80));
+    }
+
+    #[test]
+    fn rasterize_rgba_handles_degenerate_requests() {
+        assert!(SQUARE.rasterize_rgba(0).is_empty());
+        let blank = SvgImage {
+            width: 1.0,
+            height: 1.0,
+            polygons: &[],
+        };
+        assert!(blank.rasterize_rgba(8).iter().all(|&b| b == 0));
     }
 }

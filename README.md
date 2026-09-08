@@ -33,7 +33,7 @@ Reference apps live under `examples/`. Run any of them with
 
 | Example         | What it shows                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
 | --------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `notepad`       | Editor window with menu bar (`MenuBar`, `TextEditor`); File → Open / Save As drive a `FileDialog`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| `notepad`       | Editor window with menu bar (`MenuBar`, `TextEditor`); File → Open / Save As drive a `FileDialog`. Also the one example that names a `WindowConfig::icon`, so it shows the desktop's own icon slot filled.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | `filer`         | Filesystem browser using `List` with folder/file icons. Drag an entry out of the window to drop it onto another app (drag _source_ via `EventCtx::start_drag`; Wayland only).                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
 | `dnd`           | A drop zone that highlights while a file drag hovers and lists the paths dropped onto it. Demonstrates OS file drag-and-drop (`DragEnter` / `DragMove` / `DragLeave` / `Drop`) across macOS, Windows, X11, and Wayland.                                                                                                                                                                                                                                                                                                                                                                                                                                  |
 | `picker`        | Pick-an-item dialog: `List` + buttons + `Dialog`, with Tab/Shift+Tab focus cycling.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
@@ -128,6 +128,7 @@ to an object-oriented UI framework.
 | widget   | `Widget` trait (paint / event / focus / overlay hooks)                                                                                                                                                                                              |
 | widgets  | `Container`, `Column`, `Row`, `Label`, `FocusLabel`, `Button`, `Checkbox`, `Bevel`, `Image`, `MenuBar`, `Menu`, `MenuItem`, `ContextMenu`, `ScrollBar`, `Slider`, `ProgressBar`, `List`, `Modal`, `Dialog`, `FileDialog`, `TextInput`, `TextEditor` |
 | app      | `App`, `WindowConfig` — runtime entry point                                                                                                                                                                                                         |
+| icon     | turns `WindowConfig::icon` into what each platform's title bar, taskbar or dock wants                                                                                                                                                               |
 | mock     | `MockBackend`, `Snapshot` — offscreen rendering to a pixel buffer / PNG                                                                                                                                                                             |
 | chrome   | `WindowChrome`, `WindowFrame` — Canoe-style title bar + frame for screenshots                                                                                                                                                                       |
 
@@ -1156,6 +1157,11 @@ pattern fills, `clipPath`/`mask`/`filter`, group opacity, embedded raster
 fails loudly rather than rendering blank. (Under `#![deny(warnings)]` that
 warning is an error — by design.)
 
+The same constant is also what a program hands `WindowConfig::icon` to
+become the icon the desktop shows for it — see "Application icon" — and
+`SvgImage::rasterize_rgba(size)` is the underlying "give me these pixels"
+call for anything else that wants an image rather than a draw.
+
 The `svg` example renders icons both this way and via runtime `resvg`, and
 benchmarks the two (the baked path is several times faster at icon sizes and
 matches `resvg`'s rasterization to within ~0.5% per channel).
@@ -1201,13 +1207,58 @@ the pixel.
 ```rust
 pub struct WindowConfig {
     pub title: String,
-    pub size: Size,        // logical pixels
+    pub size: Size,               // logical pixels
     pub resizable: bool,
+    pub min_size: Option<Size>,   // logical pixels; resizable windows only
+    pub icon: Option<SvgImage>,   // see "Application icon"
 }
 
 WindowConfig::new("About Retrofetch", 395, 305);
-WindowConfig::new("Notepad", 520, 340).resizable(true);
+WindowConfig::new("Notepad", 520, 340).resizable(true).icon(ICON);
 ```
+
+### Application icon
+
+`WindowConfig::icon` names the mark the desktop shows for the program,
+as one baked `SvgImage`:
+
+```rust
+const ICON: SvgImage = include_svg!("assets/icons/notepad.svg");
+
+App::new(
+    WindowConfig::new("Notepad", 520, 340).resizable(true).icon(ICON),
+    root,
+).run();
+```
+
+Vectors rather than a bitmap because the consumers span two orders of
+magnitude in size, and each one gets its own rasterization off the same
+geometry rather than a resample of one bitmap:
+
+| Platform | Where it lands | Sizes |
+| --- | --- | --- |
+| Windows | title bar (`ICON_SMALL`), taskbar + Alt-Tab (`ICON_BIG`) | 16 and 32 logical px, times the window's DPI scale |
+| X11 | `_NET_WM_ICON`; the WM scales it down for its title bar, task list and switcher | 64 px |
+| Wayland | `xdg_toplevel_icon_v1` | whichever the compositor asks for; 16/24/32/48/64/128 if it names none |
+| macOS | the dock tile (`NSApplication.applicationIconImage`) | 512 px |
+
+Two platform notes. macOS windows have no title-bar icon of their own —
+that slot belongs to the document a window represents — so the dock is
+the whole story there, and the tile lasts as long as the process does
+(it isn't the icon a bundle carries on disk). And a Wayland compositor
+without `xdg_toplevel_icon_v1` has only the surface's app_id to go on,
+and shows whatever icon the matching desktop-entry file names, so a
+program that hasn't been *installed* gets a placeholder no matter what
+it asks for here.
+
+Dialog windows get the icon too, so one doesn't sit next to the main
+window wearing the system default. Draw the artwork to read at the small
+end of that table: what looks like detail at 512 is mud at 16.
+
+`SvgImage::rasterize_rgba(size)` is the rasterization on its own — a
+square, straight-alpha RGBA8 buffer, aspect-fit and centered with
+transparent margins — for anything else that wants pixels rather than a
+draw call.
 
 ### `App`
 

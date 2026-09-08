@@ -38,6 +38,21 @@ While pre-1.0, the minor version is bumped for breaking changes.
 
 ### Added
 
+- `WindowConfig::icon(SvgImage)` gives a program the icon the desktop shows for
+  it. One `include_svg!` mark goes to every place that wants one: the Windows
+  title bar (`ICON_SMALL`) and taskbar / Alt-Tab switcher (`ICON_BIG`), both
+  rasterized at the window's own DPI, so a 150% display gets a 24-pixel icon
+  drawn as 24 pixels rather than a 16-pixel one stretched; `_NET_WM_ICON` on
+  X11; `xdg_toplevel_icon_v1` on Wayland, at the sizes the compositor asks for
+  (with a 16→128 ladder for compositors that name none, and nothing at all for
+  those without the protocol, where the app_id's desktop-entry file is the only
+  icon there is); and the dock tile on macOS, whose windows have no icon of
+  their own. Dialog windows get it too, so one doesn't sit beside the main
+  window wearing the system default. Vectors rather than a bitmap precisely
+  because that list spans 16 px to 512: every size is rasterized from the
+  geometry, so none of them is a resample. `SvgImage::rasterize_rgba(size)`
+  is that rasterization on its own, for anything else that wants an image
+  rather than a draw call.
 - `Painter::crisp(rect, |p, frame| …)` runs a frame recipe in device pixels,
   against a `Frame` (`depth`, `ring`, `inside`) that scales and rounds each
   boundary on the way to the buffer — the mechanism behind the fix above, for
