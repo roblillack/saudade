@@ -140,8 +140,8 @@ fn set_dock_icon(image: &SvgImage) {
 
     // Core Graphics has no straight-alpha pixel format, so fold each channel
     // into its own alpha on the way over.
-    let mut rgba = image.rasterize_rgba(DOCK_EDGE);
-    for px in rgba.as_chunks::<4>().0.iter_mut() {
+    let rgba = image.rasterize_rgba(DOCK_EDGE);
+    for px in rgba.as_chunks::<4>().0.iter() {
         let a = px[3] as u32;
         for c in &mut px[..3] {
             *c = ((*c as u32 * a + 127) / 255) as u8;
