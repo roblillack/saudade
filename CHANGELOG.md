@@ -52,7 +52,7 @@ While pre-1.0, the minor version is bumped for breaking changes.
 
 ### Changed
 
-- Slightly updated folder icon.
+- Slightly improve folder icon. (#55)
 
 ### Removed
 
