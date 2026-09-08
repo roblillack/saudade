@@ -2298,7 +2298,7 @@ fn bytes_as_u32_mut(bytes: &mut [u8]) -> &mut [u32] {
 /// into the `wl_shm` `Argb8888` a Wayland buffer wants: `0xAARRGGBB` per pixel,
 /// with the color channels premultiplied by alpha.
 fn write_premultiplied(rgba: &[u8], dst: &mut [u32]) {
-    for (px, out) in rgba.chunks_exact(4).zip(dst.iter_mut()) {
+    for (px, out) in rgba.as_chunks::<4>().0.iter().zip(dst.iter_mut()) {
         let a = px[3] as u32;
         let scaled = |c: u8| (c as u32 * a + 127) / 255;
         *out = (a << 24) | (scaled(px[0]) << 16) | (scaled(px[1]) << 8) | scaled(px[2]);
