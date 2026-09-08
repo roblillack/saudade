@@ -40,6 +40,7 @@ mod coretext;
 mod event;
 mod font;
 mod geometry;
+mod icon;
 pub mod mock;
 mod painter;
 mod svg;

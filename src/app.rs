@@ -31,6 +31,7 @@ use crate::event::{
 use crate::font::{Font, FontSet};
 use crate::geometry::{Point, Rect, Size};
 use crate::painter::Painter;
+use crate::svg::SvgImage;
 use crate::theme::Theme;
 use crate::widget::{PopupKind, PopupRequest, Widget};
 
@@ -42,6 +43,9 @@ pub struct WindowConfig {
     /// `None` leaves the lower bound to the window manager. Only meaningful for
     /// [`resizable`](Self::resizable) windows.
     pub min_size: Option<Size>,
+    /// The program's icon, as vectors — see [`icon`](Self::icon). `None` leaves
+    /// whatever default the platform gives an app that doesn't name one.
+    pub icon: Option<SvgImage>,
 }
 
 impl WindowConfig {
@@ -51,6 +55,7 @@ impl WindowConfig {
             size: Size::new(width, height),
             resizable: false,
             min_size: None,
+            icon: None,
         }
     }
 
@@ -63,6 +68,31 @@ impl WindowConfig {
     /// enforces the bound, so the layout never has to cope with sizes below it.
     pub fn min_size(mut self, width: i32, height: i32) -> Self {
         self.min_size = Some(Size::new(width, height));
+        self
+    }
+
+    /// The icon that stands for this program wherever the desktop shows it:
+    /// the Windows title bar, taskbar and Alt-Tab switcher, an X11 window
+    /// manager's `_NET_WM_ICON`, a Wayland compositor's window switcher, the
+    /// macOS dock.
+    ///
+    /// ```no_run
+    /// # use saudade::*;
+    /// const ICON: SvgImage = include_svg!("assets/icons/notepad.svg");
+    /// WindowConfig::new("Notepad", 520, 340).icon(ICON);
+    /// ```
+    ///
+    /// Vectors rather than a bitmap because every one of those consumers picks
+    /// its own size — from 16 px in a title bar to 512 in a dock tile, doubled
+    /// again on a HiDPI display — and each is rasterized from the geometry at
+    /// the size actually asked for. Draw the artwork to read at the small end:
+    /// what looks like detail at 512 is mud at 16.
+    ///
+    /// Comes from [`include_svg!`](crate::include_svg) like any other saudade
+    /// icon, so it costs nothing at run time beyond the rasterization, and the
+    /// SVG parser stays out of the binary.
+    pub fn icon(mut self, icon: SvgImage) -> Self {
+        self.icon = Some(icon);
         self
     }
 }
@@ -379,6 +409,10 @@ impl ApplicationHandler for AppHandler {
         let win = event_loop
             .create_window(attrs)
             .expect("saudade: failed to create window");
+        if let Some(image) = self.window_config.icon.as_ref() {
+            crate::icon::set_window_icon(&win, image);
+            crate::icon::set_app_icon(image);
+        }
         let win = Rc::new(win);
         let id = win.id();
 
@@ -1459,6 +1493,14 @@ impl AppHandler {
         }
 
         let win = event_loop.create_window(attrs).ok()?;
+        // A dialog is a decorated top-level of its own, so it carries its own
+        // title-bar / taskbar icon — and would otherwise show the platform
+        // default beside a main window showing the app's.
+        if let Some(image) = self.window_config.icon.as_ref()
+            && request.kind == PopupKind::Dialog
+        {
+            crate::icon::set_window_icon(&win, image);
+        }
         // Before the first `set_visible` below, while the window is still
         // off-screen: the behavior applies to the animation that showing it
         // would otherwise play.
