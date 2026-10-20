@@ -1014,32 +1014,32 @@ mod tests {
 
     /// At a fractional scale the field's right border must land on the very
     /// device-pixel columns the scrollbar's own left border occupies. The
-    /// list is 29 logical pixels wide so the scrollbar starts at x = 13 — an
-    /// odd column, where at 1.5x `snap(14) - snap(13)` is 1 device pixel while
-    /// the border line is 2, which is exactly where the unmerged frame used to
+    /// list is 29 logical pixels wide so the scrollbar starts at x = 13 —
+    /// where at 2.25x `snap(14) - snap(13)` is 3 device pixels while the
+    /// border line is 2, which is exactly where the unmerged frame used to
     /// poke a stray black column out of the scrollbar's left edge.
     #[test]
     fn the_field_border_collapses_onto_the_scrollbar_line_at_fractional_scale() {
         use crate::mock::MockBackend;
 
         let rect = Rect::new(0, 0, 29, 40);
-        let be = MockBackend::new(rect.w, rect.h).with_scale(1.5);
+        let be = MockBackend::new(rect.w, rect.h).with_scale(2.25);
         let mut l = List::new(rect).with_items(vec![ListItem::new("row")]);
         l.layout(rect);
         let shot = be.render(&mut l);
         let (w, px) = (shot.width(), shot.pixels());
         let at = |x: i32, y: i32| Color(px[(y * w + x) as usize]);
 
-        // The scrollbar's left border: depth(1) = 2 device pixels from its
-        // snapped left edge, snap(13) = 20.
+        // The scrollbar's left border: chrome_unit = 2 device pixels from its
+        // snapped left edge, snap(13) = 29.
         let mid = shot.height() / 2;
-        assert_eq!(at(20, mid), Color::BLACK, "the shared line's first column");
-        assert_eq!(at(21, mid), Color::BLACK, "the shared line's second column");
+        assert_eq!(at(29, mid), Color::BLACK, "the shared line's first column");
+        assert_eq!(at(30, mid), Color::BLACK, "the shared line's second column");
         // And nothing of the field's border to the left of it — the field's
         // face runs right up to the shared line.
-        assert_eq!(at(19, mid), Color::WHITE, "the field face touches the line");
+        assert_eq!(at(28, mid), Color::WHITE, "the field face touches the line");
         assert_eq!(
-            at(18, mid),
+            at(27, mid),
             Color::WHITE,
             "no stray border column further in"
         );
@@ -1047,14 +1047,14 @@ mod tests {
 
     /// The selection band spans the field border to border — the classic
     /// list-box look — trimmed by the frame clip to the interior's exact
-    /// device pixels: at 1.5x the band's first column is right inside the
+    /// device pixels: at 2.25x the band's first column is right inside the
     /// 2-px border and its last column touches the scrollbar's line.
     #[test]
     fn the_selection_band_spans_the_field_border_to_border() {
         use crate::mock::MockBackend;
 
         let rect = Rect::new(0, 0, 29, 40);
-        let be = MockBackend::new(rect.w, rect.h).with_scale(1.5);
+        let be = MockBackend::new(rect.w, rect.h).with_scale(2.25);
         let mut l = List::new(rect).with_items(vec![ListItem::new("row")]);
         l.layout(rect);
         // Selected but unfocused: the muted `theme.face` band, with no dotted
@@ -1064,12 +1064,12 @@ mod tests {
         let (w, px) = (shot.width(), shot.pixels());
         let at = |x: i32, y: i32| Color(px[(y * w + x) as usize]);
 
-        // Row 0 spans logical y 2..20 → device 3..30; probe its middle.
-        let y = 16;
+        // Row 0 spans logical y 2..20 → device 5..45; probe inside it.
+        let y = 20;
         assert_eq!(at(1, y), Color::BLACK, "the field's own left border");
         assert_eq!(at(2, y), Color::LIGHT_GRAY, "the band starts on the border");
-        assert_eq!(at(19, y), Color::LIGHT_GRAY, "and runs to the shared line");
-        assert_eq!(at(20, y), Color::BLACK, "the scrollbar's line right after");
+        assert_eq!(at(28, y), Color::LIGHT_GRAY, "and runs to the shared line");
+        assert_eq!(at(29, y), Color::BLACK, "the scrollbar's line right after");
     }
 
     /// A wheel-scrolled list with a selection must not jump back to that
