@@ -1416,9 +1416,7 @@ dots at all.
 
 So the frame primitives don't snap line by line. `Painter::crisp` drops
 the painter to device pixels, snaps the rect once, and hands the recipe
-a `Frame`, which places chrome the way `include_svg!` marks are
-rasterized: the geometry is written in resolution-independent units and
-each boundary is scaled and rounded on the way to the buffer.
+a `Frame`, which places every ring measured from that one snapped edge.
 
 ```rust
 painter.crisp(box_rect, |p, f| {
@@ -1430,26 +1428,31 @@ painter.crisp(box_rect, |p, f| {
 A `Frame` answers in _depths_: `f.depth(d)` is how many device pixels
 in from the widget's edge logical depth `d` lands, `f.ring(d)` is the
 four sides of the ring between `depth(d)` and `depth(d + 1)`, and
-`f.inside(d)` is what is left for the face. Nothing accumulates —
-every boundary is measured from the widget's own edge, and adjacent
-rings meet on the one they share — so a band lands within half a
-device pixel of its drawn depth no matter how deep the chrome goes:
+`f.inside(d)` is what is left for the face. Every boundary is measured
+from the widget's own edge and adjacent rings meet on the one they
+share, so a ring is the same thickness on all four sides and on every
+widget at that scale.
 
-| scale | 2px bevel, nominal | drawn |
-| ----- | ------------------ | ----- |
-| 1.25x | 2.5                | 2     |
-| 1.5x  | 3.0                | 3     |
-| 2.0x  | 4.0                | 4     |
-| 2.25x | 4.5                | 5     |
-| 2.5x  | 5.0                | 5     |
-| 2.75x | 5.5                | 5     |
-| 3.0x  | 6.0                | 6     |
+A depth is worth a whole number of device pixels, `Painter::chrome_unit`,
+rather than the scale itself. The chrome is the design's own drawn at
+an integer zoom, every ring in it equally thick, and whatever the
+fractional rest of the scale buys goes to the face. The unit is 1
+below 1.75x and the scale's whole part above it — so a scale that is a
+whole multiple of one below 1.75x wears that one's chrome blown up —
+except from 1.75x up to 2x, which takes 2:
 
-Below 1.5x the depths are pinned to the design's own rather than
-scaled, which is where that 2 at 1.25x comes from: a logical pixel is
-still worth a single device pixel there, so scaling the depths would
-put a 3-pixel bevel under a 1-pixel border where the design says 2
-and 1.
+| scale (from – to) | unit | 2px bevel | e.g.                       |
+| ----------------- | ---- | --------- | -------------------------- |
+| 1.0x – 1.75x      | 1    | 2         | 1.5x: the design's own     |
+| 1.75x – 2.0x      | 2    | 4         | 1.75x: 0.875x doubled      |
+| 2.0x – 3.0x       | 2    | 4         | 2.5x: 1.25x doubled        |
+| 3.0x – 4.0x       | 3    | 6         | 3.75x: 1.25x tripled       |
+
+Scaling the depths by the scale itself distorts the frame instead,
+since half a device pixel of rounding is most of a line one or two
+pixels thick: at 1.25x it puts a 3-pixel bevel under a 1-pixel border
+where the design says 2 and 1, and at 2.5x a 3-pixel border over a
+bevel of a 2-pixel ring and a 3-pixel one.
 
 A few consequences:
 
@@ -1457,11 +1460,10 @@ A few consequences:
   rect, because each ring is inset by its own depth: that is the
   staircase a Win 3.1 bevel steps down at its corners. Sharing the
   boundary between them is what keeps the pair exact.
-- `Painter::chrome_unit` — a line _thickness_ rounded to whole units —
-  is the right answer for a lone thin line (a divider, a caret, a grid
-  rule) and nothing else. Across a frame the error compounds with depth
-  and steps in whole units: 4 device pixels at 2.25x, 6 at 2.5x, a 50%
-  jump for an 11% change of scale.
+- `Painter::chrome_unit` is also what a lone thin line — a divider, a
+  caret, a grid rule — is drawn at, so it matches the frames around it.
+  A frame is still built off a `Frame` rather than out of it, because
+  only the frame measures every ring from one snapped edge.
 - `stroke_rect`, `raised_bevel`, `sunken_bevel`, `button`,
   `light_button`, `focus_rect` and `etched_h_line` all go through
   `crisp`, so widgets get this for free; a widget drawing chrome of its
@@ -1469,10 +1471,9 @@ A few consequences:
   painter is at `scale == 1.0`, so those primitives are no help there —
   each would draw a single device pixel. Take the geometry from the
   `Frame`.
-- The dotted focus ring is placed by weight rather than by depth: the
-  dot is `depth(1)` square and the pitch exactly twice that, because
-  what the eye reads in a dash is its rhythm. A dash has no geometry
-  riding on it, so a pitch up to a pixel off nominal costs nothing.
+- The dotted focus ring's dot is `depth(1)` square and its pitch
+  exactly twice that, because what the eye reads in a dash is its
+  rhythm.
 
 ### How big a logical pixel is
 

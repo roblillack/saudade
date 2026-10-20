@@ -238,7 +238,9 @@ pub(crate) fn metrics(content_phys: Size, scale: f32, chrome: &WindowChrome) -> 
 
     let bw = px(chrome.frame.border_width());
     let tbh = px(titlebar_height());
-    let unit = px(1).max(1);
+    // Thin lines are a whole number of device pixels, the same as the frames
+    // the content's own widgets draw.
+    let unit = crate::painter::chrome_px(scale);
     let margin = px(chrome.margin);
     let shadow = px(SHADOW_SIZE);
 

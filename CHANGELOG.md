@@ -27,6 +27,14 @@ While pre-1.0, the minor version is bumped for breaking changes.
   Both are trimmed by the frame clip, so they stop on exactly the border
   line's device pixels at every scale. Icons and labels keep their padding.
   (#54)
+- Chrome lines are a whole number of device pixels at every scale: one below
+  1.75x, then the scale's whole part — two from 1.75x up to 3x, three from 3x
+  up to 4x. Every ring of a frame is that thick, so a button at 2.5x is the
+  1.25x one doubled, a 2-pixel outline over a 4-pixel bevel, where scaling the
+  depths by 2.5 drew a 3-pixel outline over rings of 2 and 3; whatever the
+  fractional rest of the scale buys goes to the face. Lone lines (dividers,
+  carets, grid rules), the background patterns and the mock window chrome use
+  the same unit.
 
 ### Fixed
 
