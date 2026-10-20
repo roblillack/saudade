@@ -5,7 +5,9 @@ use std::time::{Duration, Instant};
 
 use winit::application::ApplicationHandler;
 use winit::dpi::{LogicalSize, PhysicalPosition, PhysicalSize};
-use winit::event::{ElementState, MouseButton as WinitMouseButton, MouseScrollDelta, WindowEvent};
+use winit::event::{
+    ElementState, InnerSizeWriter, MouseButton as WinitMouseButton, MouseScrollDelta, WindowEvent,
+};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{Key as WKey, ModifiersKeyState, NamedKey as WNamedKey};
 use winit::window::{CursorIcon, Window, WindowAttributes, WindowButtons, WindowId, WindowLevel};
@@ -409,6 +411,8 @@ impl ApplicationHandler for AppHandler {
         let win = event_loop
             .create_window(attrs)
             .expect("saudade: failed to create window");
+        #[cfg(windows)]
+        crate::win32_dpi::watch_dpi_changes(&win);
         if let Some(image) = self.window_config.icon.as_ref() {
             crate::icon::set_window_icon(&win, image);
             crate::icon::set_app_icon(image);
@@ -536,8 +540,17 @@ impl AppHandler {
                 self.refresh_screen();
                 self.needs_redraw = true;
             }
-            WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
-                self.adopt_scale(scale_factor as f32);
+            WindowEvent::ScaleFactorChanged {
+                scale_factor,
+                mut inner_size_writer,
+            } => {
+                // Before winit gets to place the window itself, which it
+                // otherwise sends back to the display it is leaving.
+                #[cfg(windows)]
+                if let Some(win) = self.main_win.as_deref() {
+                    crate::win32_dpi::follow_dpi_change(win);
+                }
+                self.adopt_scale(scale_factor as f32, &mut inner_size_writer);
                 self.needs_redraw = true;
             }
             WindowEvent::CursorMoved { position, .. } => {
@@ -1197,7 +1210,23 @@ impl AppHandler {
     /// [`Self::physical`] that predates the request would preserve the wrong
     /// size and then undo the request — leaving the window at the platform
     /// size, a UI scale too small.
-    fn adopt_scale(&mut self, os_scale: f32) {
+    ///
+    /// The new size goes into `writer`, the handle winit hands out with the
+    /// event, and *not* through [`Window::request_inner_size`]. On Windows the
+    /// event is delivered from inside winit's `WM_DPICHANGED` handler, which
+    /// sizes and places the window itself once this returns, keeping the
+    /// pointer over the same spot of the title bar mid-drag (and which
+    /// `win32_dpi.rs` helps put it on the right display).
+    /// `request_inner_size` instead calls `SetWindowPos` right away, anchored
+    /// at the top-left corner the window had *before* the change, and before
+    /// winit has placed it. Mid-drag that can hand the window straight
+    /// back to the display it is leaving, whose `WM_DPICHANGED` winit has to
+    /// queue (we are still in the handler for the last one) and replay later,
+    /// along with the `Resized` events of the meantime — by then all stale, so
+    /// every replay preserved a size from the wrong scale and the window grew
+    /// by the ratio between the displays on each round trip, until the surface
+    /// was too big to allocate.
+    fn adopt_scale(&mut self, os_scale: f32, writer: &mut InnerSizeWriter) {
         let Some(win) = self.main_win.clone() else {
             return;
         };
@@ -1212,9 +1241,29 @@ impl AppHandler {
             (self.physical.width as f32 / old).round() as i32,
             (self.physical.height as f32 / old).round() as i32,
         );
+        let ui_moved = ui_scale != self.ui_scale;
         self.ui_scale = ui_scale;
         self.scale = scale;
-        self.physical = self.fit_window(&win, logical);
+        // The minimum is held in the platform's own logical unit, which winit
+        // carries across a scale factor change by itself. Only a move in the UI
+        // scale between that unit and ours makes it a different bound — and on
+        // Windows re-setting it is a `SetWindowPos` of its own, so it is left
+        // alone otherwise.
+        if ui_moved && let Some(min) = self.window_config.min_size {
+            win.set_min_inner_size(Some(self.to_platform(min)));
+        }
+        if win.is_maximized() {
+            // A maximized window is as big as the display it fills, whatever
+            // it held before. Asking for anything else un-maximizes it on
+            // Windows, so it keeps the size the platform gives it.
+            self.physical = win.inner_size();
+        } else {
+            self.physical = self.to_physical(logical);
+            // `Err` means winit has already let go of the size it was going to
+            // apply. Nothing to do then: the `Resized` that follows reports
+            // whatever the window became, and puts `physical` right.
+            let _ = writer.request_inner_size(self.physical);
+        }
         if let Some(s) = self.main_surface.as_mut() {
             resize_surface(s, self.physical);
         }

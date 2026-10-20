@@ -12,6 +12,17 @@ While pre-1.0, the minor version is bumped for breaking changes.
 
 ### Fixed
 
+- Dragging a window between two Windows displays of different densities no
+  longer resizes it in a loop until the app crashes. winit 0.30 sends a window
+  back to the display it is leaving whenever the density changes mid-move
+  (rust-windowing/winit#4600, fixed on winit `master` but in no 0.30 release),
+  and resizing the window from inside the scale change — as the runtime did —
+  turned that into a runaway in which every round trip grew it by the ratio
+  between the displays, until softbuffer could no longer allocate its surface.
+  The runtime now hands its size to winit with the event instead, and places
+  the window at the rect Windows suggests before winit gets to place it. A
+  crossing is now one scale change each way, whether the window is dragged or
+  moved with Win+Shift+Arrow, and a maximized window stays maximized. (#57)
 - Button frames, bevels, focus rings and etched dividers are crisp at a
   fractional scale. Each chrome line used to snap on its own, from its own
   position in the window: at 2.33x a frame came out heavier along one edge than
@@ -19,7 +30,7 @@ While pre-1.0, the minor version is bumped for breaking changes.
   focus ring degenerated into a smear of two- and three-pixel dots. Every frame
   primitive — `stroke_rect`, `raised_bevel`, `sunken_bevel`, `button`,
   `light_button`, `focus_rect`, `etched_h_line` — now draws in device pixels off
-  a `Frame` that rounds each boundary's *depth* rather than each line's
+  a `Frame` that rounds each boundary's _depth_ rather than each line's
   thickness, so a ring is the same thickness on all four sides and the same on
   every widget at that scale, and nothing accumulates. Chrome at 1.0x, below
   1.5x and at integer scales is byte-for-byte unchanged; 1.5x moves, and so does
@@ -110,14 +121,14 @@ While pre-1.0, the minor version is bumped for breaking changes.
   checkmarks, separators and `with_enabled` predicates all behave identically,
   and it gets its own borderless window so it is never clipped by the widget it
   belongs to — a menu right-clicked near a window border hangs off the edge
-  rather than being folded back inside it. What bounds it is the *screen*: the
+  rather than being folded back inside it. What bounds it is the _screen_: the
   panel flips rather than crossing an edge of the display, and a menu taller
   than the display is capped to it and scrolls — with the wheel, the arrow keys,
   or a click on either end's arrow. Items are usually built per opening
   (`set_items` then `open_at`); `open_within` bounds the panel by a rect of the
   caller's choosing instead. Apps that had hand-rolled a context menu can drop
   it; the `circle_drawer` example did. (#47)
-- On macOS the *system* fonts now come from Core Text rather than from a font
+- On macOS the _system_ fonts now come from Core Text rather than from a font
   file picked out of a database. `Font::load_sans` and `load_monospace` ask for
   the interface font and the user's fixed-pitch font by role, `load_serif` by
   family name, and glyphs are rasterized by the same text stack every other app
@@ -140,6 +151,7 @@ While pre-1.0, the minor version is bumped for breaking changes.
   instead for 13 points magnified 2x keeps the variant a native app would use,
   keeps advances exactly proportional to the DPI, and keeps a layout the same on
   every display. (#48)
+
 - `Widget::paints_own_background` lets a root widget tell the runtime it fills
   every pixel of its own bounds. The window background pattern is then laid
   down only in the letterbox around those bounds instead of across the whole
@@ -157,7 +169,7 @@ While pre-1.0, the minor version is bumped for breaking changes.
   `MockBackend::with_screen_area` fakes one so the placement is testable
   offscreen; an ordinary offscreen render reports `None`, meaning unbounded.
   (#47)
-  
+
 ### Changed
 
 - The candidate font families are now chosen per platform, each chain leading
@@ -205,7 +217,7 @@ While pre-1.0, the minor version is bumped for breaking changes.
   for instead of fading in. Real dialog windows (`PopupKind::Dialog`) keep both.
   (#47)
 - Bold and italic text now actually renders in the host's bold and italic
-  faces. Two things stood in the way. A font *collection* (`.ttc`) packs
+  faces. Two things stood in the way. A font _collection_ (`.ttc`) packs
   several faces into one file and fontdb reports which one it matched, but that
   index was dropped on the way to fontdue, so every emphasis face of a
   collection — which on macOS is most of them, Helvetica included — rasterized
@@ -217,7 +229,7 @@ While pre-1.0, the minor version is bumped for breaking changes.
 - `ScrollBar` now honors its `line_step` when scrolled by wheel or trackpad,
   not just by the arrow buttons. A line has always been `line_step` document
   units everywhere else in the bar; the wheel path added raw line counts to
-  `value`, so a bar whose unit is a *pixel* of content — the shape a pane with
+  `value`, so a bar whose unit is a _pixel_ of content — the shape a pane with
   unequal row heights needs — crept a single pixel per line instead of a row.
   The sub-step remainder is now banked in document units too, so a
   high-resolution trackpad still moves such a bar smoothly rather than a whole
@@ -245,7 +257,7 @@ While pre-1.0, the minor version is bumped for breaking changes.
   takes the new `Accel` type (or its conventional string form: `"Ctrl+R"`,
   `"Ctrl+Shift+Enter"`), and pressing a matching chord while the bar is closed
   fires the item directly. `Accel` names its modifiers as platform-independent
-  *roles* (`AccelMods`): `Accel::primary('r')` means ⌘R on macOS and Ctrl+R
+  _roles_ (`AccelMods`): `Accel::primary('r')` means ⌘R on macOS and Ctrl+R
   everywhere else, resolved through a `ModifierScheme` both when matching
   input and when rendering the right-aligned hint. The scheme defaults to the
   build platform's; `MenuBar::with_scheme` pins it, e.g. for snapshot tests
@@ -257,7 +269,7 @@ While pre-1.0, the minor version is bumped for breaking changes.
   call sites keep compiling via `From<&str>`, which panics on a malformed
   chord so a typo fails loudly at first use. (#46)
 - Text can now be drawn in three font families — **sans-serif**, **serif**, and
-  **monospace** — each in **bold**, *italic*, and ***bold-italic***, all using
+  **monospace** — each in **bold**, _italic_, and **_bold-italic_**, all using
   the host's real installed faces rather than a synthesized smear or shear of the
   regular one. Two new enums name the axes: `FontFamily` (`Sans` / `Serif` /
   `Mono`) and `FontStyle` (`Regular` / `Bold` / `Italic` / `BoldItalic`). Draw
@@ -271,7 +283,7 @@ While pre-1.0, the minor version is bumped for breaking changes.
   bold-italic faces of the chosen family alongside the regular one. Because real
   bold / italic / serif faces carry their own advance widths, measuring in the
   same family and style the text is drawn keeps word-wrap pixel-accurate. A
-  family the host ships without a given face falls back to the nearest *real*
+  family the host ships without a given face falls back to the nearest _real_
   face it does have (ultimately the regular face), and the loader verifies
   fontdb's match actually carries the requested weight/slant so a regular face is
   never passed off as bold or italic. (#44)
@@ -303,8 +315,8 @@ While pre-1.0, the minor version is bumped for breaking changes.
 - **Breaking:** the monospace-specific painter methods `mono_text`,
   `measure_mono_text`, and `mono_cumulative_widths` are removed in favor of the
   general family+style API: draw with `text_styled(.., FontFamily::Mono,
-  FontStyle::Regular)`, measure with `measure_text_styled(.., FontFamily::Mono,
-  FontStyle::Regular)`, and get caret offsets with the new
+FontStyle::Regular)`, measure with `measure_text_styled(.., FontFamily::Mono,
+FontStyle::Regular)`, and get caret offsets with the new
   `Painter::cumulative_widths(text, size, family, style)`. `Font::cumulative_widths`
   likewise gains a `FontStyle` argument. (#44)
 
@@ -312,7 +324,7 @@ While pre-1.0, the minor version is bumped for breaking changes.
 
 - `TextEditor` and `List` no longer jump their scroll position back to the
   caret / selected row when the window merely gains or loses focus. Their
-  `layout` re-synced the scrollbar range *and* scrolled the caret/selection into
+  `layout` re-synced the scrollbar range _and_ scrolled the caret/selection into
   view, but a layout pass also fires for reasons unrelated to editing — on
   Wayland the compositor sends a `configure` (hence a relayout) on every
   activation change — so a wheel-scrolled view snapped back the instant focus
@@ -327,12 +339,12 @@ While pre-1.0, the minor version is bumped for breaking changes.
 
 - `ScrollBar` arrow buttons now behave like real push buttons. Clicking one
   sinks it — a single dark top/left shadow line, no highlight, the arrow glyph
-  nudged 1px down-right — and *holding* it auto-repeats the line-step scroll at
+  nudged 1px down-right — and _holding_ it auto-repeats the line-step scroll at
   a keyboard-style cadence (a ~300ms initial delay, then every 50ms) for as long
   as the button stays pressed with the pointer over it; sliding off pauses the
   repeat and pops the button back out, sliding back resumes it. (#41)
 - `EventCtx::request_tick` asks the runtime to deliver another `Event::Tick`
-  without any ancestor having to forward the request — the *push* counterpart to
+  without any ancestor having to forward the request — the _push_ counterpart to
   `Widget::wants_ticks`. Like `request_paint`, it rides the shared `EventCtx`
   straight back to the runtime, so a widget buried under custom wrapper widgets
   can drive a transient animation on its own. It is one-shot: a widget that
@@ -455,7 +467,7 @@ While pre-1.0, the minor version is bumped for breaking changes.
   and a drop target opts in by calling `EventCtx::accept_drop()` while handling
   `DragEnter` / `DragMove`. Works on macOS, Windows, X11, and Wayland. See the
   `dnd` example. (#23)
-- Dragging files *out* of a window (drag source), Wayland only:
+- Dragging files _out_ of a window (drag source), Wayland only:
   `EventCtx::start_drag()` begins an OS `text/uri-list` drag from a widget's
   press-and-drag gesture, with an icon that follows the cursor and shows a green
   checkmark over a target that accepts the drop or a red cross elsewhere. The
@@ -529,6 +541,7 @@ While pre-1.0, the minor version is bumped for breaking changes.
 Initial release.
 
 <!-- next-url -->
+
 [Unreleased]: https://github.com/roblillack/saudade/compare/v0.6.1...HEAD
 [0.6.1]: https://github.com/roblillack/saudade/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/roblillack/saudade/compare/v0.5.0...v0.6.0
