@@ -1544,6 +1544,7 @@ dependencies = [
  "softbuffer",
  "wayland-client",
  "wayland-protocols",
+ "windows-sys 0.61.2",
  "winit",
 ]
 

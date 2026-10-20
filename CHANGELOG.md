@@ -12,6 +12,17 @@ While pre-1.0, the minor version is bumped for breaking changes.
 
 ### Fixed
 
+- Dragging a window between two Windows displays of different densities no
+  longer resizes it in a loop until the app crashes. winit 0.30 sends a window
+  back to the display it is leaving whenever the density changes mid-move
+  (rust-windowing/winit#4600, fixed on winit `master` but in no 0.30 release),
+  and resizing the window from inside the scale change — as the runtime did —
+  turned that into a runaway in which every round trip grew it by the ratio
+  between the displays, until softbuffer could no longer allocate its surface.
+  The runtime now hands its size to winit with the event instead, and places
+  the window at the rect Windows suggests before winit gets to place it. A
+  crossing is now one scale change each way, whether the window is dragged or
+  moved with Win+Shift+Arrow, and a maximized window stays maximized.
 - Button frames, bevels, focus rings and etched dividers are crisp at a
   fractional scale. Each chrome line used to snap on its own, from its own
   position in the window: at 2.33x a frame came out heavier along one edge than

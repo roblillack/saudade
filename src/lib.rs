@@ -50,6 +50,8 @@ mod ui_scale;
 mod wayland;
 mod widget;
 mod widgets;
+#[cfg(windows)]
+mod win32_dpi;
 
 pub use accel::{Accel, AccelMods, ModifierScheme};
 pub use app::{App, WindowConfig};

@@ -81,6 +81,12 @@ arboard = { version = "3", default-features = false, features = ["wayland-data-c
 [target.'cfg(any(target_os = "macos", windows))'.dependencies]
 arboard = { version = "3", default-features = false }
 
+# Windows: the subclass that places a window where `WM_DPICHANGED` suggests,
+# working around a winit 0.30 bug that has a window flap between two displays
+# of different densities while it is dragged across (see `win32_dpi.rs`).
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
+
 [target.'cfg(target_os = "macos")'.dependencies]
 # Two NSWindow settings winit has no API for (see `open_popup`): popup windows
 # get the system's drop shadow and its show animation otherwise, neither of
