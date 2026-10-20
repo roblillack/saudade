@@ -1,7 +1,7 @@
 //! How big a logical pixel is.
 //!
 //! saudade lays its widgets out in logical pixels at a reference density of
-//! 96 dpi ([`REFERENCE_DPI`]): a list row is 18 of them, a checkbox 13, the
+//! 72 dpi ([`REFERENCE_DPI`]): a list row is 18 of them, a checkbox 13, the
 //! padding either side of a menu-bar label 8.
 //!
 //! The scale the whole UI is drawn at is two factors multiplied together:
@@ -9,10 +9,10 @@
 //! 1. **Reference alignment** — the density of one of the *platform's* own
 //!    logical units over [`REFERENCE_DPI`]. Windows and X11 report a scale
 //!    factor that is already a ratio against 96 dpi ([`NOMINAL_DPI`]): winit
-//!    divides the reported DPI, or `Xft.dpi`, by 96, so their logical unit is
-//!    ours and the alignment is 1. A macOS point is nearer 1/108 in
-//!    ([`MACOS_DPI`]) — about how Apple lays a desktop out, 218 dpi over a
-//!    `backingScaleFactor` of 2 — so there the alignment is 108/96 = 1.125.
+//!    divides the reported DPI, or `Xft.dpi`, by 96, so there the alignment is
+//!    96/72 = 4/3. A macOS point is nearer 1/108 in ([`MACOS_DPI`]) — about
+//!    how Apple lays a desktop out, 218 dpi over a `backingScaleFactor` of 2 —
+//!    so there the alignment is 108/72 = 1.5.
 //! 2. **The system's scaling factor** — what the platform reports for the
 //!    display, which carries both its density and the scaling the user set
 //!    in the OS: the percentage in Windows' Display Settings, `Xft.dpi` on
@@ -24,8 +24,9 @@
 //!
 //! * [`SCALE_VAR`], and `App::with_ui_scale`, set the drawn scale *outright*:
 //!   the derivation above is skipped entire, the system factor included.
-//! * [`DPI_VAR`] moves [`REFERENCE_DPI`] instead, so `SAUDADE_UI_DPI=72` draws
-//!   the chrome a third larger than the default does.
+//! * [`DPI_VAR`] moves [`REFERENCE_DPI`] instead, so `SAUDADE_UI_DPI=96` draws
+//!   the chrome at the platform's own size, a quarter smaller than the default
+//!   does.
 
 /// Name of the scale override, `SAUDADE_UI_SCALE`: the scale to draw at,
 /// outright, in place of everything this module works out.
@@ -40,8 +41,8 @@ const DPI_VAR: &str = "SAUDADE_UI_DPI";
 /// leaving nothing usable.
 const SCALE_RANGE: std::ops::RangeInclusive<f32> = 0.25..=8.0;
 
-/// What [`DPI_VAR`] may ask for: half the default to twice it, which is as far
-/// either way as the chrome's proportions bear looking at.
+/// What [`DPI_VAR`] may ask for: half the platforms' own 96 to twice it, which
+/// is as far either way as the chrome's proportions bear looking at.
 const DPI_RANGE: std::ops::RangeInclusive<f32> = 48.0..=192.0;
 
 /// The density saudade's logical pixel is drawn for unless [`DPI_VAR`] says
@@ -101,7 +102,7 @@ pub(crate) fn pinned(app: Option<f32>) -> Option<f32> {
 
 /// The density a logical pixel is aimed at: [`DPI_VAR`] where it says, else
 /// [`REFERENCE_DPI`]. Read once at startup. Moving it moves every scale at
-/// once, by 96 over whatever it is set to.
+/// once, by the default's 72 over whatever it is set to.
 pub(crate) fn reference_dpi() -> f32 {
     from_env(DPI_VAR, DPI_RANGE).unwrap_or(REFERENCE_DPI)
 }
@@ -175,33 +176,33 @@ mod tests {
         assert_eq!((effective_for(1.0, REFERENCE_DPI) * STEP).fract(), 0.0);
     }
 
-    /// The two ladders: the factor itself on Windows and X11, whose logical
-    /// unit is ours, and an eighth over it on macOS.
+    /// The two ladders: a third over the factor on Windows and X11, whose
+    /// logical unit is 96 dpi to our 72, and half over it on macOS.
     #[test]
     fn the_ladders() {
-        assert_eq!(windows(1.0), 1.0);
-        assert_eq!(windows(1.25), 1.25);
-        assert_eq!(windows(1.5), 1.5);
-        assert_eq!(windows(2.0), 2.0);
-        assert_eq!(macos(1.0), 7.0 / 6.0);
-        assert_eq!(macos(2.0), 2.25);
+        assert_eq!(windows(1.0), 4.0 / 3.0);
+        assert_eq!(windows(1.25), 5.0 / 3.0);
+        assert_eq!(windows(1.5), 2.0);
+        assert_eq!(windows(2.0), 8.0 / 3.0);
+        assert_eq!(macos(1.0), 1.5);
+        assert_eq!(macos(2.0), 3.0);
     }
 
-    /// The snap costs nothing on either platform's own rungs but a Mac at 1x,
-    /// where 9/8 is thirteen and a half twelfths and rounds up by 3%.
+    /// The snap costs nothing on either platform's own rungs: a Windows unit is
+    /// sixteen twelfths of ours and a Mac point eighteen, so every rung of
+    /// either ladder lands on the grid exactly as it stands.
     #[test]
-    fn only_a_mac_at_1x_is_rounded_at_all() {
+    fn no_rung_of_either_ladder_is_rounded() {
+        assert_eq!(NOMINAL_DPI / REFERENCE_DPI, 16.0 / STEP);
+        assert_eq!(MACOS_DPI / REFERENCE_DPI, 18.0 / STEP);
         for &os_scale in WINDOWS_FACTORS {
-            assert_eq!(windows(os_scale), os_scale, "windows at {os_scale}");
+            let unsnapped = os_scale * NOMINAL_DPI / REFERENCE_DPI;
+            assert_eq!(windows(os_scale), unsnapped, "windows at {os_scale}");
         }
         for &os_scale in MACOS_FACTORS {
             let unsnapped = os_scale * MACOS_DPI / REFERENCE_DPI;
-            let rounded = macos(os_scale) != unsnapped;
-            assert_eq!(rounded, os_scale == 1.0, "macos at {os_scale}");
-            assert!((macos(os_scale) - unsnapped).abs() <= 0.5 / STEP);
+            assert_eq!(macos(os_scale), unsnapped, "macos at {os_scale}");
         }
-        assert_eq!(MACOS_DPI / REFERENCE_DPI, 1.125);
-        assert_eq!(macos(1.0), 14.0 / STEP);
     }
 
     /// The one factor that is off the grid entirely: an `Xft.dpi` set by hand,
@@ -209,9 +210,10 @@ mod tests {
     /// wherever it started.
     #[test]
     fn a_hand_set_dpi_lands_on_the_ladder() {
-        assert_eq!(windows(110.0 / 96.0), 7.0 / 6.0);
-        assert_eq!(windows(98.0 / 96.0), 1.0);
-        // 84 dpi is the worst the snap can do: 10.5 twelfths, exactly half a
+        // 18⅓ twelfths and 16⅓: the nearest rungs are 150% and 100%'s.
+        assert_eq!(windows(110.0 / 96.0), 1.5);
+        assert_eq!(windows(98.0 / 96.0), 4.0 / 3.0);
+        // 141 dpi is the worst the snap can do: 23.5 twelfths, exactly half a
         // step from either neighbour — hence the hair of slack, which is the
         // division's own rounding and not the snap's.
         let worst = 0.5 / STEP + f32::EPSILON;
@@ -236,11 +238,12 @@ mod tests {
         let on_windows = span(windows(1.5), 1.0);
         let on_macos = span(macos(2.0), panel_px / 5120.0);
 
-        // Both within a fifth of the 1/96 in target, and within an eighth of
+        // Both within a fifth of the 1/72 in target, and within an eighth of
         // each other.
+        let target = 0.8 * REFERENCE_DPI..=1.2 * REFERENCE_DPI;
         for (name, span) in [("windows", on_windows), ("macos", on_macos)] {
             let dpi = 1.0 / span;
-            assert!((80.0..=120.0).contains(&dpi), "{name} {dpi}");
+            assert!(target.contains(&dpi), "{name} {dpi}");
         }
         assert!(on_windows / on_macos > 0.8 && on_windows / on_macos < 1.25);
     }
@@ -269,16 +272,18 @@ mod tests {
     }
 
     /// The other knob moves the reference density, so every scale moves with
-    /// it: 72 dpi draws a third over the default at every rung, and which rungs
-    /// round moves too, the grid being a twelfth of the reference.
+    /// it: 96 dpi — the platforms' own — draws a quarter under the default at
+    /// every rung, and which rungs round moves too, the grid being a twelfth of
+    /// the reference.
     #[test]
     fn the_reference_density_moves_the_whole_ladder() {
-        assert_eq!(scale_for(1.0, NOMINAL_DPI, 72.0), 4.0 / 3.0);
-        assert_eq!(scale_for(1.5, NOMINAL_DPI, 72.0), 2.0);
-        assert_eq!(scale_for(2.0, MACOS_DPI, 72.0), 3.0);
-        // At 72 even a Mac at 1x is exact, where the default has to round it.
-        assert_eq!(scale_for(1.0, MACOS_DPI, 72.0), 1.5);
-        assert_ne!(macos(1.0), MACOS_DPI / REFERENCE_DPI);
+        assert_eq!(scale_for(1.0, NOMINAL_DPI, 96.0), 1.0);
+        assert_eq!(scale_for(1.5, NOMINAL_DPI, 96.0), 1.5);
+        assert_eq!(scale_for(2.0, MACOS_DPI, 96.0), 2.25);
+        // At 96 a Mac at 1x is 13.5 twelfths and rounds up, where the default
+        // is exact.
+        assert_eq!(scale_for(1.0, MACOS_DPI, 96.0), 14.0 / STEP);
+        assert_eq!(macos(1.0), MACOS_DPI / REFERENCE_DPI);
     }
 
     #[test]

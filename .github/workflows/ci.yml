@@ -55,7 +55,10 @@ jobs:
       - name: Lint (clippy)
         run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 
+      # bash on every OS: Windows' default pwsh reports only the last command's
+      # exit code, so a failing first `cargo test` passed there unseen.
       - name: Test
+        shell: bash
         run: |
           cargo test --workspace --all-targets --all-features
           cargo test --workspace --doc
