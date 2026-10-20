@@ -4,14 +4,24 @@ use crate::geometry::{Color, Rect, Size};
 use crate::theme::Theme;
 
 /// Below this scale a logical pixel of chrome stays a single device pixel:
-/// frames keep the design's drawn widths and thin lines (dividers, carets,
-/// grid rules) stay one device pixel thick.
+/// outlines keep the design's drawn widths and thin lines (dividers, carets,
+/// grid rules) stay one device pixel thick. Bevels do too, up to
+/// [`BEVEL_PIN`].
 ///
 /// The pin covers 125% and 150%, where a scaled 2-pixel border looks blurry
 /// next to the design's crisp 1-pixel one and the room the extra scale buys
 /// is better spent on the face. Above it the same holds a whole multiple at a
 /// time — see [`chrome_px`].
 const CHROME_PIN: f32 = 1.75;
+
+/// From this scale up to [`CHROME_PIN`] the outline stays a single device pixel
+/// but the bevel inside it — the highlight and shadow rings that give a button
+/// its relief — is drawn at 1.5x: a 2-pixel bevel 3 deep. Below it a 1-pixel
+/// bevel still holds its own against the face; from here the face is half as
+/// big again as the design's or more, and a bevel no deeper than the design's
+/// all but disappears into it. Doubling the outline too would bring back the
+/// heavy border [`CHROME_PIN`] keeps out. See [`bevel_depth`].
+const BEVEL_PIN: f32 = 1.5;
 
 /// Device pixels one logical pixel of chrome is worth: always a whole number
 /// `k`, so the chrome is the design's own drawn `k` times over and every line
@@ -31,6 +41,38 @@ pub(crate) fn chrome_px(scale: f32) -> i32 {
         whole + 1
     } else {
         whole
+    }
+}
+
+/// Device pixels `n` logical pixels of *bevel* run to: `n` [`chrome_px`]s,
+/// except from [`BEVEL_PIN`] up to [`CHROME_PIN`], where the bevel is drawn at
+/// 1.5x under an outline of 1. Shared by [`Frame::bevel_ring`] and the window
+/// chrome's own buttons in [`crate::chrome`].
+///
+/// At 1.5x a 2-pixel bevel is exactly 3 deep, so its two rings cannot both be
+/// whole: the outer one takes the half pixel and comes out 2, the inner one 1.
+/// That way round, a recipe that paints one ring on its own — a scrollbar
+/// arrow's highlight, a pressed button's — gets 2 device pixels, where the
+/// other way it would get the single pixel this band exists to thicken. It
+/// costs the light chrome some of its lopsidedness — a highlight of 2 over a
+/// shadow of 3 where the design says 1 and 2 — and the corner's diagonal steps
+/// 2 then 1, which takes a magnifier to see. A whole 2 a ring kept both, but
+/// put a 4-pixel bevel under the 1-pixel outline, which swamped it.
+///
+/// The band is drawn at 1.5x all the way up, not at the scale itself, so every
+/// scale in it wears the same bevel, as every scale shares an outline.
+///
+/// It needs no echo further up. A scale of 2 or more draws its chrome at its
+/// whole part `k` (or `k + 1`), and the rest it leaves the face is under
+/// `(k + 1) / k` — never as much as 1.5 — so no multiple of the design is drawn
+/// there with a face as outsized as this band's.
+pub(crate) fn bevel_depth(n: i32, scale: f32) -> i32 {
+    let n = n.max(0);
+    if (BEVEL_PIN..CHROME_PIN).contains(&scale) {
+        // 1.5 n, the half rounded up.
+        (3 * n + 1) / 2
+    } else {
+        n * chrome_px(scale)
     }
 }
 
@@ -114,7 +156,9 @@ impl Merged {
 /// A depth is worth a whole number of device pixels — [`Painter::chrome_unit`]
 /// of them — rather than the scale itself, so the frame is the design's own
 /// drawn at an integer zoom and every ring in it is exactly as thick as every
-/// other. See [`Frame::new`] for why.
+/// other. See [`Frame::new`] for why. The one exception is a bevel's rings,
+/// asked for with [`Frame::bevel_ring`]: from 1.5x up to 1.75x the bevel is
+/// drawn at 1.5x inside a one-pixel outline.
 ///
 /// A frame whose widget shares an edge with a neighbouring frame — the
 /// 1-logical-pixel-overlap composition — is built over a rect whose shared
@@ -128,6 +172,8 @@ pub struct Frame {
     /// the window's scale. Not the 1.0 the painter itself runs at inside the
     /// pass.
     per_pixel: i32,
+    /// The window's scale, which [`bevel_depth`] measures a bevel's rings by.
+    scale: f32,
 }
 
 impl Frame {
@@ -144,9 +190,19 @@ impl Frame {
     /// the drawn proportions exactly — at 2.5x the frame is the 1.25x one
     /// doubled — and spends the rest of the scale on the face instead: the
     /// button comes out a little roomier and a lot sharper.
+    ///
+    /// Spending it all on the face goes too far from 1.5x up to 1.75x, where
+    /// the face is half as big again as the design's and the 1-pixel bevel
+    /// reads as no relief at all. There the bevel alone is drawn at 1.5x under
+    /// the 1-pixel outline — 3 device pixels for the design's 2, in rings of 2
+    /// and 1 — and [`Frame::bevel_ring`] is how a recipe asks for it. See
+    /// [`bevel_depth`] for what the uneven rings cost.
     fn new(rect: Rect, scale: f32) -> Self {
-        let per_pixel = chrome_px(scale);
-        Self { rect, per_pixel }
+        Self {
+            rect,
+            per_pixel: chrome_px(scale),
+            scale,
+        }
     }
 
     /// The frame's outer bounds, in device pixels.
@@ -181,8 +237,30 @@ impl Frame {
     /// `depth(d + 1)`, so nothing accumulates and the pair spans exactly
     /// `depth(d + 2) - depth(d)`.
     pub fn ring(&self, d: i32) -> Ring {
-        let (ax, ay) = self.axis_depth(d);
-        let (bx, by) = self.axis_depth(d + 1);
+        self.ring_between(self.depth(d), self.depth(d + 1))
+    }
+
+    /// Ring `i` of a bevel inside `outline` logical pixels of outline — the
+    /// light-and-shadow ring a recipe paints just inside its border is
+    /// `bevel_ring(1, 0)`, and the one behind that `bevel_ring(1, 1)`.
+    ///
+    /// The same ring as [`ring(outline + i)`](Self::ring) at every scale but
+    /// 1.5x up to 1.75x, where the bevel is drawn at 1.5x under an outline of
+    /// one: the first ring 2 device pixels, the second 1. The first takes the
+    /// odd pixel so that a line one ring deep on its own — a scrollbar arrow's
+    /// highlight — comes out 2 rather than the single pixel the band exists to
+    /// thicken. Inside the bevel the rings meet on the boundary they share,
+    /// exactly as [`Self::ring`]'s do.
+    pub fn bevel_ring(&self, outline: i32, i: i32) -> Ring {
+        let at = |i: i32| self.depth(outline) + bevel_depth(i, self.scale);
+        self.ring_between(at(i), at(i + 1))
+    }
+
+    /// The four sides of the ring from `a` device pixels in to `b`, the shared
+    /// tail of [`Self::ring`] and [`Self::bevel_ring`].
+    fn ring_between(&self, a: i32, b: i32) -> Ring {
+        let (ax, ay) = self.axis_depth(a);
+        let (bx, by) = self.axis_depth(b);
         let r = self.rect;
         // Horizontal sides span what is left after the *vertical* inset, and
         // vice versa, so the corners belong to whichever side paints last.
@@ -194,11 +272,10 @@ impl Frame {
         }
     }
 
-    /// A depth clamped to each axis of the frame, so a widget shallower than
-    /// its own chrome overlaps itself rather than spilling over its neighbour.
-    /// Everything else here goes through this.
-    fn axis_depth(&self, d: i32) -> (i32, i32) {
-        let depth = self.depth(d);
+    /// A device depth clamped to each axis of the frame, so a widget shallower
+    /// than its own chrome overlaps itself rather than spilling over its
+    /// neighbour. Every ring goes through this.
+    fn axis_depth(&self, depth: i32) -> (i32, i32) {
         (depth.min(self.rect.w.max(0)), depth.min(self.rect.h.max(0)))
     }
 }
@@ -585,9 +662,10 @@ impl<'a> Painter<'a> {
     /// Device pixels one logical pixel of chrome is worth: a whole number, 1
     /// below [`CHROME_PIN`] and the scale's whole part above it, 1.75x up to 2x
     /// excepted — see [`chrome_px`]. The thickness every ring of a [`Frame`] is
-    /// drawn at, the same `unit` the window chrome in [`crate::chrome`] draws
-    /// its frame lines at, and what a widget wants for a *lone* thin line — a
-    /// divider, a caret, a grid rule.
+    /// drawn at (bar a bevel's from 1.5x up to 1.75x — see
+    /// [`Frame::bevel_ring`]), the same `unit` the window chrome in
+    /// [`crate::chrome`] draws its frame lines at, and what a widget wants for
+    /// a *lone* thin line — a divider, a caret, a grid rule.
     ///
     /// A frame is still built off a [`Frame`] rather than out of this: the
     /// frame measures every ring from the widget's own snapped edge, which a
@@ -621,17 +699,18 @@ impl<'a> Painter<'a> {
 
     /// Draw a frame recipe crisply: `f` runs in device pixels, against a
     /// [`Frame`] that places its rings at the design's depths, each a whole
-    /// [`Self::chrome_unit`] deep.
+    /// [`Self::chrome_unit`] deep — bar a bevel's, see [`Frame::bevel_ring`].
     ///
     /// The painter is dropped to device pixels exactly as [`Self::physical`]
     /// hands it over, and the `Frame` carries `rect` snapped to its device
     /// bounds together with the *outer* scale. A recipe asks the frame for the
-    /// ring it wants to paint — `f.ring(0)` for the outline, `f.ring(1)` and
-    /// `f.ring(2)` for the bevel behind it, `f.inside(3)` for the face left
-    /// over — and every one of those comes back with its boundaries already
-    /// rounded to device pixels. Because the outer rect is the snapped
-    /// one, the frame still lands exactly where the scaled draw would have put
-    /// it, and still shares its edge pixels with the widget next door.
+    /// ring it wants to paint — `f.ring(0)` for the outline, `f.bevel_ring(1, 0)`
+    /// and `f.bevel_ring(1, 1)` for the bevel behind it, `f.inside(1)` for the
+    /// face the bevel is painted over — and every one of those comes back with
+    /// its boundaries already rounded to device pixels. Because the outer rect
+    /// is the snapped one, the frame still lands exactly where the scaled draw
+    /// would have put it, and still shares its edge pixels with the widget next
+    /// door.
     ///
     /// At 1.0x, and at any integer scale where every depth is an exact multiple,
     /// this paints the same pixels the plain logical path would. It diverges
@@ -1442,7 +1521,9 @@ impl<'a> Painter<'a> {
     /// [`Self::chrome_unit`] deep and measured from the button's snapped edge.
     /// That is what keeps the bevel even — 2 device pixels over 2 at 2.5x,
     /// where scaling the depths by 2.5 put a ring of 2 over a ring of 3 under
-    /// a 3-pixel outline.
+    /// a 3-pixel outline. From 1.5x up to 1.75x the bevel is the exception,
+    /// 3 device pixels in rings of 2 and 1 under the 1-pixel outline: see
+    /// [`Frame::bevel_ring`].
     pub fn button(&mut self, rect: Rect, theme: &Theme, pressed: bool, default: bool) {
         if rect.w <= 0 || rect.h <= 0 {
             return;
@@ -1460,9 +1541,9 @@ impl<'a> Painter<'a> {
             };
             p.fill_rect(f.inside(face), theme.face);
             // The bevel is two logical pixels deep: two rings, meeting on a
-            // shared depth, so together they span exactly `depth(face + 2) -
-            // depth(face)` and still step at the corners.
-            let (outer, inner) = (f.ring(face), f.ring(face + 1));
+            // shared depth, so together they span exactly `bevel_depth(2)` and
+            // still step at the corners.
+            let (outer, inner) = (f.bevel_ring(face, 0), f.bevel_ring(face, 1));
             if pressed {
                 // Sunken: the shadow takes both pixels along the top/left, and
                 // a single highlight line sits opposite it.
@@ -1508,7 +1589,7 @@ impl<'a> Painter<'a> {
         self.crisp_merged(rect, merged, |p, f| {
             p.fill_ring(f.ring(0), theme.border, theme.border);
             p.fill_rect(f.inside(1), theme.face);
-            let inner = f.ring(1);
+            let inner = f.bevel_ring(1, 0);
             if pressed {
                 // Depressed: a single shadow line on the top/left, no highlight
                 // and no bottom/right shadow, so the button reads as pushed in.
@@ -1520,10 +1601,10 @@ impl<'a> Painter<'a> {
             p.fill_rect(inner.top, theme.highlight);
             p.fill_rect(inner.left, theme.highlight);
             // ...against a 2px shadow on the bottom/right: two rings sharing a
-            // depth, so the pair is exactly `depth(3) - depth(1)` deep.
+            // depth, so the pair is exactly `bevel_depth(2)` deep.
             p.fill_rect(inner.bottom, theme.shadow);
             p.fill_rect(inner.right, theme.shadow);
-            let deeper = f.ring(2);
+            let deeper = f.bevel_ring(1, 1);
             p.fill_rect(deeper.bottom, theme.shadow);
             p.fill_rect(deeper.right, theme.shadow);
         });
@@ -2298,6 +2379,12 @@ mod tests {
         d * chrome_px(scale)
     }
 
+    /// How deep `n` rings of [`Frame::bevel_ring`] run, from wherever the
+    /// outline inside which they lie stops.
+    fn bevel(n: i32, scale: f32) -> i32 {
+        bevel_depth(n, scale)
+    }
+
     /// One below [`CHROME_PIN`], then the scale's whole part — except from
     /// 1.75x up to 2x, where that would leave the face a scale of 1.75 or more.
     #[test]
@@ -2328,16 +2415,36 @@ mod tests {
         }
     }
 
+    /// A bevel is a chrome unit a ring everywhere but from 1.5x up to 1.75x,
+    /// where it is drawn at 1.5x under an outline of 1 — rings of 2 and 1, the
+    /// same all the way up the band — and nowhere further up the ladder does
+    /// the face outgrow its chrome by enough to need the same.
+    #[test]
+    fn a_bevel_parts_from_its_outline_only_from_one_and_a_half_to_one_and_three_quarters() {
+        for step in 1..=96 {
+            let scale = step as f32 / 12.0;
+            let line = chrome_px(scale);
+            let rings = (bevel(1, scale), bevel(2, scale) - bevel(1, scale));
+            if (1.5..1.75).contains(&scale) {
+                assert_eq!((line, rings), (1, (2, 1)), "outline and bevel at {scale}x");
+            } else {
+                assert_eq!(rings, (line, line), "the bevel at {scale}x");
+                if scale >= 1.0 {
+                    assert!(scale / (line as f32) < 1.5, "the face's share at {scale}x");
+                }
+            }
+        }
+    }
+
     /// A section through a plain button, at every scale: the black outline runs
-    /// to `depth(1)` and the bevel from there to `depth(3)`, on all four sides.
-    /// Both bands are measured from the button's edge, so neither carries the
-    /// other's rounding error, and the chrome is exactly as deep as the three
-    /// logical pixels it is drawn as.
+    /// to `depth(1)` and the bevel two bevel rings on from there, on all four
+    /// sides. Both bands are measured from the button's edge, so neither
+    /// carries the other's rounding error.
     #[test]
     fn a_button_frames_bands_land_on_their_scaled_depths() {
         let theme = Theme::windows_31();
         for &scale in CHROME_SCALES {
-            let (border, chrome) = (depth(1, scale), depth(3, scale));
+            let (border, bevel) = (depth(1, scale), bevel(2, scale));
             let (w, h) = phys(60, 30, scale);
             let px = chrome_buffer(w, h, scale, |p| {
                 p.button(Rect::new(0, 0, 60, 30), &theme, false, false)
@@ -2345,9 +2452,9 @@ mod tests {
             let expected = |across: i32| {
                 vec![
                     (theme.border.0, border),
-                    (theme.highlight.0, chrome - border),
-                    (theme.face.0, across - 2 * chrome),
-                    (theme.shadow.0, chrome - border),
+                    (theme.highlight.0, bevel),
+                    (theme.face.0, across - 2 * (border + bevel)),
+                    (theme.shadow.0, bevel),
                     (theme.border.0, border),
                 ]
             };
@@ -2364,16 +2471,15 @@ mod tests {
         }
     }
 
-    /// Up to 1.5x — up to 1.75x, where a logical pixel stops being worth a
-    /// single device one — the frame keeps the widths it is drawn at, and the
-    /// room the scale buys goes to the face instead. A button at 1.5x is half
+    /// Below 1.5x the frame keeps the widths it is drawn at, and the room the
+    /// scale buys goes to the face instead. A button at 1.25x is a quarter
     /// bigger around the same 1-pixel border and 2-pixel bevel: roomier, and
-    /// far sharper than the 3-pixel bevel under a 2-pixel border that scaling
+    /// far sharper than the 3-pixel bevel under a 1-pixel border that scaling
     /// the depths there would give.
     #[test]
-    fn below_one_and_three_quarters_a_frame_keeps_its_drawn_widths() {
+    fn below_one_and_a_half_a_frame_keeps_its_drawn_widths() {
         let theme = Theme::windows_31();
-        for &scale in &[1.0f32, 1.1, 1.25, 1.4, 1.5, 5.0 / 3.0, 1.74] {
+        for &scale in &[1.0f32, 1.1, 1.25, 1.4, 1.49] {
             let (w, h) = phys(60, 30, scale);
             let px = chrome_buffer(w, h, scale, |p| {
                 p.button(Rect::new(0, 0, 60, 30), &theme, false, false)
@@ -2388,6 +2494,32 @@ mod tests {
                     (theme.border.0, 1),
                 ],
                 "a button's frame at {scale}x, which should be the 1.0x one"
+            );
+        }
+    }
+
+    /// From 1.5x up to 1.75x the outline stays at one device pixel but the
+    /// bevel inside it is drawn at 1.5x — the 1.0x bevel's relief would all but
+    /// vanish against a face half as big again — and from 1.75x the border
+    /// doubles too.
+    #[test]
+    fn from_one_and_a_half_the_bevel_deepens_inside_a_one_pixel_outline() {
+        let theme = Theme::windows_31();
+        for &scale in &[1.5f32, 1.6, 5.0 / 3.0, 1.74] {
+            let (w, h) = phys(60, 30, scale);
+            let px = chrome_buffer(w, h, scale, |p| {
+                p.button(Rect::new(0, 0, 60, 30), &theme, false, false)
+            });
+            assert_eq!(
+                column(&px, w, h, w / 2),
+                vec![
+                    (theme.border.0, 1),
+                    (theme.highlight.0, 3),
+                    (theme.face.0, h - 8),
+                    (theme.shadow.0, 3),
+                    (theme.border.0, 1),
+                ],
+                "a button's frame at {scale}x"
             );
         }
         // From 1.75x the depths double, and the border thickens with them.
@@ -2405,12 +2537,13 @@ mod tests {
     /// The default button's extra ring is the same black directly inside the
     /// outline, so the border reads as one band two logical pixels deep — and
     /// lands on `depth(2)` exactly, not on twice whatever the first ring
-    /// rounded to.
+    /// rounded to. It is outline, not bevel, so it stays a chrome unit deep
+    /// where the bevel inside it doubles.
     #[test]
     fn a_default_buttons_doubled_border_lands_on_depth_two() {
         let theme = Theme::windows_31();
         for &scale in CHROME_SCALES {
-            let (border, chrome) = (depth(2, scale), depth(4, scale));
+            let (border, bevel) = (depth(2, scale), bevel(2, scale));
             let (w, h) = phys(60, 30, scale);
             let px = chrome_buffer(w, h, scale, |p| {
                 p.button(Rect::new(0, 0, 60, 30), &theme, false, true)
@@ -2419,9 +2552,9 @@ mod tests {
                 column(&px, w, h, w / 2),
                 vec![
                     (theme.border.0, border),
-                    (theme.highlight.0, chrome - border),
-                    (theme.face.0, h - 2 * chrome),
-                    (theme.shadow.0, chrome - border),
+                    (theme.highlight.0, bevel),
+                    (theme.face.0, h - 2 * (border + bevel)),
+                    (theme.shadow.0, bevel),
                     (theme.border.0, border),
                 ],
                 "vertical section of a default button at {scale}x"
@@ -2435,7 +2568,7 @@ mod tests {
     fn a_pressed_button_inverts_its_bevel() {
         let theme = Theme::windows_31();
         for &scale in CHROME_SCALES {
-            let (one, two, three) = (depth(1, scale), depth(2, scale), depth(3, scale));
+            let (border, one, two) = (depth(1, scale), bevel(1, scale), bevel(2, scale));
             let (w, h) = phys(60, 30, scale);
             let px = chrome_buffer(w, h, scale, |p| {
                 p.button(Rect::new(0, 0, 60, 30), &theme, true, false)
@@ -2443,11 +2576,11 @@ mod tests {
             assert_eq!(
                 column(&px, w, h, w / 2),
                 vec![
-                    (theme.border.0, one),
-                    (theme.shadow.0, three - one),
-                    (theme.face.0, h - three - two),
-                    (theme.highlight.0, two - one),
-                    (theme.border.0, one),
+                    (theme.border.0, border),
+                    (theme.shadow.0, two),
+                    (theme.face.0, h - 2 * border - two - one),
+                    (theme.highlight.0, one),
+                    (theme.border.0, border),
                 ],
                 "vertical section of a pressed button at {scale}x"
             );
@@ -2456,12 +2589,13 @@ mod tests {
 
     /// The scrollbar's lighter chrome: outline, one highlight line, and the
     /// doubled shadow opposite — the band that used to double in width from one
-    /// quarter step to the next, and now runs from `depth(1)` to `depth(3)`.
+    /// quarter step to the next, and now runs exactly two bevel rings in from
+    /// the outline.
     #[test]
-    fn a_light_buttons_doubled_shadow_lands_on_depth_three() {
+    fn a_light_buttons_doubled_shadow_is_two_bevel_rings_deep() {
         let theme = Theme::windows_31();
         for &scale in CHROME_SCALES {
-            let (one, two, three) = (depth(1, scale), depth(2, scale), depth(3, scale));
+            let (border, one, two) = (depth(1, scale), bevel(1, scale), bevel(2, scale));
             let (w, h) = phys(30, 30, scale);
             let px = chrome_buffer(w, h, scale, |p| {
                 p.light_button(Rect::new(0, 0, 30, 30), &theme, false)
@@ -2469,11 +2603,11 @@ mod tests {
             assert_eq!(
                 column(&px, w, h, w / 2),
                 vec![
-                    (theme.border.0, one),
-                    (theme.highlight.0, two - one),
-                    (theme.face.0, h - two - three),
-                    (theme.shadow.0, three - one),
-                    (theme.border.0, one),
+                    (theme.border.0, border),
+                    (theme.highlight.0, one),
+                    (theme.face.0, h - 2 * border - one - two),
+                    (theme.shadow.0, two),
+                    (theme.border.0, border),
                 ],
                 "vertical section of a light button at {scale}x"
             );

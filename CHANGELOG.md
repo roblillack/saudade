@@ -34,7 +34,12 @@ While pre-1.0, the minor version is bumped for breaking changes.
   depths by 2.5 drew a 3-pixel outline over rings of 2 and 3; whatever the
   fractional rest of the scale buys goes to the face. Lone lines (dividers,
   carets, grid rules), the background patterns and the mock window chrome use
-  the same unit.
+  the same unit. The exception is a bevel from 1.5x up to 1.75x, which is
+  drawn at 1.5x under the 1-pixel outline — a 2-pixel bevel 3 deep, in rings
+  of 2 and 1 — since the design's 1-pixel relief all but vanished against a
+  face that much bigger. Buttons, scrollbar arrows and thumbs, slider thumbs,
+  dropdown buttons and the mock title-bar buttons all wear it; recipes ask for
+  it with `Frame::bevel_ring`.
 
 ### Fixed
 

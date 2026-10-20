@@ -1441,12 +1441,27 @@ below 1.75x and the scale's whole part above it — so a scale that is a
 whole multiple of one below 1.75x wears that one's chrome blown up —
 except from 1.75x up to 2x, which takes 2:
 
-| scale (from – to) | unit | 2px bevel | e.g.                       |
-| ----------------- | ---- | --------- | -------------------------- |
-| 1.0x – 1.75x      | 1    | 2         | 1.5x: the design's own     |
-| 1.75x – 2.0x      | 2    | 4         | 1.75x: 0.875x doubled      |
-| 2.0x – 3.0x       | 2    | 4         | 2.5x: 1.25x doubled        |
-| 3.0x – 4.0x       | 3    | 6         | 3.75x: 1.25x tripled       |
+| scale (from – to) | unit | 2px bevel | e.g.                          |
+| ----------------- | ---- | --------- | ----------------------------- |
+| 1.0x – 1.5x       | 1    | 2         | 1.25x: the design's own       |
+| 1.5x – 1.75x      | 1    | 3 (2 + 1) | 1.5x: the bevel at 1.5x alone |
+| 1.75x – 2.0x      | 2    | 4         | 1.75x: 0.875x doubled         |
+| 2.0x – 3.0x       | 2    | 4         | 2.5x: 1.25x doubled           |
+| 3.0x – 4.0x       | 3    | 6         | 3.75x: 1.25x tripled          |
+
+From 1.5x up to 1.75x the outline stays one device pixel but a bevel —
+the highlight and shadow inside a button's outline, asked for with
+`f.bevel_ring(outline, i)` — is drawn at 1.5x: a 2-pixel bevel 3 deep,
+its outer ring 2 and its inner one 1. There the face is half as big
+again as the design's or more, and a one-pixel bevel all but
+disappears into it, while doubling the outline too would bring back
+the heavy, blurry border the pin keeps out. The outer ring takes the
+odd pixel so that a line one ring deep on its own — a scrollbar
+arrow's highlight, a pressed button's — comes out 2 rather than the
+1 the band exists to thicken; a whole 2 a ring would keep the rings
+even, but its 4-pixel bevel swamps the 1-pixel outline. No band
+further up needs the same: above 2x the face is never as much as 1.5
+times the unit.
 
 Scaling the depths by the scale itself distorts the frame instead,
 since half a device pixel of rounding is most of a line one or two
