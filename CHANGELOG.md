@@ -58,9 +58,19 @@ While pre-1.0, the minor version is bumped for breaking changes.
   own resolution: below 1.75x it still leaves out the single pixel, and above
   it the extra pixels go into the arc, the outline's inner edge rounding off
   the bevel's corner to match. A default button's border shares the outer
-  curve and keeps its square inner edge. Dropdown buttons and slider thumbs
-  wear it too; recipes paint it with `Frame::rounded_band` and
-  `Painter::fill_rounded_band`.
+  curve and keeps its square inner edge. Slider thumbs wear it too; recipes
+  paint it with `Frame::rounded_band` and `Painter::fill_rounded_band`.
+- Where a bevel's light side meets its dark one, at the top-right and
+  bottom-left corners, the two now split the corner along a diagonal one
+  device pixel a step. The dark side used to take each ring's whole corner
+  square, so wherever a ring is more than a device pixel thick — from 1.5x up
+  — the diagonal came out a staircase with steps as deep as the ring. At 1.0x
+  the corner pixel is the dark side's, as before. Buttons, bevels, scrollbar
+  arrows and thumbs all get it; a recipe painting half a ring asks for
+  `Painter::fill_ring_near` or `Painter::fill_ring_far`.
+- A `Dropdown`'s arrow button now wears the scrollbar arrows' lighter chrome
+  — square-cornered, a single highlight line on the top/left against a
+  doubled shadow — instead of a push button's rounded, doubly lit one.
 
 ### Fixed
 

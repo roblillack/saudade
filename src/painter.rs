@@ -299,9 +299,11 @@ impl Frame {
 ///
 /// `top` / `left` are the pair a bevel lights and `bottom` / `right` the pair it
 /// shadows, which is why [`Painter::fill_ring`] takes its two colours in that
-/// order. A side is drawn with [`Painter::fill_rect`] like any other rect, so a
-/// recipe that wants only one half of a ring — a scrollbar's highlight, with no
-/// shadow opposite it — just paints the sides it wants.
+/// order. A recipe that wants only one half of a ring — a pressed scrollbar
+/// arrow's shadow, with no highlight opposite it — paints it with
+/// [`Painter::fill_ring_near`] or [`Painter::fill_ring_far`]. A side is a
+/// device-pixel rect like any other, so one on its own is just a
+/// [`Painter::fill_rect`].
 #[derive(Clone, Copy)]
 pub struct Ring {
     pub top: Rect,
@@ -1511,13 +1513,55 @@ impl<'a> Painter<'a> {
     /// and right. The same colour twice is an outline; two colours is a bevel,
     /// lit on the near pair and shadowed on the far one.
     ///
-    /// The far sides paint last, so they own the two corners they share with
-    /// the near ones — the diagonal a Win 3.1 bevel runs along.
+    /// The two meet at the top-right and bottom-left on the diagonal a Win 3.1
+    /// bevel runs along — see [`Self::fill_ring_far`].
     pub fn fill_ring(&mut self, ring: Ring, near: Color, far: Color) {
-        self.fill_rect(ring.top, near);
-        self.fill_rect(ring.left, near);
-        self.fill_rect(ring.bottom, far);
-        self.fill_rect(ring.right, far);
+        self.fill_ring_near(ring, near);
+        self.fill_ring_far(ring, far);
+    }
+
+    /// Paint the near half of a [`Ring`], its top and left, corners and all.
+    pub fn fill_ring_near(&mut self, ring: Ring, color: Color) {
+        self.fill_rect(ring.top, color);
+        self.fill_rect(ring.left, color);
+    }
+
+    /// Paint the far half of a [`Ring`], its bottom and right.
+    ///
+    /// Where they meet the near sides, at the top-right and bottom-left, the
+    /// two halves share the corner square between them along its diagonal, a
+    /// device row at a time: the far side takes the pixels on the diagonal and
+    /// beyond it, and leaves the near one whatever lies inside — the near
+    /// side's colour, or whatever was painted there before when only this
+    /// half is drawn. At 1.0x the corner is a single pixel, which the far side
+    /// takes whole, as the design has it. A ring several device pixels thick
+    /// would otherwise give its far side the whole square, and a bevel's
+    /// diagonal would come out a staircase with steps as deep as its rings;
+    /// split, every ring's square lies on the one 45° line through the
+    /// frame's corner, and the light and dark meet along it a device pixel at
+    /// a time.
+    pub fn fill_ring_far(&mut self, ring: Ring, color: Color) {
+        let (b, r) = (ring.bottom, ring.right);
+        // How far the corner squares reach along each far side: as wide as the
+        // left side, and as tall as the top one.
+        let (across, down) = (ring.left.w.min(b.w), ring.top.h.min(r.h));
+        self.fill_rect(Rect::new(b.x + across, b.y, b.w - across, b.h), color);
+        self.fill_rect(Rect::new(r.x, r.y + down, r.w, r.h - down), color);
+        // Row `v` of the top-right square, counted down from the top: the far
+        // side takes the last `v + 1` pixels of it.
+        for v in 0..down {
+            let n = (v + 1).min(r.w);
+            self.fill_rect(Rect::new(r.right() - n, r.y + v, n, 1), color);
+        }
+        // Row `v` of the bottom-left square, counted up from the bottom: the
+        // same, mirrored, so the far side takes all but the first `v` pixels.
+        for v in 0..b.h {
+            let skip = v.min(across);
+            self.fill_rect(
+                Rect::new(b.x + skip, b.bottom() - 1 - v, across - skip, 1),
+                color,
+            );
+        }
     }
 
     /// Paint a [`RoundedBand`] in `color`: its four sides, each stopping a
@@ -1652,8 +1696,7 @@ impl<'a> Painter<'a> {
                 // Sunken: the shadow takes both pixels along the top/left, and
                 // a single highlight line sits opposite it.
                 p.fill_ring(outer, theme.shadow, theme.highlight);
-                p.fill_rect(inner.top, theme.shadow);
-                p.fill_rect(inner.left, theme.shadow);
+                p.fill_ring_near(inner, theme.shadow);
             } else {
                 p.fill_ring(outer, theme.highlight, theme.shadow);
                 p.fill_ring(inner, theme.highlight, theme.shadow);
@@ -1664,11 +1707,11 @@ impl<'a> Painter<'a> {
         });
     }
 
-    /// Lighter Win 3.1 chrome used by the scrollbar's arrow buttons and thumb:
-    /// a square (un-rounded) 1px black outline, a single highlight line on the
-    /// top/left, and a 2px shadow on the bottom/right. Reads as lighter than
-    /// [`Self::button`], whose rounded outline and doubled highlight give the
-    /// heavier "dialog" chrome.
+    /// Lighter Win 3.1 chrome used by the scrollbar's arrow buttons and thumb
+    /// and the dropdown's arrow button: a square (un-rounded) 1px black
+    /// outline, a single highlight line on the top/left, and a 2px shadow on
+    /// the bottom/right. Reads as lighter than [`Self::button`], whose rounded
+    /// outline and doubled highlight give the heavier "dialog" chrome.
     ///
     /// When `pressed`, the face is drawn pushed in: the top/left carries a
     /// single shadow line (no highlight) and the bottom/right loses its shadow
@@ -1700,20 +1743,15 @@ impl<'a> Painter<'a> {
             if pressed {
                 // Depressed: a single shadow line on the top/left, no highlight
                 // and no bottom/right shadow, so the button reads as pushed in.
-                p.fill_rect(inner.top, theme.shadow);
-                p.fill_rect(inner.left, theme.shadow);
+                p.fill_ring_near(inner, theme.shadow);
                 return;
             }
-            // One highlight line on the top/left...
-            p.fill_rect(inner.top, theme.highlight);
-            p.fill_rect(inner.left, theme.highlight);
-            // ...against a 2px shadow on the bottom/right: two rings sharing a
-            // depth, so the pair is exactly `bevel_depth(2)` deep.
-            p.fill_rect(inner.bottom, theme.shadow);
-            p.fill_rect(inner.right, theme.shadow);
-            let deeper = f.bevel_ring(1, 1);
-            p.fill_rect(deeper.bottom, theme.shadow);
-            p.fill_rect(deeper.right, theme.shadow);
+            // One highlight line on the top/left against a 2px shadow on the
+            // bottom/right: two rings sharing a depth, so the pair is exactly
+            // `bevel_depth(2)` deep. The deeper ring's shadow meets the face
+            // on the same diagonal the first one meets the highlight on.
+            p.fill_ring(inner, theme.highlight, theme.shadow);
+            p.fill_ring_far(f.bevel_ring(1, 1), theme.shadow);
         });
     }
 
@@ -2669,18 +2707,14 @@ mod tests {
         }
     }
 
-    /// The `n × n` device pixels in a button's top-left corner, a string a
-    /// row: `.` where it left the buffer unpainted, `#` for its outline, `h`
-    /// and `s` for its highlight and shadow and `f` for its face.
-    fn corner_art(scale: f32, default: bool, n: i32) -> Vec<String> {
+    /// The `n × n` device pixels of a buffer `w` wide from `(x0, y0)`, a
+    /// string a row: `.` where nothing was painted, `#` for an outline, `h`
+    /// and `s` for highlight and shadow and `f` for a face.
+    fn picture(px: &[u32], w: i32, (x0, y0): (i32, i32), n: i32) -> Vec<String> {
         let theme = Theme::windows_31();
-        let (w, h) = phys(60, 30, scale);
-        let px = chrome_buffer(w, h, scale, |p| {
-            p.button(Rect::new(0, 0, 60, 30), &theme, false, default)
-        });
-        (0..n)
+        (y0..y0 + n)
             .map(|y| {
-                (0..n)
+                (x0..x0 + n)
                     .map(|x| match px[(y * w + x) as usize] {
                         0 => '.',
                         c if c == theme.border.0 => '#',
@@ -2694,7 +2728,18 @@ mod tests {
             .collect()
     }
 
-    /// The rows of a [`corner_art`] picture, written one to a line.
+    /// The [`picture`] of the `n × n` device pixels in a button's top-left
+    /// corner.
+    fn corner_art(scale: f32, default: bool, n: i32) -> Vec<String> {
+        let theme = Theme::windows_31();
+        let (w, h) = phys(60, 30, scale);
+        let px = chrome_buffer(w, h, scale, |p| {
+            p.button(Rect::new(0, 0, 60, 30), &theme, false, default)
+        });
+        picture(&px, w, (0, 0), n)
+    }
+
+    /// The rows of a [`picture`], written one to a line.
     fn art(rows: &str) -> Vec<String> {
         rows.split_whitespace().map(String::from).collect()
     }
@@ -2823,6 +2868,87 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// Where a bevel's light side meets its dark one, at the top-right and the
+    /// bottom-left, the two share the corner along its diagonal a device pixel
+    /// at a time, at every scale. The dark side takes the diagonal itself, so
+    /// at 1.0x it takes the single corner pixel, as the design has it; given
+    /// the whole corner square, it made the diagonal a staircase with steps as
+    /// deep as the ring.
+    #[test]
+    fn a_bevels_light_and_dark_sides_meet_on_a_diagonal() {
+        let theme = Theme::windows_31();
+        for &scale in CHROME_SCALES {
+            let (w, h) = phys(40, 20, scale);
+            let px = chrome_buffer(w, h, scale, |p| {
+                p.raised_bevel(Rect::new(0, 0, 40, 20), theme.highlight, theme.shadow)
+            });
+            for d in 0..depth(1, scale) {
+                assert_eq!(
+                    row(&px, w, d),
+                    vec![(theme.highlight.0, w - 1 - d), (theme.shadow.0, d + 1)],
+                    "row {d} of a bevel at {scale}x"
+                );
+                assert_eq!(
+                    column(&px, w, h, d),
+                    vec![(theme.highlight.0, h - 1 - d), (theme.shadow.0, d + 1)],
+                    "column {d} of a bevel at {scale}x"
+                );
+            }
+        }
+    }
+
+    /// A button's top-right corner, where its highlight meets its shadow: one
+    /// diagonal, a device pixel a step, through both bevel rings and on under
+    /// the rounded outline. The light chrome's deeper shadow ring meets the
+    /// face along the same line its first ring meets the highlight on.
+    #[test]
+    fn a_buttons_bevel_turns_its_corner_on_one_diagonal() {
+        let theme = Theme::windows_31();
+        let top_right = |scale: f32, n: i32, paint: &dyn Fn(&mut Painter, Rect)| {
+            let (w, h) = phys(60, 30, scale);
+            let px = chrome_buffer(w, h, scale, |p| paint(p, Rect::new(0, 0, 60, 30)));
+            picture(&px, w, (w - n, 0), n)
+        };
+        let button = |p: &mut Painter, r: Rect| p.button(r, &theme, false, false);
+        let light = |p: &mut Painter, r: Rect| p.light_button(r, &theme, false);
+        assert_eq!(
+            top_right(2.0, 5, &button),
+            art("
+                ###..
+                ####.
+                hh###
+                hss##
+                sss##
+            "),
+            "a button's top-right corner at 2x"
+        );
+        assert_eq!(
+            top_right(3.0, 7, &button),
+            art("
+                ###....
+                #####..
+                ######.
+                hhh###.
+                hhss###
+                hsss###
+                ssss###
+            "),
+            "a button's top-right corner at 3x"
+        );
+        assert_eq!(
+            top_right(2.0, 6, &light),
+            art("
+                ######
+                ######
+                hhhs##
+                hhss##
+                fsss##
+                ssss##
+            "),
+            "a light button's top-right corner at 2x"
+        );
     }
 
     /// Pressed, the bevel inverts: the shadow takes both logical pixels on the

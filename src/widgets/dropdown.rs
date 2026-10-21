@@ -190,7 +190,8 @@ impl Dropdown {
     /// field's outer frame: its top, right and bottom edges land *on* the 1px
     /// black border, so the button's own outline becomes those three sides of
     /// the overall dropdown frame (only its left edge is an interior divider).
-    /// The frame's sharp corners show through the button's rounded ones.
+    /// It wears the scrollbar arrows' lighter chrome, square-cornered like the
+    /// frame it sits in, not a push button's rounded one.
     ///
     /// Kept square — its side tracks the field's full height — so the button
     /// reads as a proper combobox button and the baked glyph is never
@@ -427,13 +428,14 @@ impl Widget for Dropdown {
         } else {
             theme.disabled_text
         };
-        // Field chrome — sunken field + outer border + raised arrow button —
-        // self-manages the crisp physical-pixel pass at fractional scales, and
-        // `draw_tinted` does the same for the baked-SVG glyph on top.
+        // Field chrome — sunken field + outer border + scrollbar-style arrow
+        // button — self-manages the crisp physical-pixel pass at fractional
+        // scales, and `draw_tinted` does the same for the baked-SVG glyph on
+        // top.
         painter.fill_rect(self.rect, bg);
         painter.sunken_bevel(self.rect, theme.highlight, theme.shadow);
         painter.stroke_rect(self.rect, theme.border);
-        painter.button(btn, theme, self.open, false);
+        painter.light_button(btn, theme, self.open);
         ARROW.draw_tinted(painter, btn, arrow_color);
 
         // Selected label, clipped to the area left of the button. Text
