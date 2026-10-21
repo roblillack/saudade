@@ -50,6 +50,17 @@ While pre-1.0, the minor version is bumped for breaking changes.
   face that much bigger. Buttons, scrollbar arrows and thumbs, slider thumbs,
   dropdown buttons and the mock title-bar buttons all wear it; recipes ask for
   it with `Frame::bevel_ring`.
+- From 1.75x a push button's corners are rounded along a real curve, where the
+  1.0x design's missing corner pixel used to be blown up with the rest of the
+  chrome into a square notch as wide as the outline. That missing pixel is
+  exactly what a rounded rectangle 2 pixels in radius, stroked 1 pixel thick,
+  comes out as at 1.0x, so that curve is what every scale now draws, at its
+  own resolution: below 1.75x it still leaves out the single pixel, and above
+  it the extra pixels go into the arc, the outline's inner edge rounding off
+  the bevel's corner to match. A default button's border shares the outer
+  curve and keeps its square inner edge. Dropdown buttons and slider thumbs
+  wear it too; recipes paint it with `Frame::rounded_band` and
+  `Painter::fill_rounded_band`.
 
 ### Fixed
 
