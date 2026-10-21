@@ -49,9 +49,10 @@
 //! (`Painter::system_scale`) — independent of the preview slider above — and,
 //! when it differs, the scale the window is really being drawn at. It differs
 //! on Wayland, where a fractional display (say 150%) is oversampled at 2.0x and
-//! resampled down by the compositor; on macOS, where saudade corrects the factor
-//! for a point that is nearer 1/108 in than the 96-dpi pixel it draws in; and
-//! anywhere `SAUDADE_UI_DPI` has moved that pixel.
+//! resampled down by the compositor; and everywhere else, where saudade aims its
+//! pixel at 1/72 in — 4/3 of the factor on Windows and X11, whose unit is a
+//! 96-dpi pixel, and 3/2 on macOS, whose point is nearer 1/108 in — or wherever
+//! `SAUDADE_UI_DPI` has moved that pixel to.
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -678,8 +679,8 @@ impl Widget for FactorReadout {
 /// rasterizes at. Two things make those differ, and the bar appends the
 /// rendering scale when they do: Wayland oversamples a fractional display (we
 /// draw at 2.0x, the compositor resamples down to 1.5x), and everywhere else the
-/// OS factor is multiplied by a correction that draws the Win 3.1 chrome a
-/// quarter over its nominal 96-dpi size.
+/// OS factor is multiplied by a correction that aims a logical pixel at 1/72 in:
+/// 4/3 on Windows and X11, 3/2 on macOS.
 struct StatusBar {
     win: Rc<Cell<Size>>,
 }

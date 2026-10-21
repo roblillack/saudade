@@ -361,7 +361,7 @@ pub struct Theme {
 
 The default is `Theme::windows_31()`: white workspace, light-gray button
 face, white top/left highlight, mid-gray bottom/right shadow, black outer
-border, navy/white selection, 13pt text. Pass an alternative via
+border, navy/white selection, 11pt text. Pass an alternative via
 `App::with_theme(...)` if you want to skin the same widgets differently.
 
 `button_style` is the face a push button sets its label in. It defaults to
@@ -1492,41 +1492,48 @@ A few consequences:
 
 ### How big a logical pixel is
 
-Widgets are laid out in logical pixels at a **reference density of 96
+Widgets are laid out in logical pixels at a **reference density of 72
 dpi**: a `List` row is 18 of them, a checkbox 13, the padding either
-side of a menu-bar label 8 — Windows 3.1 metrics, drawn for a display
-where 96 of them span an inch.
+side of a menu-bar label 8. These are Windows 3.1 metrics, drawn for
+screens running 57–85 ppi, where a 13-pixel checkbox was a sixth of an
+inch across; 72 dpi is about where they belong, and an honest 96 would
+draw the chrome a quarter smaller than it was meant to be.
 
 The scale a window is drawn at is two factors multiplied together:
 
 1. **Reference alignment** — the density of the platform's own logical
    unit over saudade's reference. Windows and X11 report a scale factor
    that is already a ratio against 96 dpi (winit divides the reported
-   DPI, or `Xft.dpi`, by 96), so their unit is ours and the alignment is
-   1. A macOS point is nearer 1/108 in — about how Apple lays a desktop
-      out, 218 dpi over a `backingScaleFactor` of 2 — so there it is
-      108/96 = 1.125.
+   DPI, or `Xft.dpi`, by 96), so their alignment is 96/72 = 4/3. A
+   macOS point is nearer 1/108 in — about how Apple lays a desktop out,
+   218 dpi over a `backingScaleFactor` of 2 — so there it is 108/72 =
+   1.5.
 2. **The system factor** — `winit`'s `scale_factor()`, which carries
    both the display's own density and whatever scaling the user set in
    the OS: the percentage in Windows' Display Settings, `Xft.dpi` on
    X11, `backingScaleFactor` on macOS.
 
-The product is snapped to a twelfth, a grid the platforms nearly live
-on already, which keeps the scales that occur in practice to a
-countable few:
+The product is snapped to a twelfth, which keeps the scales that occur
+in practice to a countable few:
 
 | display          | alignment | system | scale |
 | ---------------- | --------- | ------ | ----- |
-| Windows/X11 100% | 1.0       | 1.00   | 1.0   |
-| Windows/X11 125% | 1.0       | 1.25   | 1.25  |
-| Windows/X11 150% | 1.0       | 1.50   | 1.5   |
-| Windows/X11 200% | 1.0       | 2.00   | 2.0   |
-| macOS 1x         | 1.125     | 1.00   | 1.167 |
-| macOS Retina     | 1.125     | 2.00   | 2.25  |
+| Windows/X11 100% | 4/3       | 1.00   | 1.333 |
+| Windows/X11 125% | 4/3       | 1.25   | 1.667 |
+| Windows/X11 150% | 4/3       | 1.50   | 2.0   |
+| Windows/X11 200% | 4/3       | 2.00   | 2.667 |
+| macOS 1x         | 1.5       | 1.00   | 1.5   |
+| macOS Retina     | 1.5       | 2.00   | 3.0   |
 
-Every rung is exact bar the non-Retina Mac, whose 9/8 is thirteen and a
-half twelfths and rounds up to fourteen — a 3% inflation of the
-sparsest display macOS has.
+Every rung is exact: a Windows unit is sixteen twelfths of a 72-dpi
+pixel and a Mac point eighteen, so the snap only ever moves a factor
+off both ladders — an `Xft.dpi` set by hand — and by half a step at
+most.
+
+The Wayland backend is the exception: it renders at the integer buffer
+scale the compositor asks for, so neither factor applies there, and a
+Wayland window comes out about a quarter smaller than the same program
+under X11.
 
 Both halves of that are configurable, from code or from the
 environment; the environment wins, in the spirit of winit's
@@ -1537,13 +1544,12 @@ touching the program.
   `SAUDADE_UI_SCALE=2.65`. This _replaces_ everything above, the system
   factor included, and is the only way to ask for a scale off the grid.
   Range 0.25–8.0.
-- **The reference density** — `SAUDADE_UI_DPI=72`. Every scale moves
-  with it, by 96 over whatever it is set to, and both platforms'
-  factors go on working underneath. A coarser reference makes the whole
-  UI larger, and 72 dpi is arguably where these metrics belong: they
-  were drawn for screens running 57–85 ppi, where a 13-pixel checkbox
-  was a sixth of an inch across, so 72 draws the chrome a third larger
-  than an honest 96 dpi does. Range 48–192.
+- **The reference density** — `SAUDADE_UI_DPI=96`. Every scale moves
+  with it, by 72 over whatever it is set to, and both platforms'
+  factors go on working underneath. A finer reference makes the whole
+  UI smaller: 96 draws it at the platforms' own size, a quarter smaller
+  than the default — Windows at 100% back at 1.0x, a Retina Mac at
+  2.25x. Range 48–192.
 
 Either variable also accepts `auto`, meaning the default; anything else
 is ignored with a warning. `Painter::scale()` reports the scale the

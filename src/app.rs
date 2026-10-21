@@ -129,15 +129,16 @@ impl App {
     ///
     /// It *replaces* what the runtime would work out, the system scale factor
     /// included, so `with_ui_scale(3.0)` draws at 3.0 on any display. Left
-    /// alone, the runtime aims a logical pixel at 1/96 in and multiplies that
-    /// alignment by the factor the platform reports — a Windows display at 150%
-    /// draws at 1.5x, a Retina Mac at 2.25x. `SAUDADE_UI_SCALE` overrides this,
-    /// and `SAUDADE_UI_DPI` moves the reference density instead of pinning one
-    /// display: see [`ui_scale`](crate::ui_scale).
+    /// alone, the runtime aims a logical pixel at 1/72 in and multiplies that
+    /// alignment by the factor the platform reports — a Windows display at 100%
+    /// draws at 1.333x and at 150% at 2x, a Retina Mac at 3x. `SAUDADE_UI_SCALE`
+    /// overrides this, and `SAUDADE_UI_DPI` moves the reference density instead
+    /// of pinning one display: see [`ui_scale`](crate::ui_scale).
     ///
     /// Has no effect under the Wayland backend, which renders at the integer
-    /// buffer scale the compositor asks for — and whose logical unit is already
-    /// normalized against 96 dpi.
+    /// buffer scale the compositor asks for — and whose logical unit is
+    /// normalized against 96 dpi, so the 72-dpi reference does not apply there
+    /// either.
     pub fn with_ui_scale(mut self, scale: f32) -> Self {
         self.ui_scale = Some(scale.max(0.01));
         self
@@ -1198,10 +1199,11 @@ impl AppHandler {
     /// it was.
     ///
     /// The drawn scale is the half that normally moves: the UI scale between
-    /// them is the platform's own ratio — 1 on Windows and X11, 9/8 on macOS —
-    /// wherever the snap has no work to do, so crossing between a Retina screen
-    /// and a 1x one moves the scale from 2.25 to 1.17 and barely touches the
-    /// ratio. Only a factor the snap rounds can move it, so both are checked.
+    /// them is the platform's own ratio — 4/3 on Windows and X11, 3/2 on macOS
+    /// — wherever the snap has no work to do, so crossing between a Retina
+    /// screen and a 1x one moves the scale from 3 to 1.5 and leaves the ratio
+    /// where it was. Only a factor the snap rounds can move it, so both are
+    /// checked.
     ///
     /// A no-op when neither half has moved, which is not a redundant check: the
     /// macOS backend reports `ScaleFactorChanged` when a new window settles as
