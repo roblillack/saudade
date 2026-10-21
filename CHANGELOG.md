@@ -15,14 +15,13 @@ While pre-1.0, the minor version is bumped for breaking changes.
 - A logical pixel is now drawn for 72 dpi rather than 96. The Windows 3.1
   metrics saudade lays out in were drawn for screens running 57–85 ppi, so at
   96 the chrome came out a quarter smaller than it was meant to; now it is a
-  third larger everywhere. Windows and X11 draw at 4/3 of the factor they
-  report — 1.333x at 100%, 2x at 150% — and a Mac at 1.5 times its
-  `backingScaleFactor`, 3x on Retina. `SAUDADE_UI_DPI=96` brings back the
-  platforms' own size. The theme's `font_size` drops from 13 to 11 to suit,
-  which still sets text about an eighth larger than before. The Wayland
-  backend, which renders at the compositor's integer buffer scale, is
-  unaffected, so a Wayland window now comes out about a quarter smaller than
-  the same program under X11.
+  third larger everywhere: Windows, X11 and macOS all draw at 4/3 of the
+  factor they report — 1.333x at 100%, 2x at 150%, 2.667x on a Retina Mac.
+  `SAUDADE_UI_DPI=96` brings back the platforms' own size. The theme's
+  `font_size` drops from 13 to 11 to suit, which still sets text about an
+  eighth larger than before. The Wayland backend, which renders at the
+  compositor's integer buffer scale, is unaffected, so a Wayland window now
+  comes out about a quarter smaller than the same program under X11.
 - Push buttons now set their labels in the **bold** face of the theme font,
   greyed ones included (both the engraved white copy and the grey one over
   it) — a button is the one thing on a panel you press, and the weight says
@@ -77,17 +76,6 @@ While pre-1.0, the minor version is bumped for breaking changes.
   every widget at that scale, and nothing accumulates. Chrome at 1.0x, below
   1.5x and at integer scales is byte-for-byte unchanged; 1.5x moves, and so does
   `etched_h_line` below it, it having had no crisp pass before. (#53)
-- A logical pixel now lands the size it claims to on macOS. Its
-  `backingScaleFactor` counts device pixels per point and says nothing about
-  density, while a point is laid out at about 1/108 in, so a Mac now draws at
-  108/96 = 9/8 of the scale Windows and X11 draw at for the same factor, where
-  it drew at the factor itself. Two overrides sit outside that derivation:
-  `SAUDADE_UI_SCALE`, and `App::with_ui_scale`, set the drawn scale outright,
-  and `SAUDADE_UI_DPI` moves the reference density every scale is derived
-  against (72 dpi, see _Changed_). Both accept `auto` and both win over the
-  program's own choice, so a UI can be tried at another size without a
-  rebuild. The Wayland backend implements neither: it renders at the integer
-  buffer scale the compositor asks for. (#53)
 - Two widgets that share a border — a list or editor field against its
   scrollbar, a scrollbar thumb parked flush on an arrow button — now share it
   at every scale. The convention is to overlap the neighbour by one logical
@@ -104,6 +92,13 @@ While pre-1.0, the minor version is bumped for breaking changes.
 
 ### Added
 
+- Two overrides of the scale a window draws at: `SAUDADE_UI_SCALE`, and
+  `App::with_ui_scale`, set it outright, and `SAUDADE_UI_DPI` moves the
+  reference density every scale is derived against (72 dpi, see _Changed_).
+  Both variables accept `auto` and win over the program's own choice, so a UI
+  can be tried at another size without a rebuild. The Wayland backend
+  implements neither: it renders at the integer buffer scale the compositor
+  asks for. (#53)
 - `Theme::button_style` — the `FontStyle` a push button sets its label in,
   bold by default (see *Changed* above). (#54)
 - `Painter::text_centered_styled` — `text_centered` in a given family and

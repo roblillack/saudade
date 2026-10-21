@@ -131,9 +131,10 @@ impl App {
     /// included, so `with_ui_scale(3.0)` draws at 3.0 on any display. Left
     /// alone, the runtime aims a logical pixel at 1/72 in and multiplies that
     /// alignment by the factor the platform reports — a Windows display at 100%
-    /// draws at 1.333x and at 150% at 2x, a Retina Mac at 3x. `SAUDADE_UI_SCALE`
-    /// overrides this, and `SAUDADE_UI_DPI` moves the reference density instead
-    /// of pinning one display: see [`ui_scale`](crate::ui_scale).
+    /// draws at 1.333x and at 150% at 2x, a Retina Mac at 2.667x.
+    /// `SAUDADE_UI_SCALE` overrides this, and `SAUDADE_UI_DPI` moves the
+    /// reference density instead of pinning one display: see
+    /// [`ui_scale`](crate::ui_scale).
     ///
     /// Has no effect under the Wayland backend, which renders at the integer
     /// buffer scale the compositor asks for — and whose logical unit is

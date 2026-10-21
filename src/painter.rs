@@ -2310,10 +2310,10 @@ mod tests {
         assert_eq!(at(3, 3), 0, "outside the clip stays untouched");
     }
 
-    /// Every scale a saudade window is plausibly drawn at: the quarters Windows
-    /// and X11 hand over untouched, the eighth-over rungs a Mac lands on, and
-    /// the thirds that come of aiming a logical pixel at 72 dpi rather than 96
-    /// (`SAUDADE_UI_DPI`) — see [`crate::ui_scale`]. The frame primitives have
+    /// Every scale a saudade window is plausibly drawn at: the quarters Windows,
+    /// X11 and macOS hand over, the thirds that come of aiming a logical pixel
+    /// at 72 dpi rather than 96, and the twelfths `SAUDADE_UI_DPI` can land on
+    /// between them — see [`crate::ui_scale`]. The frame primitives have
     /// to hold their geometry on all of them, in order, which is what a
     /// [`Frame`]'s depths are for.
     const CHROME_SCALES: &[f32] = &[

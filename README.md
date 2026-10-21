@@ -1505,9 +1505,12 @@ The scale a window is drawn at is two factors multiplied together:
    unit over saudade's reference. Windows and X11 report a scale factor
    that is already a ratio against 96 dpi (winit divides the reported
    DPI, or `Xft.dpi`, by 96), so their alignment is 96/72 = 4/3. A
-   macOS point is nearer 1/108 in — about how Apple lays a desktop out,
-   218 dpi over a `backingScaleFactor` of 2 — so there it is 108/72 =
-   1.5.
+   macOS point counts the same: on the same glass a point and a Windows
+   unit come out the same size — a 27" 4K panel is 1.5 panel pixels to
+   either, at the 150% Windows picks for it and in the 2560x1440 mode
+   macOS does — and each platform lays its own UI out in about as many
+   of them (12-pixel Segoe UI, 13-point San Francisco). So a Mac's
+   alignment is 4/3 as well.
 2. **The system factor** — `winit`'s `scale_factor()`, which carries
    both the display's own density and whatever scaling the user set in
    the OS: the percentage in Windows' Display Settings, `Xft.dpi` on
@@ -1522,13 +1525,12 @@ in practice to a countable few:
 | Windows/X11 125% | 4/3       | 1.25   | 1.667 |
 | Windows/X11 150% | 4/3       | 1.50   | 2.0   |
 | Windows/X11 200% | 4/3       | 2.00   | 2.667 |
-| macOS 1x         | 1.5       | 1.00   | 1.5   |
-| macOS Retina     | 1.5       | 2.00   | 3.0   |
+| macOS 1x         | 4/3       | 1.00   | 1.333 |
+| macOS Retina     | 4/3       | 2.00   | 2.667 |
 
-Every rung is exact: a Windows unit is sixteen twelfths of a 72-dpi
-pixel and a Mac point eighteen, so the snap only ever moves a factor
-off both ladders — an `Xft.dpi` set by hand — and by half a step at
-most.
+Every rung is exact: a platform unit is sixteen twelfths of a 72-dpi
+pixel, so the snap only ever moves a factor off the ladder — an
+`Xft.dpi` set by hand — and by half a step at most.
 
 The Wayland backend is the exception: it renders at the integer buffer
 scale the compositor asks for, so neither factor applies there, and a
@@ -1549,7 +1551,7 @@ touching the program.
   factors go on working underneath. A finer reference makes the whole
   UI smaller: 96 draws it at the platforms' own size, a quarter smaller
   than the default — Windows at 100% back at 1.0x, a Retina Mac at
-  2.25x. Range 48–192.
+  2.0x. Range 48–192.
 
 Either variable also accepts `auto`, meaning the default; anything else
 is ignored with a warning. `Painter::scale()` reports the scale the
