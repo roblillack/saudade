@@ -394,6 +394,9 @@ pub struct Painter<'a> {
     /// Where the screen is, in this painter's logical coordinates — see
     /// [`Self::screen_area`].
     screen: Option<Rect>,
+    /// How many device pixels the display fits to the inch — see
+    /// [`Self::display_dpi`].
+    display_dpi: Option<f32>,
 }
 
 impl<'a> Painter<'a> {
@@ -441,6 +444,7 @@ impl<'a> Painter<'a> {
             popup_anchor,
             clip: None,
             screen: None,
+            display_dpi: None,
         }
     }
 
@@ -449,6 +453,14 @@ impl<'a> Painter<'a> {
     /// runtime calls this; an offscreen render leaves it unset.
     pub fn with_screen(mut self, area: Option<Rect>) -> Self {
         self.screen = area;
+        self
+    }
+
+    /// Record how dense the display is, for widgets that draw something at its
+    /// real size — see [`Self::display_dpi`]. Like [`Self::with_screen`], only
+    /// the runtime has the answer.
+    pub fn with_display_dpi(mut self, dpi: Option<f32>) -> Self {
+        self.display_dpi = dpi;
         self
     }
 
@@ -485,6 +497,30 @@ impl<'a> Painter<'a> {
     /// [`PopupRequest::rect`]: crate::PopupRequest::rect
     pub fn screen_area(&self) -> Option<Rect> {
         self.screen
+    }
+
+    /// How many device pixels — the ones [`Self::physical`] draws in — fit in
+    /// an inch of the display the window is on, going by the physical size the
+    /// display reports for itself.
+    ///
+    /// This is what a widget drawing something at its real size wants, a ruler
+    /// or a life-size card. [`Self::scale`] says how many device pixels a
+    /// logical one is worth, but not how big a device pixel is: that is down to
+    /// the display, and to the scaling the user picked for it — 150% in
+    /// Windows' Display Settings, "Larger Text" on a Mac — which the scale only
+    /// carries mixed in with the display's density.
+    ///
+    /// On macOS a device pixel is a pixel of the framebuffer, which is not
+    /// always one of the panel's: a 27" 4K panel in the 2560x1440 mode macOS
+    /// picks for it renders 5120 wide and is resampled down, so it comes out at
+    /// 217 here rather than the panel's own 163.
+    ///
+    /// `None` when there is no answer: an offscreen
+    /// [`MockBackend`](crate::mock::MockBackend) render, unless it fakes one;
+    /// X11 and Wayland, which saudade does not ask; and a display that reports
+    /// no size of its own, as a projector may not.
+    pub fn display_dpi(&self) -> Option<f32> {
+        self.display_dpi
     }
 
     /// Restrict all subsequent drawing to a physical-pixel rectangle. Used

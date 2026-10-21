@@ -99,6 +99,14 @@ While pre-1.0, the minor version is bumped for breaking changes.
   can be tried at another size without a rebuild. The Wayland backend
   implements neither: it renders at the integer buffer scale the compositor
   asks for. (#53)
+- `Painter::display_dpi` — how many device pixels fit in an inch of the display
+  the window is on, going by the physical size the display reports for itself:
+  what a widget drawing something at its real size needs, since the scale
+  factor carries the display's density and the user's scaling setting mixed
+  together. macOS and Windows answer; X11, Wayland and a display that reports
+  no size give `None`, and `MockBackend::with_display_dpi` fakes one. The
+  runtime now also re-reads the display when the window comes back to the
+  front, which is when a resolution changed in System Settings is first seen.
 - `Theme::button_style` — the `FontStyle` a push button sets its label in,
   bold by default (see *Changed* above). (#54)
 - `Painter::text_centered_styled` — `text_centered` in a given family and
