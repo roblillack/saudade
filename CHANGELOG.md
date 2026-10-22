@@ -67,6 +67,10 @@ While pre-1.0, the minor version is bumped for breaking changes.
 
 ### Added
 
+- `Button::with_icon` leads a push button's label with a compile-time-baked
+  `SvgImage`, or shows the icon alone when the label is empty. The icon is
+  drawn tinted in the label's color, so it engraves along with the label on a
+  disabled button.
 - Two overrides of the scale a window draws at: `SAUDADE_UI_SCALE`, and
   `App::with_ui_scale`, set it outright, and `SAUDADE_UI_DPI` moves the
   reference density every scale is derived against (72 dpi, see _Changed_).
