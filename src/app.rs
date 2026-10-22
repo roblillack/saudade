@@ -708,6 +708,14 @@ impl AppHandler {
                 // user / WM. Override-redirect popups nested inside it
                 // (e.g. an open dropdown) need to follow.
                 self.reposition_popup();
+                // And a dialog may have crossed onto another display.
+                self.refresh_dialog_dpi(idx);
+            }
+            WindowEvent::ScaleFactorChanged {
+                scale_factor,
+                mut inner_size_writer,
+            } => {
+                self.adopt_dialog_scale(idx, scale_factor as f32, &mut inner_size_writer);
             }
             WindowEvent::Resized(new_size) => {
                 if let Some(p) = self.popups.get_mut(idx) {
@@ -1096,7 +1104,6 @@ impl AppHandler {
     }
 
     fn paint_popup(&mut self, idx: usize) {
-        let system_scale = self.os_scale();
         let Some(p) = self.popups.get_mut(idx) else {
             return;
         };
@@ -1106,7 +1113,8 @@ impl AppHandler {
         let popup_phys_h = (p.anchor.h as f32 * p.scale).round() as i32;
         let anchor = p.anchor;
         let screen = self.screen;
-        let display_dpi = self.display_dpi;
+        let system_scale = p.os_scale;
+        let display_dpi = p.display_dpi;
         let mut surface_buf = p
             .surface
             .buffer_mut()
@@ -1201,10 +1209,7 @@ impl AppHandler {
 
     /// `logical` saudade pixels in physical ones, at the current scale.
     fn to_physical(&self, logical: Size) -> PhysicalSize<u32> {
-        PhysicalSize::new(
-            ((logical.w as f32) * self.scale).round().max(1.0) as u32,
-            ((logical.h as f32) * self.scale).round().max(1.0) as u32,
-        )
+        physical_at(logical, self.scale)
     }
 
     /// Size `win` to hold `logical` saudade pixels, carrying the configured
@@ -1304,6 +1309,61 @@ impl AppHandler {
         self.refresh_screen();
     }
 
+    /// Adopt `os_scale` for the dialog at `idx`, which is on a display of
+    /// another density now — dragged there, most often. A dialog is drawn at
+    /// the scale of the display it is on, not its parent's, so it is resized to
+    /// hold its [`PopupRequest`] rect at that one.
+    ///
+    /// The size is written even when the drawn scale stays the same (a pinned
+    /// one): winit's suggestion keeps the platform's logical size, which is the
+    /// wrong size whenever the UI scale moves. It goes into `writer`, not
+    /// through [`Window::request_inner_size`], for the reasons
+    /// [`Self::adopt_scale`] gives.
+    ///
+    /// A [`PopupKind::Popup`] is left alone: it is drawn in the pixels of the
+    /// window it hangs off.
+    fn adopt_dialog_scale(&mut self, idx: usize, os_scale: f32, writer: &mut InnerSizeWriter) {
+        let (scale, _) = self.scales_for(os_scale);
+        let Some(p) = self.popups.get_mut(idx) else {
+            return;
+        };
+        if p.kind != PopupKind::Dialog {
+            return;
+        }
+        // Before winit gets to place the window itself, as for the main window.
+        #[cfg(windows)]
+        crate::win32_dpi::follow_dpi_change(&p.win);
+        let size = physical_at(p.anchor.into(), scale);
+        #[cfg(all(unix, not(target_os = "macos")))]
+        pin_dialog_size(&p.win, size);
+        // `Err` means winit has already let go of the size it was going to
+        // apply; the `Resized` that follows reports what the window became.
+        let _ = writer.request_inner_size(size);
+        p.scale = scale;
+        p.os_scale = os_scale;
+        p.physical = size;
+        resize_surface(&mut p.surface, size);
+        p.needs_redraw = true;
+        self.refresh_dialog_dpi(idx);
+    }
+
+    /// Re-read the density of the display the dialog at `idx` is on, and
+    /// repaint it if that moved — as [`Self::refresh_screen`] does for the main
+    /// window. A [`PopupKind::Popup`] keeps its parent's.
+    fn refresh_dialog_dpi(&mut self, idx: usize) {
+        let Some(p) = self.popups.get_mut(idx) else {
+            return;
+        };
+        if p.kind != PopupKind::Dialog {
+            return;
+        }
+        let dpi = p.win.current_monitor().as_ref().and_then(display_dpi);
+        if dpi != p.display_dpi {
+            p.display_dpi = dpi;
+            p.needs_redraw = true;
+        }
+    }
+
     fn compute_screen(&self) -> Option<Rect> {
         let win = self.main_win.as_ref()?;
         let monitor = win.current_monitor()?;
@@ -1351,18 +1411,18 @@ impl AppHandler {
                 continue;
             }
             // Outermost popup anchors to the main window; nested popups
-            // anchor to the popup directly above them.
-            let (parent_inner, parent_origin) = if idx == 0 {
-                (main_win.inner_position(), Rect::new(0, 0, 0, 0))
+            // anchor to the popup directly above them, in its pixels.
+            let (parent_inner, parent_origin, parent_scale) = if idx == 0 {
+                (main_win.inner_position(), Rect::new(0, 0, 0, 0), self.scale)
             } else {
                 let parent = &self.popups[idx - 1];
-                (parent.win.inner_position(), parent.anchor)
+                (parent.win.inner_position(), parent.anchor, parent.scale)
             };
             let Ok(inner) = parent_inner else { continue };
             let dx = (popup.anchor.x - parent_origin.x) as f32;
             let dy = (popup.anchor.y - parent_origin.y) as f32;
-            let px = inner.x + (dx * self.scale).round() as i32;
-            let py = inner.y + (dy * self.scale).round() as i32;
+            let px = inner.x + (dx * parent_scale).round() as i32;
+            let py = inner.y + (dy * parent_scale).round() as i32;
             popup.win.set_outer_position(PhysicalPosition::new(px, py));
         }
     }
@@ -1388,22 +1448,20 @@ impl AppHandler {
         let Ok(inner) = parent_inner else {
             return false;
         };
-        let parent_origin = if idx == 0 {
-            Rect::new(0, 0, 0, 0)
+        let (parent_origin, parent_scale) = if idx == 0 {
+            (Rect::new(0, 0, 0, 0), self.scale)
         } else {
-            self.popups[idx - 1].anchor
+            let parent = &self.popups[idx - 1];
+            (parent.anchor, parent.scale)
         };
 
         let dx = (rect.x - parent_origin.x) as f32;
         let dy = (rect.y - parent_origin.y) as f32;
-        let px = inner.x + (dx * self.scale).round() as i32;
-        let py = inner.y + (dy * self.scale).round() as i32;
-        let size = PhysicalSize::new(
-            ((rect.w as f32) * self.scale).round().max(1.0) as u32,
-            ((rect.h as f32) * self.scale).round().max(1.0) as u32,
-        );
+        let px = inner.x + (dx * parent_scale).round() as i32;
+        let py = inner.y + (dy * parent_scale).round() as i32;
 
         let p = &mut self.popups[idx];
+        let size = physical_at(rect.into(), p.scale);
         p.win.set_outer_position(PhysicalPosition::new(px, py));
         // `None` means the platform will report the new size later, in a
         // `Resized` event — take the requested size for now, as opening a popup
@@ -1480,10 +1538,16 @@ impl AppHandler {
         let main_win = self.main_win.as_ref()?;
         let context = self.context.as_ref()?;
 
+        // A popup is drawn at the scale of the window it hangs off — the dialog
+        // beneath it, or the main window — since it is placed in that window's
+        // pixels. A dialog starts out at it too, until it is known where the
+        // platform has put it.
+        let (parent_scale, parent_os_scale, parent_dpi) = match parent {
+            Some(p) => (p.scale, p.os_scale, p.display_dpi),
+            None => (self.scale, self.os_scale(), self.display_dpi),
+        };
         let rect = request.rect;
-        let phys_w = ((rect.w as f32) * self.scale).round().max(1.0) as u32;
-        let phys_h = ((rect.h as f32) * self.scale).round().max(1.0) as u32;
-        let size = PhysicalSize::new(phys_w, phys_h);
+        let size = physical_at(rect.into(), parent_scale);
 
         let mut attrs = WindowAttributes::default()
             .with_resizable(false)
@@ -1539,8 +1603,8 @@ impl AppHandler {
                 if let Ok(inner) = anchor_inner {
                     let dx = (rect.x - parent_origin.x) as f32;
                     let dy = (rect.y - parent_origin.y) as f32;
-                    let px = inner.x + (dx * self.scale).round() as i32;
-                    let py = inner.y + (dy * self.scale).round() as i32;
+                    let px = inner.x + (dx * parent_scale).round() as i32;
+                    let py = inner.y + (dy * parent_scale).round() as i32;
                     attrs = attrs.with_position(PhysicalPosition::new(px, py));
                 }
             }
@@ -1556,18 +1620,16 @@ impl AppHandler {
                 attrs = attrs
                     .with_title(request.title.as_deref().unwrap_or("Dialog"))
                     .with_decorations(true)
-                    .with_enabled_buttons(WindowButtons::CLOSE)
-                    // Pin min == max so the WM advertises a fixed size.
-                    // `with_resizable(false)` alone is unreliable on many
-                    // X11 WMs; equal min/max inner-size hints
-                    // (WM_NORMAL_HINTS) are honored far more consistently
-                    // — mirroring the Wayland backend's set_min/max_size.
-                    .with_min_inner_size(size)
-                    .with_max_inner_size(size);
+                    .with_enabled_buttons(WindowButtons::CLOSE);
 
+                // Pin min == max so the WM advertises a fixed size — see
+                // `pin_dialog_size`.
                 #[cfg(all(unix, not(target_os = "macos")))]
                 {
-                    attrs = attrs.with_x11_window_type(vec![XWindowType::Dialog]);
+                    attrs = attrs
+                        .with_x11_window_type(vec![XWindowType::Dialog])
+                        .with_min_inner_size(size)
+                        .with_max_inner_size(size);
                 }
             }
         }
@@ -1581,6 +1643,32 @@ impl AppHandler {
         {
             crate::icon::set_window_icon(&win, image);
         }
+        // A dialog can be dragged to another display, like the main window.
+        #[cfg(windows)]
+        if request.kind == PopupKind::Dialog {
+            crate::win32_dpi::watch_dpi_changes(&win);
+        }
+        // The platform placed the dialog, and may have put it on a display of
+        // another density than its parent's: draw it at that display's scale,
+        // as the main window would be there. Still hidden, so the resize this
+        // takes is never seen.
+        let (scale, os_scale, display_dpi) = match request.kind {
+            PopupKind::Popup => (parent_scale, parent_os_scale, parent_dpi),
+            PopupKind::Dialog => {
+                let os_scale = win.scale_factor() as f32;
+                let dpi = win.current_monitor().as_ref().and_then(display_dpi);
+                (self.scales_for(os_scale).0, os_scale, dpi)
+            }
+        };
+        let mut requested = None;
+        if scale != parent_scale {
+            let size = physical_at(rect.into(), scale);
+            #[cfg(all(unix, not(target_os = "macos")))]
+            pin_dialog_size(&win, size);
+            // `None` means the platform will report the new size later, in a
+            // `Resized` event — take the requested size until it does.
+            requested = Some(win.request_inner_size(size).unwrap_or(size));
+        }
         // Before the first `set_visible` below, while the window is still
         // off-screen: the behavior applies to the animation that showing it
         // would otherwise play.
@@ -1591,7 +1679,7 @@ impl AppHandler {
         let win = Rc::new(win);
         let id = win.id();
         let mut surface = softbuffer::Surface::new(context, win.clone()).ok()?;
-        let actual = win.inner_size();
+        let actual = requested.unwrap_or_else(|| win.inner_size());
         resize_surface(&mut surface, actual);
         win.set_visible(true);
 
@@ -1602,7 +1690,9 @@ impl AppHandler {
             anchor: rect,
             kind: request.kind,
             physical: actual,
-            scale: self.scale,
+            scale,
+            os_scale,
+            display_dpi,
             cursor: None,
             cursor_icon: Cursor::Default,
             was_focused: false,
@@ -1621,7 +1711,17 @@ struct PopupWindow {
     anchor: Rect,
     kind: PopupKind,
     physical: PhysicalSize<u32>,
+    /// Logical→physical scale this window is drawn at — see the same field on
+    /// [`AppHandler`]. A [`PopupKind::Popup`] takes it from the window it hangs
+    /// off; a [`PopupKind::Dialog`] from the display it is on, which need not
+    /// be its parent's.
     scale: f32,
+    /// The scale factor the OS reports for this window's display, behind
+    /// [`Self::scale`] — what [`Painter::system_scale`] hands to widgets.
+    os_scale: f32,
+    /// The density of this window's display — [`Painter::display_dpi`].
+    /// Follows [`Self::scale`]: a popup's is its parent's.
+    display_dpi: Option<f32>,
     cursor: Option<Point>,
     /// Pointer shape currently applied to this popup window — see the same
     /// field on [`AppHandler`].
@@ -1918,6 +2018,29 @@ fn resize_surface(
     surface
         .resize(w, h)
         .expect("saudade: failed to resize surface");
+}
+
+/// `logical` saudade pixels in physical ones, at `scale`.
+fn physical_at(logical: Size, scale: f32) -> PhysicalSize<u32> {
+    PhysicalSize::new(
+        ((logical.w as f32) * scale).round().max(1.0) as u32,
+        ((logical.h as f32) * scale).round().max(1.0) as u32,
+    )
+}
+
+/// X11: pin a dialog's minimum and maximum size to `size`, so the WM advertises
+/// a fixed size. `with_resizable(false)` alone is unreliable on many X11 WMs;
+/// equal min/max inner-size hints (`WM_NORMAL_HINTS`) are honored far more
+/// consistently — mirroring the Wayland backend's `set_min/max_size`.
+///
+/// Elsewhere `with_resizable(false)` already does it, and on Windows a pinned
+/// size would get in the way: winit applies a new bound by resizing the window
+/// on the spot, which in the middle of a drag onto a display of another density
+/// is at the position the window is leaving.
+#[cfg(all(unix, not(target_os = "macos")))]
+fn pin_dialog_size(win: &Window, size: PhysicalSize<u32>) {
+    win.set_min_inner_size(Some(size));
+    win.set_max_inner_size(Some(size));
 }
 
 fn origin(logical: Size, scale: f32, physical: PhysicalSize<u32>) -> (i32, i32) {

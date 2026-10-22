@@ -49,6 +49,16 @@ While pre-1.0, the minor version is bumped for breaking changes.
   the window at the rect Windows suggests before winit gets to place it. A
   crossing is now one scale change each way, whether the window is dragged or
   moved with Win+Shift+Arrow, and a maximized window stays maximized. (#57)
+- A dialog that opens on a display of another density than the main window's
+  is now drawn at that display's scale. It used to take the main window's
+  scale wherever the platform put it — with the main window on a 125% display,
+  a dialog Windows opened on a 150% one came out a sixth too small — and kept
+  it when dragged to another display too, where it grew around its contents
+  instead. A dialog now follows the display it is on, like the main window,
+  and a dropdown opened inside it is placed and drawn in the dialog's pixels.
+  `Painter::system_scale` and `Painter::display_dpi` report the dialog's own
+  display while it paints. Only X11 still pins a dialog's minimum and maximum
+  size, the one platform whose window managers need it.
 - Button frames, bevels, focus rings and etched dividers are crisp at a
   fractional scale. Each chrome line used to snap on its own, from its own
   position in the window: at 2.33x a frame came out heavier along one edge than

@@ -15,8 +15,8 @@
 //!
 //! winit fixed this on `master` by applying the suggested rect as it is
 //! (rust-windowing/winit#4341), but no 0.30 release carries that yet
-//! (rust-windowing/winit#4600). Until one does, the main window is subclassed
-//! so the suggested rect can be read off the message, and
+//! (rust-windowing/winit#4600). Until one does, the main window and every
+//! dialog are subclassed so the suggested rect can be read off the message, and
 //! [`follow_dpi_change`] applies it from the `ScaleFactorChanged` event winit
 //! sends from inside its handler. That is before winit's check, which then asks
 //! about a window that is already on the right display — and agrees with it,
