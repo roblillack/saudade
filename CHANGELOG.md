@@ -12,44 +12,18 @@ While pre-1.0, the minor version is bumped for breaking changes.
 
 ### Changed
 
-- A logical pixel is now drawn for 72 dpi rather than 96. The Windows 3.1
-  metrics saudade lays out in were drawn for screens running 57–85 ppi, so at
-  96 the chrome came out a quarter smaller than it was meant to; now it is a
-  third larger everywhere: Windows, X11 and macOS all draw at 4/3 of the
-  factor they report — 1.333x at 100%, 2x at 150%, 2.667x on a Retina Mac.
-  `SAUDADE_UI_DPI=96` brings back the platforms' own size. The theme's
-  `font_size` drops from 13 to 11 to suit, which still sets text about an
-  eighth larger than before. The Wayland backend, which renders at the
-  compositor's integer buffer scale, is unaffected, so a Wayland window now
-  comes out about a quarter smaller than the same program under X11. (#54)
-- Push buttons now set their labels in the **bold** face of the theme font,
-  greyed ones included (both the engraved white copy and the grey one over
-  it) — a button is the one thing on a panel you press, and the weight says
-  so at a glance. The face is `Theme::button_style`, so a theme after a
-  lighter look sets it back to `FontStyle::Regular`, and a family the host
-  ships no real bold for falls back to its own regular face rather than to a
-  synthesized one. Nothing else moves: menus, captions, fields, list rows and
-  dialog text are untouched. The label is measured in the face it is drawn
-  in, so a wider one still centers on the button. (#54)
-- A `List`'s selection band now spans the full field width, border to border —
-  the classic list-box look — instead of stopping at the 4-px text padding,
-  and the dotted focus ring hugs the band one logical pixel inside the field.
-  Both are trimmed by the frame clip, so they stop on exactly the border
-  line's device pixels at every scale. Icons and labels keep their padding.
-  (#54)
-- Chrome lines are a whole number of device pixels at every scale: one below
-  1.75x, then the scale's whole part — two from 1.75x up to 3x, three from 3x
-  up to 4x. Every ring of a frame is that thick, so a button at 2.5x is the
-  1.25x one doubled, a 2-pixel outline over a 4-pixel bevel, where scaling the
-  depths by 2.5 drew a 3-pixel outline over rings of 2 and 3; whatever the
-  fractional rest of the scale buys goes to the face. Lone lines (dividers,
-  carets, grid rules), the background patterns and the mock window chrome use
-  the same unit. The exception is a bevel from 1.5x up to 1.75x, which is
-  drawn at 1.5x under the 1-pixel outline — a 2-pixel bevel 3 deep, in rings
-  of 2 and 1 — since the design's 1-pixel relief all but vanished against a
-  face that much bigger. Buttons, scrollbar arrows and thumbs, slider thumbs,
-  dropdown buttons and the mock title-bar buttons all wear it; recipes ask for
-  it with `Frame::bevel_ring`. (#54)
+- A logical pixel now targets 72 dpi rather than 96, whatever resolution or
+  density the display runs at. That is closer to the screens the Windows 3.1
+  metrics were designed for. Windows, X11 and macOS now draw at 4/3 of the
+  scale factor they report: 1.333x at 100%, 2x at 150%, 2.667x on a Retina
+  Mac. `SAUDADE_UI_DPI=96` restores the old size. Wayland, which renders at
+  the compositor's integer buffer scale, is unaffected. (#54)
+- Fonts and widgets are adapted to the new size. The theme's `font_size`
+  drops from 13 to 11. Push buttons set their labels in bold
+  (`Theme::button_style`, drawn with the new `Painter::text_centered_styled`).
+  Chrome lines and bevels are a whole number of device pixels thick at every
+  scale (`Frame::bevel_ring`). A `List`'s selection band spans the full field
+  width. (#54)
 
 ### Fixed
 
@@ -76,19 +50,6 @@ While pre-1.0, the minor version is bumped for breaking changes.
   every widget at that scale, and nothing accumulates. Chrome at 1.0x, below
   1.5x and at integer scales is byte-for-byte unchanged; 1.5x moves, and so does
   `etched_h_line` below it, it having had no crisp pass before. (#53)
-- Two widgets that share a border — a list or editor field against its
-  scrollbar, a scrollbar thumb parked flush on an arrow button — now share it
-  at every scale. The convention is to overlap the neighbour by one logical
-  pixel so the two 1-pixel borders collapse into a single line, but each crisp
-  frame drew its line `depth(1)` device pixels thick from its own snapped edge,
-  and at a fractional scale `snap(x + 1) - snap(x)` disagrees with that
-  thickness at about every other position: the two borders landed a device
-  pixel apart, reading as a doubled or ragged divider. A frame can now mark the
-  shared edge as _merged_ (`Merged`, `Painter::crisp_merged`, and merged
-  variants of `stroke_rect`, `raised_bevel` / `sunken_bevel`, `light_button`),
-  which re-anchors that edge to the very device pixels the neighbour's line
-  occupies. `List`, `TextEditor` and the scrollbar thumb use it; integer scales
-  are byte-for-byte unchanged. (#54)
 
 ### Added
 
@@ -99,25 +60,17 @@ While pre-1.0, the minor version is bumped for breaking changes.
   can be tried at another size without a rebuild. The Wayland backend
   implements neither: it renders at the integer buffer scale the compositor
   asks for. (#53)
-- `Painter::display_dpi` — how many device pixels fit in an inch of the display
-  the window is on, going by the physical size the display reports for itself:
-  what a widget drawing something at its real size needs, since the scale
-  factor carries the display's density and the user's scaling setting mixed
-  together. macOS and Windows answer; X11, Wayland and a display that reports
-  no size give `None`, and `MockBackend::with_display_dpi` fakes one. The
-  runtime now also re-reads the display when the window comes back to the
-  front, which is when a resolution changed in System Settings is first seen.
-- `Theme::button_style` — the `FontStyle` a push button sets its label in,
-  bold by default (see _Changed_ above). (#54)
-- `Painter::text_centered_styled` — `text_centered` in a given family and
-  style, which stays the sans-regular shorthand. It measures the very face it
-  draws with, so a bold label sits centered on its own width. (#54)
-- `Painter::push_clip_frame(rect, depth, merged)` clips to a crisp frame's
-  interior — the same `Frame::inside(depth)` a recipe paints — where
-  `push_clip(rect.inset(depth))` snapped its boundary logically and could land
-  a device pixel inside or outside the frame line at a fractional scale,
-  letting a row fill overwrite the line's inner pixel or leave a seam of stale
-  background along it. `List` clips its rows with it. (#54)
+- Merged widget frames. Two widgets that share a border, such as a list or
+  editor field and its scrollbar, now draw it as one line on HiDPI screens
+  instead of two lines a device pixel apart. A frame marks the shared edge as
+  merged (`Merged`, `Painter::crisp_merged`, merged variants of the frame
+  primitives, and `Painter::push_clip_frame` to clip to the frame's interior).
+  `List`, `TextEditor` and the scrollbar thumb use it. (#54)
+- `Painter::display_dpi`, the display's physical density where the display
+  reports its size (macOS and Windows). (#54)
+- Two examples: `fonts`, a specimen sheet of every font face at a range of
+  sizes, and `credit_card`, which draws a bank card at its real size using
+  `Painter::display_dpi`. (#54)
 - Function keys. `NamedKey` gains `F1` to `F24`, which every backend now
   reports as `KeyDown` / `KeyUp` instead of dropping them, and accelerators
   take them like any other key: `with_accel("F5")`, `"Shift+F5"`,
