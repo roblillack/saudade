@@ -62,11 +62,11 @@ pub struct AccelMods {
 
 /// A keyboard accelerator: a chord of modifier *roles* plus a key.
 ///
-/// Build one with [`Accel::primary`] and the chainable [`shift`](Self::shift) /
+/// Build one with [`Accel::primary`] (or [`Accel::new`] for a key without the
+/// command modifier, such as F5) and the chainable [`shift`](Self::shift) /
 /// [`alt`](Self::alt) / [`secondary`](Self::secondary) builders, or parse the
-/// conventional string form (`"Ctrl+Shift+R"`, `"Ctrl+Enter"`) via `From<&str>`
-/// — in strings, `Ctrl` and `Cmd` both mean the `primary` role. Exotic
-/// combinations without `primary` can be built from the public fields.
+/// conventional string form (`"Ctrl+Shift+R"`, `"Ctrl+Enter"`, `"F5"`) via
+/// `From<&str>` — in strings, `Ctrl` and `Cmd` both mean the `primary` role.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Accel {
     pub mods: AccelMods,
@@ -74,6 +74,17 @@ pub struct Accel {
 }
 
 impl Accel {
+    /// `key` on its own, without modifiers: `Accel::new(NamedKey::F5)`. The
+    /// builders add them, so `Accel::new(NamedKey::F5).shift()` is Shift+F5.
+    /// A bare letter or digit would fire while the user types, so those
+    /// chords want [`Accel::primary`].
+    pub fn new(key: impl Into<Key>) -> Self {
+        Self {
+            mods: AccelMods::default(),
+            key: key.into(),
+        }
+    }
+
     /// A chord of the primary command modifier plus `key` — the everyday
     /// accelerator: `Accel::primary('r')`, `Accel::primary(NamedKey::Enter)`.
     pub fn primary(key: impl Into<Key>) -> Self {
@@ -192,6 +203,30 @@ fn key_label(key: Key) -> String {
             NamedKey::End => "End",
             NamedKey::PageUp => "PageUp",
             NamedKey::PageDown => "PageDown",
+            NamedKey::F1 => "F1",
+            NamedKey::F2 => "F2",
+            NamedKey::F3 => "F3",
+            NamedKey::F4 => "F4",
+            NamedKey::F5 => "F5",
+            NamedKey::F6 => "F6",
+            NamedKey::F7 => "F7",
+            NamedKey::F8 => "F8",
+            NamedKey::F9 => "F9",
+            NamedKey::F10 => "F10",
+            NamedKey::F11 => "F11",
+            NamedKey::F12 => "F12",
+            NamedKey::F13 => "F13",
+            NamedKey::F14 => "F14",
+            NamedKey::F15 => "F15",
+            NamedKey::F16 => "F16",
+            NamedKey::F17 => "F17",
+            NamedKey::F18 => "F18",
+            NamedKey::F19 => "F19",
+            NamedKey::F20 => "F20",
+            NamedKey::F21 => "F21",
+            NamedKey::F22 => "F22",
+            NamedKey::F23 => "F23",
+            NamedKey::F24 => "F24",
         }
         .to_string(),
     }
@@ -202,7 +237,8 @@ impl From<&str> for Accel {
     /// (case-insensitive): `Ctrl` / `Cmd` / `Command` / `Primary` → the
     /// primary role; `Super` / `Win` / `Secondary` → secondary; `Alt` / `Opt`
     /// / `Option` → alt; `Shift`. The final token is the key: a single
-    /// character, or a named key (`Enter`, `Esc`, `Left`, `PageUp`, …).
+    /// character, or a named key (`Enter`, `Esc`, `Left`, `PageUp`, `F1` …
+    /// `F24`, …). A lone key is a chord too: `"F5"`, `"Shift+F5"`.
     ///
     /// # Panics
     ///
@@ -253,6 +289,30 @@ fn parse_key(token: &str, accel: &str) -> Key {
         "end" => NamedKey::End,
         "pageup" | "pgup" => NamedKey::PageUp,
         "pagedown" | "pgdn" => NamedKey::PageDown,
+        "f1" => NamedKey::F1,
+        "f2" => NamedKey::F2,
+        "f3" => NamedKey::F3,
+        "f4" => NamedKey::F4,
+        "f5" => NamedKey::F5,
+        "f6" => NamedKey::F6,
+        "f7" => NamedKey::F7,
+        "f8" => NamedKey::F8,
+        "f9" => NamedKey::F9,
+        "f10" => NamedKey::F10,
+        "f11" => NamedKey::F11,
+        "f12" => NamedKey::F12,
+        "f13" => NamedKey::F13,
+        "f14" => NamedKey::F14,
+        "f15" => NamedKey::F15,
+        "f16" => NamedKey::F16,
+        "f17" => NamedKey::F17,
+        "f18" => NamedKey::F18,
+        "f19" => NamedKey::F19,
+        "f20" => NamedKey::F20,
+        "f21" => NamedKey::F21,
+        "f22" => NamedKey::F22,
+        "f23" => NamedKey::F23,
+        "f24" => NamedKey::F24,
         _ => panic!("unknown key {token:?} in accelerator {accel:?}"),
     };
     Key::Named(named)
@@ -376,6 +436,31 @@ mod tests {
             Accel::from("Ctrl+Super+Alt+R"),
             Accel::primary('r').secondary().alt()
         );
+        assert_eq!(Accel::from("F5"), Accel::new(NamedKey::F5));
+        assert_eq!(Accel::from("f12"), Accel::new(NamedKey::F12));
+        assert_eq!(Accel::from("Shift+F24"), Accel::new(NamedKey::F24).shift());
+        assert_eq!(Accel::from("Ctrl+F1"), Accel::primary(NamedKey::F1));
+    }
+
+    #[test]
+    #[should_panic(expected = "unknown key")]
+    fn parsing_a_function_key_past_f24_panics() {
+        let _ = Accel::from("F25");
+    }
+
+    #[test]
+    fn function_keys_match_without_modifiers() {
+        let present = Accel::from("F5");
+        let none = Modifiers::default();
+        assert!(present.matches(Key::Named(NamedKey::F5), none, ModifierScheme::Pc));
+        assert!(present.matches(Key::Named(NamedKey::F5), none, ModifierScheme::Mac));
+        assert!(!present.matches(Key::Named(NamedKey::F6), none, ModifierScheme::Pc));
+        // Shift+F5 is its own chord: PowerPoint presents from the current
+        // slide with it.
+        let shift = mods(false, false, false, true);
+        assert!(!present.matches(Key::Named(NamedKey::F5), shift, ModifierScheme::Pc));
+        let from_current = present.shift();
+        assert!(from_current.matches(Key::Named(NamedKey::F5), shift, ModifierScheme::Pc));
     }
 
     #[test]
@@ -400,13 +485,25 @@ mod tests {
         let full = Accel::primary('r').secondary().alt().shift();
         assert_eq!(full.label(ModifierScheme::Pc), "Ctrl+Super+Alt+Shift+R");
         assert_eq!(full.label(ModifierScheme::Mac), "Ctrl+Opt+Shift+Cmd+R");
+        let shift_f5 = Accel::new(NamedKey::F5).shift();
+        assert_eq!(shift_f5.label(ModifierScheme::Pc), "Shift+F5");
+        assert_eq!(shift_f5.label(ModifierScheme::Mac), "Shift+F5");
     }
 
     #[test]
     fn pc_labels_round_trip_through_parsing() {
         // The strings journey bakes into its menu snapshots must come back out
         // exactly as they went in.
-        for s in ["Ctrl+R", "Ctrl+Enter", "Ctrl+Left", "Ctrl+Right", "Ctrl+Q"] {
+        for s in [
+            "Ctrl+R",
+            "Ctrl+Enter",
+            "Ctrl+Left",
+            "Ctrl+Right",
+            "Ctrl+Q",
+            "F1",
+            "Shift+F5",
+            "Ctrl+F24",
+        ] {
             assert_eq!(Accel::from(s).label(ModifierScheme::Pc), s);
         }
     }
