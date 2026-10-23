@@ -51,6 +51,11 @@ pub struct MockBackend {
     /// What [`Painter::display_dpi`] reports. `None` by default, for the same
     /// reason; [`Self::with_display_dpi`] fakes one.
     display_dpi: Option<f32>,
+    /// Whether the pretend window is fullscreen: what dispatches report through
+    /// [`EventCtx::is_fullscreen`], updated as soon as a widget asks — the
+    /// mock honors [`EventCtx::set_fullscreen`] on the spot. A `Cell` because
+    /// [`Self::dispatch`] takes `&self`.
+    fullscreen: std::cell::Cell<bool>,
 }
 
 /// Which backdrop the content pass fills behind the widget tree, mirroring the
@@ -83,7 +88,23 @@ impl MockBackend {
             },
             screen: None,
             display_dpi: None,
+            fullscreen: std::cell::Cell::new(false),
         }
+    }
+
+    /// Start with the pretend window fullscreen (or not, the default). Widgets
+    /// see it through [`EventCtx::is_fullscreen`], and [`Self::render_framed`]
+    /// leaves the window chrome off, as a fullscreen window has none.
+    pub fn with_fullscreen(self, fullscreen: bool) -> Self {
+        self.fullscreen.set(fullscreen);
+        self
+    }
+
+    /// Whether the pretend window is fullscreen — as configured, or as a widget
+    /// last asked through [`EventCtx::set_fullscreen`] while handling an event
+    /// from [`Self::dispatch`].
+    pub fn is_fullscreen(&self) -> bool {
+        self.fullscreen.get()
     }
 
     /// Pretend the window sits on a display whose usable area is `area`, in the
@@ -163,11 +184,15 @@ impl MockBackend {
     /// tests to drive focus / keyboard behavior without spinning up the
     /// full winit / Wayland runtime.
     pub fn dispatch(&self, root: &mut dyn Widget, event: &Event) -> DispatchOutcome {
-        let mut ctx = EventCtx::new();
+        let mut ctx = EventCtx::with_fullscreen(self.fullscreen.get());
         root.event(event, &mut ctx);
+        if let Some(fullscreen) = ctx.fullscreen_request {
+            self.fullscreen.set(fullscreen);
+        }
         DispatchOutcome {
             paint_requested: ctx.paint_requested,
             close_requested: ctx.close_requested,
+            fullscreen_request: ctx.fullscreen_request,
         }
     }
 
@@ -289,6 +314,10 @@ impl MockBackend {
     /// [`WindowFrame::Fixed`], or [`WindowFrame::Dialog`] — which differ in
     /// their window controls and border, matching Canoe's three window paints.
     ///
+    /// A [fullscreen](Self::is_fullscreen) window has no chrome to draw: it is
+    /// the whole display, so the snapshot is just its content, over the
+    /// window background.
+    ///
     /// [`WindowFrame::Resizable`]: crate::WindowFrame::Resizable
     /// [`WindowFrame::Fixed`]: crate::WindowFrame::Fixed
     /// [`WindowFrame::Dialog`]: crate::WindowFrame::Dialog
@@ -298,6 +327,9 @@ impl MockBackend {
         } else {
             Backdrop::Plain
         };
+        if self.is_fullscreen() {
+            return self.render_backdrop(root, backdrop);
+        }
         let content = self.render_backdrop(root, backdrop);
         let content_size = Size::new(content.width, content.height);
         let m = chrome::metrics(content_size, self.scale, chrome);
@@ -355,6 +387,8 @@ fn origin_centered(logical: Size, scale: f32, physical: Size) -> (i32, i32) {
 pub struct DispatchOutcome {
     pub paint_requested: bool,
     pub close_requested: bool,
+    /// What a widget asked for with [`EventCtx::set_fullscreen`], if anything.
+    pub fullscreen_request: Option<bool>,
 }
 
 /// Result of [`MockBackend::render`]. Holds a physical-pixel ARGB32

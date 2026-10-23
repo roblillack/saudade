@@ -29,7 +29,8 @@ use std::cell::Cell;
 use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows_sys::Win32::UI::Shell::{DefSubclassProc, RemoveWindowSubclass, SetWindowSubclass};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    SWP_NOACTIVATE, SWP_NOZORDER, SetWindowPos, WM_DPICHANGED, WM_NCDESTROY,
+    SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SetWindowPos, WINDOWPOS, WM_DPICHANGED,
+    WM_NCDESTROY, WM_WINDOWPOSCHANGING,
 };
 use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use winit::window::Window;
@@ -43,6 +44,21 @@ thread_local! {
     /// change that winit queues and replays later — from outside the message
     /// it came with — is left alone.
     static SUGGESTED: Cell<Option<(HWND, RECT)>> = const { Cell::new(None) };
+
+    /// While set, every move or resize of that window lands at that rect
+    /// instead — see [`redirect_moves`].
+    static REDIRECT: Cell<Option<(HWND, RECT)>> = const { Cell::new(None) };
+}
+
+/// Run `f`, with every move and resize it makes `hwnd` go through landing at
+/// `rect` instead. For winit calls that place the window somewhere saudade
+/// has no say over — leaving fullscreen restores a placement winit saved — the
+/// rect is rewritten in `WM_WINDOWPOSCHANGING`, before winit or Windows act on
+/// it, so the window never shows up anywhere else on the way.
+pub(crate) fn redirect_moves(hwnd: HWND, rect: RECT, f: impl FnOnce()) {
+    let outer = REDIRECT.replace(Some((hwnd, rect)));
+    f();
+    REDIRECT.set(outer);
 }
 
 /// Subclass `win` so [`follow_dpi_change`] can see the rect its
@@ -63,12 +79,22 @@ pub(crate) fn follow_dpi_change(win: &Window) {
     let Some(hwnd) = hwnd(win) else {
         return;
     };
-    let Some((target, rect)) = SUGGESTED.take() else {
-        return;
-    };
-    if target != hwnd {
-        return;
+    if let Some(rect) = take_suggested(hwnd) {
+        set_window_rect(hwnd, rect);
     }
+}
+
+/// The rect suggested by the `WM_DPICHANGED` that `hwnd` is handling right
+/// now, if it is handling one. Taken: a second call answers `None`.
+pub(crate) fn take_suggested(hwnd: HWND) -> Option<RECT> {
+    match SUGGESTED.take() {
+        Some((target, rect)) if target == hwnd => Some(rect),
+        _ => None,
+    }
+}
+
+/// Place `hwnd` at `rect`, outer bounds in physical pixels.
+pub(crate) fn set_window_rect(hwnd: HWND, rect: RECT) {
     // SAFETY: plain call on a live window owned by this thread.
     unsafe {
         SetWindowPos(
@@ -83,7 +109,7 @@ pub(crate) fn follow_dpi_change(win: &Window) {
     };
 }
 
-fn hwnd(win: &Window) -> Option<HWND> {
+pub(crate) fn hwnd(win: &Window) -> Option<HWND> {
     match win.window_handle().ok()?.as_raw() {
         RawWindowHandle::Win32(handle) => Some(handle.hwnd.get() as HWND),
         _ => None,
@@ -109,6 +135,22 @@ unsafe extern "system" fn subclass_proc(
             let result = unsafe { DefSubclassProc(hwnd, msg, wparam, lparam) };
             SUGGESTED.set(outer);
             result
+        }
+        WM_WINDOWPOSCHANGING => {
+            if let Some((target, rect)) = REDIRECT.get()
+                && target == hwnd
+            {
+                // SAFETY: for this message `lparam` points at the WINDOWPOS
+                // about to be applied, which the receiver may change.
+                let pos = unsafe { &mut *(lparam as *mut WINDOWPOS) };
+                pos.x = rect.left;
+                pos.y = rect.top;
+                pos.cx = rect.right - rect.left;
+                pos.cy = rect.bottom - rect.top;
+                pos.flags &= !(SWP_NOMOVE | SWP_NOSIZE);
+            }
+            // SAFETY: forwarding the message we were handed (redirected).
+            unsafe { DefSubclassProc(hwnd, msg, wparam, lparam) }
         }
         WM_NCDESTROY => {
             // SAFETY: removing the subclass installed by `watch_dpi_changes`,

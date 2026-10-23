@@ -52,6 +52,8 @@ mod widget;
 mod widgets;
 #[cfg(windows)]
 mod win32_dpi;
+#[cfg(windows)]
+mod win32_fullscreen;
 
 pub use accel::{Accel, AccelMods, ModifierScheme};
 pub use app::{App, WindowConfig};

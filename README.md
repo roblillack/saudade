@@ -36,6 +36,7 @@ Reference apps live under `examples/`. Run any of them with
 | `notepad`       | Editor window with menu bar (`MenuBar`, `TextEditor`); File → Open / Save As drive a `FileDialog`. Also the one example that names a `WindowConfig::icon`, so it shows the desktop's own icon slot filled.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | `filer`         | Filesystem browser using `List` with folder/file icons. Drag an entry out of the window to drop it onto another app (drag _source_ via `EventCtx::start_drag`; Wayland only).                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
 | `dnd`           | A drop zone that highlights while a file drag hovers and lists the paths dropped onto it. Demonstrates OS file drag-and-drop (`DragEnter` / `DragMove` / `DragLeave` / `Drop`) across macOS, Windows, X11, and Wayland.                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| `fullscreen`    | Toggles the window in and out of fullscreen with a button, F, and Escape (`EventCtx::toggle_fullscreen` / `set_fullscreen`), showing the state `EventCtx::is_fullscreen` reports and the size the layout receives. Run it with `-- --fullscreen` to open fullscreen (`WindowConfig::fullscreen`).                                                                                                                                                                                                                                                                                                                                                        |
 | `picker`        | Pick-an-item dialog: `List` + buttons + `Dialog`, with Tab/Shift+Tab focus cycling.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
 | `focus_form`    | `FocusLabel` buddy labels: Alt+letter mnemonics jump focus to the next field.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
 | `counter`       | [7GUIs](https://eugenkiss.github.io/7guis/) task 1 — a `Label` field and a `Button`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
@@ -337,12 +338,53 @@ impl EventCtx {
     pub fn request_focus(&mut self);             // become the keyboard target
     pub fn release_focus(&mut self);             // drop keyboard focus
     pub fn request_window_size(&mut self, w: i32, h: i32); // resize the window
+    pub fn set_fullscreen(&mut self, on: bool);  // fill the display, or not
+    pub fn toggle_fullscreen(&mut self);
+    pub fn is_fullscreen(&self) -> bool;
 }
 ```
 
 Widgets never poke at the runtime directly. The runtime collects the
 requests after a dispatch completes and applies them all at once, which
 keeps event handling deterministic and re-entrancy-free.
+
+#### Fullscreen
+
+`set_fullscreen(true)` makes the main window fill the display it is on —
+borderless, over the title bar and the taskbar, menu bar or panels — and
+`set_fullscreen(false)` puts it back where it was, at the size it had.
+`toggle_fullscreen()` is the View → Full Screen command in one call. The new
+size reaches the widget tree through `layout` like any resize, so a `Column`
+root reflows to fill the display and a fixed-size `Container` root sits centered
+on the window background.
+
+```rust
+MenuItem::action("&Full Screen", |cx| cx.toggle_fullscreen())
+```
+
+The user can also leave fullscreen without the app (macOS's green button, a
+compositor keybinding), so ask `is_fullscreen()` for the current state rather
+than remembering the last request. Within the dispatch that asked for a switch,
+it already answers with the state being switched to. While the window is
+fullscreen, `request_window_size` is held and applied when it leaves.
+
+On Windows and X11 the window switches in place; on macOS it moves into a
+fullscreen space of its own, with the system animation; on Wayland the
+compositor sizes it to the output and saudade restores the windowed size
+afterwards.
+
+On Windows, a fullscreen window the user moves to another display with
+Win+Shift+Left / Right fills that display, whatever its size and density, and
+leaving fullscreen brings it back as a window on the display it is on now: at
+the size it had, scaled for that display, and maximized again if it was. (On X11
+and Wayland, keeping a fullscreen window covering the display it is moved to is
+the window manager's or compositor's job, and the new size arrives through
+`layout` as usual.)
+
+`WindowConfig::fullscreen(true)` opens a window fullscreen to begin
+with, and `MockBackend` honors requests on the spot (`is_fullscreen()`,
+`with_fullscreen()`, and `DispatchOutcome::fullscreen_request`), so they can be
+tested offscreen.
 
 ## Theme
 
@@ -1227,10 +1269,12 @@ pub struct WindowConfig {
     pub resizable: bool,
     pub min_size: Option<Size>,   // logical pixels; resizable windows only
     pub icon: Option<SvgImage>,   // see "Application icon"
+    pub fullscreen: bool,         // open filling the display; see "Fullscreen"
 }
 
 WindowConfig::new("About Retrofetch", 395, 305);
 WindowConfig::new("Notepad", 520, 340).resizable(true).icon(ICON);
+WindowConfig::new("Kiosk", 640, 480).fullscreen(true); // 640×480 once it leaves
 ```
 
 ### Application icon

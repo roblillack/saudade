@@ -67,6 +67,15 @@ While pre-1.0, the minor version is bumped for breaking changes.
 
 ### Added
 
+- Fullscreen windows! `EventCtx::set_fullscreen` makes the main window fill
+  the display it is on — borderless, over the title bar and the taskbar, menu
+  bar or panels — or puts it back where it was, at the size it had;
+  `toggle_fullscreen` flips it, and `is_fullscreen` reports the current state,
+  including a switch the user made through the platform. The new size arrives
+  through `layout` like any resize. `WindowConfig::fullscreen` opens a window
+  fullscreen. Windows and X11 switch in place, macOS moves the window into its
+  own fullscreen space, and on Wayland saudade restores the windowed size the
+  compositor needn't suggest. (#62)
 - `Button::with_icon` leads a push button's label with a compile-time-baked
   `SvgImage`, or shows the icon alone when the label is empty. The icon is
   drawn tinted in the label's color, so it engraves along with the label on a

@@ -174,6 +174,16 @@ pub(crate) fn run(app: App) {
         window.set_min_size(Some((initial_w, initial_h)));
         window.set_max_size(Some((initial_w, initial_h)));
     }
+    if window_cfg.fullscreen {
+        // Asked before the first commit, so the first configure already comes
+        // at the display's size. A fixed window's equal min / max hints would
+        // contradict it; they go back on when it leaves fullscreen.
+        if !window_cfg.resizable {
+            window.set_min_size(None);
+            window.set_max_size(None);
+        }
+        window.set_fullscreen(None);
+    }
     window.commit();
 
     let pool = SlotPool::new((initial_w * initial_h * 4) as usize * 4, &shm)
@@ -202,6 +212,8 @@ pub(crate) fn run(app: App) {
         fractional_scale_obj,
         fractional_scale: None,
         resizable: window_cfg.resizable,
+        fullscreen: window_cfg.fullscreen,
+        windowed_size: window_cfg.fullscreen.then_some((initial_w, initial_h)),
         configured: false,
         needs_redraw: true,
         exit: false,
@@ -290,6 +302,13 @@ struct State {
     /// min == max size, so a programmatic resize ([`Self::apply_resize`])
     /// must move both hints to the new size; a resizable one leaves them be.
     resizable: bool,
+    /// Whether the window is fullscreen: as the compositor last configured it,
+    /// or as we have since asked it to be (see [`Self::apply_fullscreen`]).
+    fullscreen: bool,
+    /// The surface size to return to on leaving fullscreen, recorded on the
+    /// way in. Compositors needn't suggest a size when they unfullscreen a
+    /// window, and the surface would otherwise keep the display's.
+    windowed_size: Option<(u32, u32)>,
     configured: bool,
     /// Set whenever something happened that needs a fresh frame on the
     /// main window. Drawing clears it; the next state change re-sets it.
@@ -632,7 +651,7 @@ impl State {
     /// (turned into accept/reject on the drag offer) and `swallow_key` for the
     /// keyboard path. Most callers ignore the result.
     fn dispatch(&mut self, event: Event) -> EventCtx {
-        let mut ctx = EventCtx::new();
+        let mut ctx = EventCtx::with_fullscreen(self.fullscreen);
         self.root.event(&event, &mut ctx);
         if ctx.paint_requested {
             self.needs_redraw = true;
@@ -649,6 +668,9 @@ impl State {
         }
         if let Some(size) = ctx.resize_request {
             self.apply_resize(size);
+        }
+        if let Some(fullscreen) = ctx.fullscreen_request {
+            self.apply_fullscreen(fullscreen);
         }
         if let Some(data) = ctx.drag_request.take() {
             self.begin_drag(data);
@@ -887,6 +909,12 @@ impl State {
     fn apply_resize(&mut self, size: Size) {
         let w = size.w.max(1) as u32;
         let h = size.h.max(1) as u32;
+        if self.fullscreen {
+            // The display decides the size for now; this is the size to take
+            // once the window leaves fullscreen.
+            self.windowed_size = Some((w, h));
+            return;
+        }
         if w == self.surface_w && h == self.surface_h {
             return;
         }
@@ -900,6 +928,43 @@ impl State {
         self.relayout();
         self.needs_redraw = true;
         self.mark_popups_dirty();
+    }
+
+    /// Ask the compositor to make the main window fullscreen on whichever
+    /// output it chooses (the one the window is on), or to take it out again,
+    /// at a widget's request. The compositor answers with a configure carrying
+    /// the new size, which [`WindowHandler::configure`] adopts; until then the
+    /// window reports the state it was asked for.
+    fn apply_fullscreen(&mut self, fullscreen: bool) {
+        if fullscreen == self.fullscreen {
+            return;
+        }
+        self.fullscreen = fullscreen;
+        if fullscreen {
+            self.windowed_size = Some((self.surface_w, self.surface_h));
+            if !self.resizable {
+                self.window.set_min_size(None);
+                self.window.set_max_size(None);
+            }
+            self.window.set_fullscreen(None);
+        } else {
+            self.window.unset_fullscreen();
+            self.pin_fixed_size_hints();
+        }
+        self.window.commit();
+    }
+
+    /// A fixed window's min == max size hints, pinned to the size it returns
+    /// to from fullscreen. Resizable windows keep the hints they have.
+    fn pin_fixed_size_hints(&mut self) {
+        if self.resizable {
+            return;
+        }
+        let (w, h) = self
+            .windowed_size
+            .unwrap_or((self.surface_w, self.surface_h));
+        self.window.set_min_size(Some((w, h)));
+        self.window.set_max_size(Some((w, h)));
     }
 
     fn draw_main(&mut self) {
@@ -1295,7 +1360,7 @@ impl WindowHandler for State {
             // gets its `on_cancel` here, so a dialog-as-window can revert
             // pending edits on close, matching Escape and the dialog-popup
             // close path below. Most roots leave this a no-op.
-            let mut ctx = EventCtx::new();
+            let mut ctx = EventCtx::with_fullscreen(self.fullscreen);
             self.root.on_cancel(&mut ctx);
             self.exit = true;
             return;
@@ -1324,16 +1389,40 @@ impl WindowHandler for State {
         _serial: u32,
     ) {
         if window.xdg_toplevel() == self.window.xdg_toplevel() {
-            let w = configure
-                .new_size
-                .0
-                .map(|v| v.get())
-                .unwrap_or(self.surface_w.max(1));
-            let h = configure
-                .new_size
-                .1
-                .map(|v| v.get())
-                .unwrap_or(self.surface_h.max(1));
+            let current = (self.surface_w.max(1), self.surface_h.max(1));
+            let suggested = match configure.new_size {
+                (Some(w), Some(h)) => Some((w.get(), h.get())),
+                _ => None,
+            };
+            let fullscreen = configure.is_fullscreen();
+            let (w, h) = if fullscreen {
+                // The compositor may also have fullscreened us on its own (a
+                // keybinding): remember where to come back to either way.
+                if self.windowed_size.is_none() {
+                    self.windowed_size = Some(current);
+                    if !self.resizable {
+                        self.window.set_min_size(None);
+                        self.window.set_max_size(None);
+                    }
+                }
+                suggested.unwrap_or(current)
+            } else if let Some(windowed) = self.windowed_size.take() {
+                // Out of fullscreen. Nothing obliges the compositor to suggest
+                // the old size, so go back to it ourselves — exactly, for a
+                // fixed window, whose size hints go back on too.
+                let size = if self.resizable {
+                    suggested.unwrap_or(windowed)
+                } else {
+                    self.window.set_min_size(Some(windowed));
+                    self.window.set_max_size(Some(windowed));
+                    windowed
+                };
+                self.mark_popups_dirty();
+                size
+            } else {
+                suggested.unwrap_or(current)
+            };
+            self.fullscreen = fullscreen;
             self.surface_w = w;
             self.surface_h = h;
             let first_configure = !self.configured;
