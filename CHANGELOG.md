@@ -21,7 +21,7 @@ While pre-1.0, the minor version is bumped for breaking changes.
   `font_size` drops from 13 to 11 to suit, which still sets text about an
   eighth larger than before. The Wayland backend, which renders at the
   compositor's integer buffer scale, is unaffected, so a Wayland window now
-  comes out about a quarter smaller than the same program under X11.
+  comes out about a quarter smaller than the same program under X11. (#54)
 - Push buttons now set their labels in the **bold** face of the theme font,
   greyed ones included (both the engraved white copy and the grey one over
   it) — a button is the one thing on a panel you press, and the weight says
@@ -49,7 +49,7 @@ While pre-1.0, the minor version is bumped for breaking changes.
   of 2 and 1 — since the design's 1-pixel relief all but vanished against a
   face that much bigger. Buttons, scrollbar arrows and thumbs, slider thumbs,
   dropdown buttons and the mock title-bar buttons all wear it; recipes ask for
-  it with `Frame::bevel_ring`.
+  it with `Frame::bevel_ring`. (#54)
 
 ### Fixed
 
@@ -84,7 +84,7 @@ While pre-1.0, the minor version is bumped for breaking changes.
   and at a fractional scale `snap(x + 1) - snap(x)` disagrees with that
   thickness at about every other position: the two borders landed a device
   pixel apart, reading as a doubled or ragged divider. A frame can now mark the
-  shared edge as *merged* (`Merged`, `Painter::crisp_merged`, and merged
+  shared edge as _merged_ (`Merged`, `Painter::crisp_merged`, and merged
   variants of `stroke_rect`, `raised_bevel` / `sunken_bevel`, `light_button`),
   which re-anchors that edge to the very device pixels the neighbour's line
   occupies. `List`, `TextEditor` and the scrollbar thumb use it; integer scales
@@ -108,7 +108,7 @@ While pre-1.0, the minor version is bumped for breaking changes.
   runtime now also re-reads the display when the window comes back to the
   front, which is when a resolution changed in System Settings is first seen.
 - `Theme::button_style` — the `FontStyle` a push button sets its label in,
-  bold by default (see *Changed* above). (#54)
+  bold by default (see _Changed_ above). (#54)
 - `Painter::text_centered_styled` — `text_centered` in a given family and
   style, which stays the sans-regular shorthand. It measures the very face it
   draws with, so a bold label sits centered on its own width. (#54)
@@ -118,6 +118,12 @@ While pre-1.0, the minor version is bumped for breaking changes.
   a device pixel inside or outside the frame line at a fractional scale,
   letting a row fill overwrite the line's inner pixel or leave a seam of stale
   background along it. `List` clips its rows with it. (#54)
+- Function keys. `NamedKey` gains `F1` to `F24`, which every backend now
+  reports as `KeyDown` / `KeyUp` instead of dropping them, and accelerators
+  take them like any other key: `with_accel("F5")`, `"Shift+F5"`,
+  `"Ctrl+F1"`, labelled the same way in the menu. `Accel::new` builds a
+  chord without the command modifier, such as F5 alone. A `match` over
+  `NamedKey` without a catch-all arm needs the new variants. (#63)
 - `WindowConfig::icon(SvgImage)` gives a program the icon the desktop shows for
   it. One `include_svg!` mark goes to every place that wants one: the Windows
   title bar (`ICON_SMALL`) and taskbar / Alt-Tab switcher (`ICON_BIG`), both

@@ -194,13 +194,14 @@ pub struct DragData { pub paths: Vec<PathBuf> }
 pub enum MouseButton { Left, Right, Middle }
 
 pub enum Key {
-    Named(NamedKey),  // editing / navigation keys
+    Named(NamedKey),  // editing / navigation / function keys
     Char(char),       // physical key as a logical character
 }
 
 pub enum NamedKey {
     Enter, Backspace, Delete, Tab, Escape, Space,
     Left, Right, Up, Down, Home, End, PageUp, PageDown,
+    F1, F2, /* … */ F24,
 }
 
 pub struct Modifiers { pub shift: bool, pub control: bool, pub alt: bool, pub logo: bool }
@@ -224,8 +225,8 @@ backends normalize so both kinds of scroll feed widgets the same units.
 whenever the pointer is anywhere over the field, leaving the selection and
 caret untouched.
 
-`KeyDown` / `KeyUp` are for _keys_ — useful for Backspace, arrows, and
-modifier-bearing shortcuts. `Char` is for _text input_ — what the
+`KeyDown` / `KeyUp` are for _keys_ — useful for Backspace, arrows, function
+keys, and modifier-bearing shortcuts. `Char` is for _text input_ — what the
 keyboard layout decided the user typed. The runtime suppresses `Char`
 when a command modifier (Ctrl / Alt / Logo) is held so editors don't
 ingest "\x01" for Ctrl+A; the matching `KeyDown` still fires.

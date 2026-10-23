@@ -43,6 +43,15 @@ impl From<NamedKey> for Key {
     }
 }
 
+/// The keys that produce no text of their own: editing, navigation and the
+/// function keys.
+///
+/// The function keys stop at F24, the last one Windows has a virtual key for;
+/// xkb and macOS name a few more, but no keyboard sold produces them. On a
+/// laptop the top row often sends media keys unless Fn is held, and the OS or
+/// desktop keeps some chords for itself (Alt+F4, Ctrl+Alt+F1 switching virtual
+/// terminals on Linux, F11 showing the desktop on macOS), which never reach
+/// the window.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum NamedKey {
     Enter,
@@ -59,6 +68,30 @@ pub enum NamedKey {
     End,
     PageUp,
     PageDown,
+    F1,
+    F2,
+    F3,
+    F4,
+    F5,
+    F6,
+    F7,
+    F8,
+    F9,
+    F10,
+    F11,
+    F12,
+    F13,
+    F14,
+    F15,
+    F16,
+    F17,
+    F18,
+    F19,
+    F20,
+    F21,
+    F22,
+    F23,
+    F24,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
