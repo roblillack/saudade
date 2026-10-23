@@ -100,6 +100,26 @@ fn button_disabled() {
     });
 }
 
+/// Icon buttons: an icon leading its label, an icon on its own (empty label),
+/// and a disabled one whose icon engraves along with the label.
+#[test]
+fn button_icon() {
+    const ICON: saudade::SvgImage = saudade::include_svg!("assets/scrollbar/up.svg");
+    snapshot_at_all_scales("button_icon", 240, 40, || {
+        Box::new(
+            Container::new(240, 40)
+                .with_background(Color::LIGHT_GRAY)
+                .add(Button::new(Rect::new(8, 8, 80, 24), "Up").with_icon(ICON))
+                .add(Button::new(Rect::new(96, 8, 32, 24), "").with_icon(ICON))
+                .add(
+                    Button::new(Rect::new(136, 8, 96, 24), "Upload")
+                        .with_icon(ICON)
+                        .with_enabled(false),
+                ),
+        )
+    });
+}
+
 // ---------------------------------------------------------------- Label
 
 #[test]
