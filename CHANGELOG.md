@@ -67,6 +67,25 @@ While pre-1.0, the minor version is bumped for breaking changes.
 
 ### Added
 
+- Fullscreen windows. `EventCtx::set_fullscreen` makes the main window fill
+  the display it is on — borderless, over the title bar and the taskbar, menu
+  bar or panels — or puts it back where it was, at the size it had;
+  `toggle_fullscreen` flips it, and `is_fullscreen` reports the current state,
+  including a switch the user made through the platform. The new size arrives
+  through `layout` like any resize. `WindowConfig::fullscreen` opens a window
+  fullscreen. Windows and X11 switch in place, macOS moves the window into its
+  own fullscreen space, and on Wayland saudade restores the windowed size the
+  compositor needn't suggest. On Windows a fullscreen window moved to another
+  display (Win+Shift+Left / Right) fills that one, across displays of
+  different density and resolution alike, and leaving fullscreen then brings
+  the window back on the display it is on now — at the size it had, scaled to
+  that display's density, and maximized again if it was. While fullscreen,
+  `request_window_size` is held
+  until the window leaves it. `MockBackend` honors the requests on the spot
+  (`is_fullscreen`, `with_fullscreen`, `DispatchOutcome::fullscreen_request`),
+  and `render_framed` draws a fullscreen window without chrome. `WindowConfig`
+  and `DispatchOutcome` each gain a field, which code building them with a
+  struct literal now has to name.
 - `Button::with_icon` leads a push button's label with a compile-time-baked
   `SvgImage`, or shows the icon alone when the label is empty. The icon is
   drawn tinted in the label's color, so it engraves along with the label on a

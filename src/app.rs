@@ -11,7 +11,9 @@ use winit::event::{
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{Key as WKey, ModifiersKeyState, NamedKey as WNamedKey};
 use winit::monitor::MonitorHandle;
-use winit::window::{CursorIcon, Window, WindowAttributes, WindowButtons, WindowId, WindowLevel};
+use winit::window::{
+    CursorIcon, Fullscreen, Window, WindowAttributes, WindowButtons, WindowId, WindowLevel,
+};
 
 // X11 platform extensions. winit 0.30's generic `with_parent_window` is
 // not enough on X11 (it reparents into the main window, which then clips
@@ -49,6 +51,8 @@ pub struct WindowConfig {
     /// The program's icon, as vectors — see [`icon`](Self::icon). `None` leaves
     /// whatever default the platform gives an app that doesn't name one.
     pub icon: Option<SvgImage>,
+    /// Open the window fullscreen — see [`fullscreen`](Self::fullscreen).
+    pub fullscreen: bool,
 }
 
 impl WindowConfig {
@@ -59,6 +63,7 @@ impl WindowConfig {
             resizable: false,
             min_size: None,
             icon: None,
+            fullscreen: false,
         }
     }
 
@@ -96,6 +101,15 @@ impl WindowConfig {
     /// SVG parser stays out of the binary.
     pub fn icon(mut self, icon: SvgImage) -> Self {
         self.icon = Some(icon);
+        self
+    }
+
+    /// Open the window filling its display, as if a widget had called
+    /// [`EventCtx::set_fullscreen`](crate::event::EventCtx::set_fullscreen)
+    /// straight away — for kiosks, slideshows and the like. [`size`](Self::size)
+    /// is still the size the window takes when it leaves fullscreen.
+    pub fn fullscreen(mut self, fullscreen: bool) -> Self {
+        self.fullscreen = fullscreen;
         self
     }
 }
@@ -259,6 +273,18 @@ struct AppHandler {
     /// Cleared just before each tick we fire, so the tick handler re-arms it
     /// only while it still needs more (see [`Self::pump_ticks`]).
     tick_requested: bool,
+    /// A window size asked for while the window was fullscreen, held until it
+    /// leaves fullscreen — while it fills the display, the display decides.
+    windowed_resize: Option<Size>,
+    /// Windows: the display a fullscreen window fills and the windowed rect it
+    /// goes back to — see [`crate::win32_fullscreen`].
+    #[cfg(windows)]
+    fullscreen_home: Option<crate::win32_fullscreen::Home>,
+    /// Windows: the main window was moved, resized or rescaled during this
+    /// event burst; a fullscreen window is fitted to its display again once
+    /// the burst is over.
+    #[cfg(windows)]
+    refit_fullscreen: bool,
 
     // File drag-and-drop coalescing. winit reports `HoveredFile` / `DroppedFile`
     // one path at a time with no "that's all the files" terminal event, so we
@@ -385,6 +411,11 @@ impl AppHandler {
             popups: Vec::new(),
             last_tick: None,
             tick_requested: false,
+            windowed_resize: None,
+            #[cfg(windows)]
+            fullscreen_home: None,
+            #[cfg(windows)]
+            refit_fullscreen: false,
             drag_hovered: Vec::new(),
             drag_dropped: Vec::new(),
             drag_active: false,
@@ -458,6 +489,11 @@ impl ApplicationHandler for AppHandler {
         self.main_surface = Some(surface);
         self.refresh_screen();
         self.needs_redraw = true;
+        // Only now, with the window at its windowed size, so that size is what
+        // it returns to on leaving fullscreen.
+        if self.window_config.fullscreen {
+            self.apply_fullscreen(true);
+        }
     }
 
     fn window_event(
@@ -475,6 +511,12 @@ impl ApplicationHandler for AppHandler {
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
         self.flush_file_drag(event_loop);
+        // Once the moves and resizes of this burst have all landed — a
+        // Win+Shift+Arrow move between displays is several of them.
+        #[cfg(windows)]
+        if std::mem::take(&mut self.refit_fullscreen) {
+            self.refit_fullscreen();
+        }
         self.sync_popup(event_loop);
         self.pump_ticks(event_loop);
 
@@ -517,7 +559,7 @@ impl AppHandler {
                 // gets its `on_cancel` here, so a dialog-as-window can revert
                 // pending edits on close, just as Escape or a `Modal`'s close
                 // would. Most roots leave this a no-op.
-                let mut ctx = EventCtx::new();
+                let mut ctx = EventCtx::with_fullscreen(self.is_fullscreen());
                 self.root.on_cancel(&mut ctx);
                 event_loop.exit();
             }
@@ -530,6 +572,10 @@ impl AppHandler {
                 // The screen rect is relative to the window, and the window may
                 // even have crossed onto another display.
                 self.refresh_screen();
+                #[cfg(windows)]
+                {
+                    self.refit_fullscreen = true;
+                }
             }
             // The main window took the keyboard back while a menu was up, so
             // something outside the menu was clicked — the title bar, most
@@ -552,16 +598,29 @@ impl AppHandler {
                 // Dragging the top or left edge resizes *and* moves the window.
                 self.refresh_screen();
                 self.needs_redraw = true;
+                #[cfg(windows)]
+                {
+                    self.refit_fullscreen = true;
+                }
             }
             WindowEvent::ScaleFactorChanged {
                 scale_factor,
                 mut inner_size_writer,
             } => {
                 // Before winit gets to place the window itself, which it
-                // otherwise sends back to the display it is leaving.
+                // otherwise sends back to the display it is leaving. A
+                // fullscreen window fills the display it is crossing to, at
+                // that display's size, rather than the rect Windows suggests.
                 #[cfg(windows)]
-                if let Some(win) = self.main_win.as_deref() {
-                    crate::win32_dpi::follow_dpi_change(win);
+                if let Some(win) = self.main_win.clone() {
+                    if self.is_fullscreen() {
+                        if let Some(size) = crate::win32_fullscreen::follow_dpi_change(&win) {
+                            let _ = inner_size_writer.request_inner_size(size);
+                        }
+                        self.refit_fullscreen = true;
+                    } else {
+                        crate::win32_dpi::follow_dpi_change(&win);
+                    }
                 }
                 self.adopt_scale(scale_factor as f32, &mut inner_size_writer);
                 self.needs_redraw = true;
@@ -837,7 +896,7 @@ impl AppHandler {
     }
 
     fn dispatch(&mut self, event: &Event, event_loop: &ActiveEventLoop) -> EventCtx {
-        let mut ctx = EventCtx::new();
+        let mut ctx = EventCtx::with_fullscreen(self.is_fullscreen());
         self.root.event(event, &mut ctx);
         if ctx.paint_requested {
             self.needs_redraw = true;
@@ -854,6 +913,9 @@ impl AppHandler {
         }
         if let Some(size) = ctx.resize_request {
             self.apply_resize(size);
+        }
+        if let Some(fullscreen) = ctx.fullscreen_request {
+            self.apply_fullscreen(fullscreen);
         }
         if ctx.drag_request.is_some() {
             // A widget asked to start an outbound drag. winit exposes no API to
@@ -907,10 +969,68 @@ impl AppHandler {
     ///
     /// Asked for in physical pixels, since `size` counts *saudade's* logical
     /// pixels and a UI scale makes those larger than the platform's own unit.
+    /// Whether the main window is fullscreen. winit tracks this itself,
+    /// including a switch the user made through the platform (macOS's green
+    /// button), so there is no copy of it to keep in sync here.
+    fn is_fullscreen(&self) -> bool {
+        self.main_win
+            .as_ref()
+            .is_some_and(|w| w.fullscreen().is_some())
+    }
+
+    /// Put the main window into borderless fullscreen on the display it is on,
+    /// or back into an ordinary window, at a widget's request (see
+    /// [`EventCtx::set_fullscreen`]). The size change arrives as a `Resized`
+    /// event like any other, which relayouts and repaints.
+    fn apply_fullscreen(&mut self, fullscreen: bool) {
+        let Some(win) = self.main_win.clone() else {
+            return;
+        };
+        if fullscreen == self.is_fullscreen() {
+            return;
+        }
+        if fullscreen {
+            #[cfg(windows)]
+            {
+                self.fullscreen_home = crate::win32_fullscreen::remember(&win);
+            }
+            win.set_fullscreen(Some(Fullscreen::Borderless(None)));
+        } else {
+            // On Windows the window may have been moved to another display
+            // meanwhile, which winit's restore knows nothing about.
+            #[cfg(windows)]
+            crate::win32_fullscreen::leave(&win, self.fullscreen_home.take());
+            #[cfg(not(windows))]
+            win.set_fullscreen(None);
+        }
+        self.needs_redraw = true;
+        if !fullscreen && let Some(size) = self.windowed_resize.take() {
+            self.apply_resize(size);
+        }
+    }
+
+    /// Windows: make a fullscreen main window fill the display it is on, after
+    /// something moved or resized it — Win+Shift+Left / Right, most often, which
+    /// moves it to the next display like any other window. See
+    /// [`crate::win32_fullscreen`].
+    #[cfg(windows)]
+    fn refit_fullscreen(&mut self) {
+        let Some(win) = self.main_win.clone() else {
+            return;
+        };
+        if self.is_fullscreen() {
+            crate::win32_fullscreen::refit(&win);
+        }
+    }
+
     fn apply_resize(&mut self, size: Size) {
         let Some(win) = self.main_win.clone() else {
             return;
         };
+        if self.is_fullscreen() {
+            self.windowed_resize = Some(size);
+            return;
+        }
         let requested = self.to_physical(size);
         if let Some(new_phys) = win.request_inner_size(requested) {
             self.physical = new_phys;
@@ -1288,10 +1408,12 @@ impl AppHandler {
         if ui_moved && let Some(min) = self.window_config.min_size {
             win.set_min_inner_size(Some(self.to_platform(min)));
         }
-        if win.is_maximized() {
-            // A maximized window is as big as the display it fills, whatever
-            // it held before. Asking for anything else un-maximizes it on
-            // Windows, so it keeps the size the platform gives it.
+        if win.is_maximized() || win.fullscreen().is_some() {
+            // A maximized or fullscreen window is as big as the display it
+            // fills, whatever it held before. Asking for anything else
+            // un-maximizes it on Windows, and would leave a fullscreen one
+            // sized for the display it left, so it keeps the size the platform
+            // (or, for fullscreen on Windows, the runtime) gives it.
             self.physical = win.inner_size();
         } else {
             self.physical = self.to_physical(logical);

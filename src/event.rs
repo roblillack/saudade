@@ -400,6 +400,13 @@ pub struct EventCtx {
     /// [`Cursor::Default`] when it's `None` — so the shape always reflects the
     /// widget the pointer currently rests over.
     pub(crate) cursor_request: Option<Cursor>,
+    /// Whether the window was fullscreen when this dispatch began, filled in by
+    /// the runtime — see [`Self::is_fullscreen`].
+    pub(crate) fullscreen: bool,
+    /// Set when a widget calls [`Self::set_fullscreen`] (or
+    /// [`Self::toggle_fullscreen`]): the state the window should be in once the
+    /// dispatch is over. Applied by the runtime alongside the other requests.
+    pub(crate) fullscreen_request: Option<bool>,
 }
 
 impl EventCtx {
@@ -418,6 +425,17 @@ impl EventCtx {
             tick_requested: false,
             focus_next_requested: false,
             cursor_request: None,
+            fullscreen: false,
+            fullscreen_request: None,
+        }
+    }
+
+    /// A context for a dispatch into a window whose fullscreen state is
+    /// `fullscreen`.
+    pub(crate) fn with_fullscreen(fullscreen: bool) -> Self {
+        Self {
+            fullscreen,
+            ..Self::new()
         }
     }
 
@@ -556,9 +574,52 @@ impl EventCtx {
     /// [`Self::request_paint`]). Handy for a window that should grow or shrink
     /// to fit a mode the user just toggled. The window's size is the app's to
     /// set — unlike the logical→physical scale factor, which only the OS
-    /// controls.
+    /// controls. While the window is [fullscreen](Self::set_fullscreen) the
+    /// display decides its size, so the request is held and applied when the
+    /// window leaves fullscreen.
     pub fn request_window_size(&mut self, width: i32, height: i32) {
         self.resize_request = Some(Size::new(width.max(1), height.max(1)));
+    }
+
+    /// Ask the runtime to make the main window fill the display it is on
+    /// (`true`), or to return it to an ordinary window (`false`). Applied after
+    /// the current event finishes dispatching, like
+    /// [`Self::request_window_size`].
+    ///
+    /// Fullscreen is borderless and covers the whole display, title bar and
+    /// taskbar / menu bar / panels included. The window gets the display's size
+    /// through the usual [`Widget::layout`](crate::Widget::layout) call, so a
+    /// [`Column`](crate::widgets::Column) root reflows to fill it and a
+    /// fixed-size [`Container`](crate::widgets::Container) root is centered on
+    /// the window background, as on any resize. Leaving fullscreen restores
+    /// the size and position the window had before.
+    ///
+    /// How it looks is the platform's call: on macOS the window moves into a
+    /// fullscreen space of its own, with the system's animation; elsewhere it
+    /// switches in place. The user can usually leave fullscreen without the
+    /// app's help, too (macOS's green button, a Wayland compositor's
+    /// keybinding), so read the current state from [`Self::is_fullscreen`]
+    /// rather than remembering what was last asked for.
+    pub fn set_fullscreen(&mut self, fullscreen: bool) {
+        self.fullscreen_request = Some(fullscreen);
+        self.paint_requested = true;
+    }
+
+    /// Switch the main window into fullscreen if it isn't, and out of it if it
+    /// is — what a View → Full Screen command does. See
+    /// [`Self::set_fullscreen`].
+    pub fn toggle_fullscreen(&mut self) {
+        let next = !self.is_fullscreen();
+        self.set_fullscreen(next);
+    }
+
+    /// Whether the main window is fullscreen — as the runtime last saw it when
+    /// this dispatch began, or as a widget has since asked it to be with
+    /// [`Self::set_fullscreen`]. Switching can take the platform a moment (the
+    /// macOS animation, a Wayland compositor's configure round trip), so right
+    /// after a change the answer is the state being switched *to*.
+    pub fn is_fullscreen(&self) -> bool {
+        self.fullscreen_request.unwrap_or(self.fullscreen)
     }
 
     /// Begin dragging `data` out of this window as an OS drag-and-drop
