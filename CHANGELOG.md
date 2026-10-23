@@ -49,6 +49,9 @@ While pre-1.0, the minor version is bumped for breaking changes.
   the window at the rect Windows suggests before winit gets to place it. A
   crossing is now one scale change each way, whether the window is dragged or
   moved with Win+Shift+Arrow, and a maximized window stays maximized. (#57)
+- A dialog that opens on a display of another density than the main window's
+  is now drawn at that display's scale. `Painter::system_scale` and
+  `Painter::display_dpi` report the dialog's own display while it paints. (#60)
 - Button frames, bevels, focus rings and etched dividers are crisp at a
   fractional scale. Each chrome line used to snap on its own, from its own
   position in the window: at 2.33x a frame came out heavier along one edge than
