@@ -54,7 +54,7 @@ While pre-1.0, the minor version is bumped for breaking changes.
   take them like any other key: `with_accel("F5")`, `"Shift+F5"`,
   `"Ctrl+F1"`, labelled the same way in the menu. `Accel::new` builds a
   chord without the command modifier, such as F5 alone. A `match` over
-  `NamedKey` without a catch-all arm needs the new variants.
+  `NamedKey` without a catch-all arm needs the new variants. (#63)
 - `WindowConfig::icon(SvgImage)` gives a program the icon the desktop shows for
   it. One `include_svg!` mark goes to every place that wants one: the Windows
   title bar (`ICON_SMALL`) and taskbar / Alt-Tab switcher (`ICON_BIG`), both
