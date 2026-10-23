@@ -7,10 +7,11 @@ use crate::widget::{PopupKind, PopupRequest, Widget};
 use crate::widgets::menu_popup::{self, ITEM_HEIGHT, MenuPopup, SEPARATOR_HEIGHT};
 use crate::widgets::mnemonic::{draw_label_with_mnemonic, parse_label};
 
-const BAR_PADDING: i32 = 8;
+/// Horizontal padding for items inside the menu bar.
+const BAR_PADDING: i32 = 6;
 /// Top inset for the label baseline inside the bar. Tight enough that the
-/// 13-pt menu font fits in a 20-px bar without growing it.
-const BAR_LABEL_INSET_Y: i32 = 1;
+/// 11-pt menu font fits in a 20-px bar without growing it.
+const BAR_LABEL_INSET_Y: i32 = 2;
 
 /// One entry inside a drop-down [`Menu`].
 pub enum MenuItem {

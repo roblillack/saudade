@@ -46,14 +46,17 @@ Reference apps live under `examples/`. Run any of them with
 | `circle_drawer` | 7GUIs task 6 — a custom canvas (no circle primitive: midpoint outlines, span-filled disks) with hover selection, a `ContextMenu` right-click menu, a real modal dialog (`Modal`) hosting the diameter `Slider`, and snapshot undo/redo.                                                                                                                                                                                                                                                                                                                                                                                                                  |
 | `cells`         | 7GUIs task 7 — a scrollable A–Z / 0–99 spreadsheet `Grid` (built on `ScrollBar` + `TextInput`) with a formula engine: cell refs, `+ - * /`, ranges, `SUM`/`AVG`/…, reactive recompute and cycle detection.                                                                                                                                                                                                                                                                                                                                                                                                                                               |
 | `patterns`      | Previews the window background patterns (`none`, `solid`, `dots`, `lines`, `diagonal`, `cross-stitch`): press `p` to cycle the pattern and `c` to cycle the color. Every app draws one behind its widgets — default `superlight` `diagonal`, overridable with `SAUDADE_WINDOW_PATTERN` / `SAUDADE_WINDOW_PATTERN_COLOR` (e.g. `SAUDADE_WINDOW_PATTERN=dots SAUDADE_WINDOW_PATTERN_COLOR=light`).                                                                                                                                                                                                                                                         |
+| `fonts`         | A type specimen: all twelve faces — sans / serif / monospace, each in regular, bold, italic and bold-italic — drawn at nine sizes in one large scrolling table (`Painter::text_styled`, columns sized from `measure_text_styled`, size header and style column frozen). The column matching `Theme::font_size` is highlighted; a family the host has no font for says so in place of its four rows.                                                                                                                                                                                                                                                    |
 | `scaling`       | Previews widgets at an arbitrary logical→physical scale via `Painter::draw_scaled`: a `Slider` and two rows of preset `Button`s walking a quarter ladder (1.0x / 1.25x / … / 3.0x, plus 3.5x) drive a "preview scale" — starting at the display's OS scale — that a small panel of real widgets (`TextInput`, `Dropdown`, `Checkbox`, `Button`s including a focused one for its dotted focus rectangle, `ProgressBar`) redraws at, plus a "zoom in 2x" `Checkbox` that magnifies the result. The window resizes itself (via `EventCtx::request_window_size`) to fit the preview at the chosen scale. The window's own (OS-owned) scale is never touched. |
+| `credit_card`   | Draws an ISO/IEC 7810 bank card (85.60 × 53.98 mm) at its real size, whatever scaling the display is set to: the card is painted in device pixels from `Painter::display_dpi`, while the window around it follows the scale factor. A readout compares how big a logical pixel came out on this display with the 1/72 in it aims for. Where the display reports no physical size (X11, Wayland) the card falls back to 72 logical pixels to the inch.                                                                                                                                                                                                    |
 | `svg`           | Compares `include_svg!` (SVG baked to polygons at compile time, filled at runtime — no SVG crate in the binary) against `include_str!` + `resvg` (parse + rasterize at runtime). Draws six icons both ways for a side-by-side fidelity check and prints a micro-benchmark to the console (run with `--release`). Needs `resvg` only as a dev-dependency, for the comparison.                                                                                                                                                                                                                                                                             |
 | `chrome`        | Renders an "about box" offscreen and wraps it in Canoe-style window chrome (title bar, frame, drop shadow on a teal desktop) via `MockBackend::render_framed`, writing one PNG per frame style (`Resizable` / `Fixed` / `Dialog`). Opens no window — it generates screenshots.                                                                                                                                                                                                                                                                                                                                                                           |
 
 ```console
 $ cargo run --example notepad        # or: filer, dnd, picker, counter, temperature,
                                      #     flight_booker, timer, crud, circle_drawer,
-                                     #     cells, patterns, scaling, svg
+                                     #     cells, patterns, fonts, scaling,
+                                     #     credit_card, svg
 ```
 
 Saudade was extracted from
@@ -355,13 +358,23 @@ pub struct Theme {
     pub highlight_bg: Color,    // selected-item bg (Win 3.1: navy)
     pub highlight_text: Color,  // selected-item fg (Win 3.1: white)
     pub font_size: f32,         // all chrome text
+    pub button_style: FontStyle, // face a push button's label is set in
 }
 ```
 
 The default is `Theme::windows_31()`: white workspace, light-gray button
 face, white top/left highlight, mid-gray bottom/right shadow, black outer
-border, navy/white selection, 13pt text. Pass an alternative via
+border, navy/white selection, 11pt text. Pass an alternative via
 `App::with_theme(...)` if you want to skin the same widgets differently.
+
+`button_style` is the face a push button sets its label in. It defaults to
+`FontStyle::Bold` — a button is the one thing on a panel you press, and the
+weight says so at a glance — and `FontStyle::Regular` gives a lighter look.
+It is a button knob and nothing more: menus, captions, fields, list rows and
+dialog text stay regular either way. A family the host ships no real bold for
+falls back to its own regular face rather than to a synthesized one, and the
+label is measured in whichever face it is drawn in, so a wider one still
+centers on the button.
 
 ## Built-in widgets
 
@@ -1193,7 +1206,9 @@ family, style)` / `Painter::measure_text_styled(.., family, style)`,
 choosing a `FontFamily` (`Sans` / `Serif` / `Mono`) and a `FontStyle`
 (`Regular` / `Bold` / `Italic` / `BoldItalic`). `Painter::text` /
 `Painter::measure_text` are the sans-regular shorthand; the text editors
-draw with the mono family.
+draw with the mono family. The chrome itself asks for a face this way: a
+push button draws its label in `Theme::button_style`, the sans family's bold
+by default.
 
 Saudade does **not** ship a bundled bitmap font, so its text rendering
 inherits the local system font. The Win 3.1 chrome still looks right,
@@ -1404,9 +1419,7 @@ dots at all.
 
 So the frame primitives don't snap line by line. `Painter::crisp` drops
 the painter to device pixels, snaps the rect once, and hands the recipe
-a `Frame`, which places chrome the way `include_svg!` marks are
-rasterized: the geometry is written in resolution-independent units and
-each boundary is scaled and rounded on the way to the buffer.
+a `Frame`, which places every ring measured from that one snapped edge.
 
 ```rust
 painter.crisp(box_rect, |p, f| {
@@ -1418,26 +1431,46 @@ painter.crisp(box_rect, |p, f| {
 A `Frame` answers in _depths_: `f.depth(d)` is how many device pixels
 in from the widget's edge logical depth `d` lands, `f.ring(d)` is the
 four sides of the ring between `depth(d)` and `depth(d + 1)`, and
-`f.inside(d)` is what is left for the face. Nothing accumulates —
-every boundary is measured from the widget's own edge, and adjacent
-rings meet on the one they share — so a band lands within half a
-device pixel of its drawn depth no matter how deep the chrome goes:
+`f.inside(d)` is what is left for the face. Every boundary is measured
+from the widget's own edge and adjacent rings meet on the one they
+share, so a ring is the same thickness on all four sides and on every
+widget at that scale.
 
-| scale | 2px bevel, nominal | drawn |
-| ----- | ------------------ | ----- |
-| 1.25x | 2.5                | 2     |
-| 1.5x  | 3.0                | 3     |
-| 2.0x  | 4.0                | 4     |
-| 2.25x | 4.5                | 5     |
-| 2.5x  | 5.0                | 5     |
-| 2.75x | 5.5                | 5     |
-| 3.0x  | 6.0                | 6     |
+A depth is worth a whole number of device pixels, `Painter::chrome_unit`,
+rather than the scale itself. The chrome is the design's own drawn at
+an integer zoom, every ring in it equally thick, and whatever the
+fractional rest of the scale buys goes to the face. The unit is 1
+below 1.75x and the scale's whole part above it — so a scale that is a
+whole multiple of one below 1.75x wears that one's chrome blown up —
+except from 1.75x up to 2x, which takes 2:
 
-Below 1.5x the depths are pinned to the design's own rather than
-scaled, which is where that 2 at 1.25x comes from: a logical pixel is
-still worth a single device pixel there, so scaling the depths would
-put a 3-pixel bevel under a 1-pixel border where the design says 2
-and 1.
+| scale (from – to) | unit | 2px bevel | e.g.                          |
+| ----------------- | ---- | --------- | ----------------------------- |
+| 1.0x – 1.5x       | 1    | 2         | 1.25x: the design's own       |
+| 1.5x – 1.75x      | 1    | 3 (2 + 1) | 1.5x: the bevel at 1.5x alone |
+| 1.75x – 2.0x      | 2    | 4         | 1.75x: 0.875x doubled         |
+| 2.0x – 3.0x       | 2    | 4         | 2.5x: 1.25x doubled           |
+| 3.0x – 4.0x       | 3    | 6         | 3.75x: 1.25x tripled          |
+
+From 1.5x up to 1.75x the outline stays one device pixel but a bevel —
+the highlight and shadow inside a button's outline, asked for with
+`f.bevel_ring(outline, i)` — is drawn at 1.5x: a 2-pixel bevel 3 deep,
+its outer ring 2 and its inner one 1. There the face is half as big
+again as the design's or more, and a one-pixel bevel all but
+disappears into it, while doubling the outline too would bring back
+the heavy, blurry border the pin keeps out. The outer ring takes the
+odd pixel so that a line one ring deep on its own — a scrollbar
+arrow's highlight, a pressed button's — comes out 2 rather than the
+1 the band exists to thicken; a whole 2 a ring would keep the rings
+even, but its 4-pixel bevel swamps the 1-pixel outline. No band
+further up needs the same: above 2x the face is never as much as 1.5
+times the unit.
+
+Scaling the depths by the scale itself distorts the frame instead,
+since half a device pixel of rounding is most of a line one or two
+pixels thick: at 1.25x it puts a 3-pixel bevel under a 1-pixel border
+where the design says 2 and 1, and at 2.5x a 3-pixel border over a
+bevel of a 2-pixel ring and a 3-pixel one.
 
 A few consequences:
 
@@ -1445,11 +1478,10 @@ A few consequences:
   rect, because each ring is inset by its own depth: that is the
   staircase a Win 3.1 bevel steps down at its corners. Sharing the
   boundary between them is what keeps the pair exact.
-- `Painter::chrome_unit` — a line _thickness_ rounded to whole units —
-  is the right answer for a lone thin line (a divider, a caret, a grid
-  rule) and nothing else. Across a frame the error compounds with depth
-  and steps in whole units: 4 device pixels at 2.25x, 6 at 2.5x, a 50%
-  jump for an 11% change of scale.
+- `Painter::chrome_unit` is also what a lone thin line — a divider, a
+  caret, a grid rule — is drawn at, so it matches the frames around it.
+  A frame is still built off a `Frame` rather than out of it, because
+  only the frame measures every ring from one snapped edge.
 - `stroke_rect`, `raised_bevel`, `sunken_bevel`, `button`,
   `light_button`, `focus_rect` and `etched_h_line` all go through
   `crisp`, so widgets get this for free; a widget drawing chrome of its
@@ -1457,48 +1489,56 @@ A few consequences:
   painter is at `scale == 1.0`, so those primitives are no help there —
   each would draw a single device pixel. Take the geometry from the
   `Frame`.
-- The dotted focus ring is placed by weight rather than by depth: the
-  dot is `depth(1)` square and the pitch exactly twice that, because
-  what the eye reads in a dash is its rhythm. A dash has no geometry
-  riding on it, so a pitch up to a pixel off nominal costs nothing.
+- The dotted focus ring's dot is `depth(1)` square and its pitch
+  exactly twice that, because what the eye reads in a dash is its
+  rhythm.
 
 ### How big a logical pixel is
 
-Widgets are laid out in logical pixels at a **reference density of 96
+Widgets are laid out in logical pixels at a **reference density of 72
 dpi**: a `List` row is 18 of them, a checkbox 13, the padding either
-side of a menu-bar label 8 — Windows 3.1 metrics, drawn for a display
-where 96 of them span an inch.
+side of a menu-bar label 8. These are Windows 3.1 metrics, drawn for
+screens running 57–85 ppi, where a 13-pixel checkbox was a sixth of an
+inch across; 72 dpi is about where they belong, and an honest 96 would
+draw the chrome a quarter smaller than it was meant to be.
 
 The scale a window is drawn at is two factors multiplied together:
 
 1. **Reference alignment** — the density of the platform's own logical
    unit over saudade's reference. Windows and X11 report a scale factor
    that is already a ratio against 96 dpi (winit divides the reported
-   DPI, or `Xft.dpi`, by 96), so their unit is ours and the alignment is
-   1. A macOS point is nearer 1/108 in — about how Apple lays a desktop
-      out, 218 dpi over a `backingScaleFactor` of 2 — so there it is
-      108/96 = 1.125.
+   DPI, or `Xft.dpi`, by 96), so their alignment is 96/72 = 4/3. A
+   macOS point counts the same: on the same glass a point and a Windows
+   unit come out the same size — a 27" 4K panel is 1.5 panel pixels to
+   either, at the 150% Windows picks for it and in the 2560x1440 mode
+   macOS does — and each platform lays its own UI out in about as many
+   of them (12-pixel Segoe UI, 13-point San Francisco). So a Mac's
+   alignment is 4/3 as well.
 2. **The system factor** — `winit`'s `scale_factor()`, which carries
    both the display's own density and whatever scaling the user set in
    the OS: the percentage in Windows' Display Settings, `Xft.dpi` on
    X11, `backingScaleFactor` on macOS.
 
-The product is snapped to a twelfth, a grid the platforms nearly live
-on already, which keeps the scales that occur in practice to a
-countable few:
+The product is snapped to a twelfth, which keeps the scales that occur
+in practice to a countable few:
 
 | display          | alignment | system | scale |
 | ---------------- | --------- | ------ | ----- |
-| Windows/X11 100% | 1.0       | 1.00   | 1.0   |
-| Windows/X11 125% | 1.0       | 1.25   | 1.25  |
-| Windows/X11 150% | 1.0       | 1.50   | 1.5   |
-| Windows/X11 200% | 1.0       | 2.00   | 2.0   |
-| macOS 1x         | 1.125     | 1.00   | 1.167 |
-| macOS Retina     | 1.125     | 2.00   | 2.25  |
+| Windows/X11 100% | 4/3       | 1.00   | 1.333 |
+| Windows/X11 125% | 4/3       | 1.25   | 1.667 |
+| Windows/X11 150% | 4/3       | 1.50   | 2.0   |
+| Windows/X11 200% | 4/3       | 2.00   | 2.667 |
+| macOS 1x         | 4/3       | 1.00   | 1.333 |
+| macOS Retina     | 4/3       | 2.00   | 2.667 |
 
-Every rung is exact bar the non-Retina Mac, whose 9/8 is thirteen and a
-half twelfths and rounds up to fourteen — a 3% inflation of the
-sparsest display macOS has.
+Every rung is exact: a platform unit is sixteen twelfths of a 72-dpi
+pixel, so the snap only ever moves a factor off the ladder — an
+`Xft.dpi` set by hand — and by half a step at most.
+
+The Wayland backend is the exception: it renders at the integer buffer
+scale the compositor asks for, so neither factor applies there, and a
+Wayland window comes out about a quarter smaller than the same program
+under X11.
 
 Both halves of that are configurable, from code or from the
 environment; the environment wins, in the spirit of winit's
@@ -1509,13 +1549,12 @@ touching the program.
   `SAUDADE_UI_SCALE=2.65`. This _replaces_ everything above, the system
   factor included, and is the only way to ask for a scale off the grid.
   Range 0.25–8.0.
-- **The reference density** — `SAUDADE_UI_DPI=72`. Every scale moves
-  with it, by 96 over whatever it is set to, and both platforms'
-  factors go on working underneath. A coarser reference makes the whole
-  UI larger, and 72 dpi is arguably where these metrics belong: they
-  were drawn for screens running 57–85 ppi, where a 13-pixel checkbox
-  was a sixth of an inch across, so 72 draws the chrome a third larger
-  than an honest 96 dpi does. Range 48–192.
+- **The reference density** — `SAUDADE_UI_DPI=96`. Every scale moves
+  with it, by 72 over whatever it is set to, and both platforms'
+  factors go on working underneath. A finer reference makes the whole
+  UI smaller: 96 draws it at the platforms' own size, a quarter smaller
+  than the default — Windows at 100% back at 1.0x, a Retina Mac at
+  2.0x. Range 48–192.
 
 Either variable also accepts `auto`, meaning the default; anything else
 is ignored with a warning. `Painter::scale()` reports the scale the

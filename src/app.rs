@@ -10,6 +10,7 @@ use winit::event::{
 };
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{Key as WKey, ModifiersKeyState, NamedKey as WNamedKey};
+use winit::monitor::MonitorHandle;
 use winit::window::{CursorIcon, Window, WindowAttributes, WindowButtons, WindowId, WindowLevel};
 
 // X11 platform extensions. winit 0.30's generic `with_parent_window` is
@@ -129,15 +130,17 @@ impl App {
     ///
     /// It *replaces* what the runtime would work out, the system scale factor
     /// included, so `with_ui_scale(3.0)` draws at 3.0 on any display. Left
-    /// alone, the runtime aims a logical pixel at 1/96 in and multiplies that
-    /// alignment by the factor the platform reports — a Windows display at 150%
-    /// draws at 1.5x, a Retina Mac at 2.25x. `SAUDADE_UI_SCALE` overrides this,
-    /// and `SAUDADE_UI_DPI` moves the reference density instead of pinning one
-    /// display: see [`ui_scale`](crate::ui_scale).
+    /// alone, the runtime aims a logical pixel at 1/72 in and multiplies that
+    /// alignment by the factor the platform reports — a Windows display at 100%
+    /// draws at 1.333x and at 150% at 2x, a Retina Mac at 2.667x.
+    /// `SAUDADE_UI_SCALE` overrides this, and `SAUDADE_UI_DPI` moves the
+    /// reference density instead of pinning one display: see
+    /// [`ui_scale`](crate::ui_scale).
     ///
     /// Has no effect under the Wayland backend, which renders at the integer
-    /// buffer scale the compositor asks for — and whose logical unit is already
-    /// normalized against 96 dpi.
+    /// buffer scale the compositor asks for — and whose logical unit is
+    /// normalized against 96 dpi, so the 72-dpi reference does not apply there
+    /// either.
     pub fn with_ui_scale(mut self, scale: f32) -> Self {
         self.ui_scale = Some(scale.max(0.01));
         self
@@ -236,9 +239,13 @@ struct AppHandler {
     bg: BackgroundState,
     /// Where the display is, in the root widget's logical coordinates —
     /// [`Painter::screen_area`], handed to every paint pass. Recomputed only
-    /// when the window moves, resizes or changes DPI, since asking the platform
-    /// costs a round trip and the answer is stable in between.
+    /// when the window moves, resizes, changes DPI or comes back to the front,
+    /// since asking the platform costs a round trip and the answer is stable in
+    /// between.
     screen: Option<Rect>,
+    /// How many device pixels that display fits to the inch —
+    /// [`Painter::display_dpi`]. Recomputed along with [`Self::screen`].
+    display_dpi: Option<f32>,
     /// Stack of popup windows, outermost first. Usually empty or one entry (a
     /// menu / dropdown / dialog); a dropdown opened *inside* a dialog nests a
     /// second entry on top.
@@ -374,6 +381,7 @@ impl AppHandler {
             needs_redraw: true,
             bg: BackgroundState::from_env(),
             screen: None,
+            display_dpi: None,
             popups: Vec::new(),
             last_tick: None,
             tick_requested: false,
@@ -529,6 +537,11 @@ impl AppHandler {
             // survive that.
             WindowEvent::Focused(true) => {
                 self.dismiss_transient_popup(event_loop);
+                // A display's resolution or scaling changed in another app —
+                // "Larger Text" in System Settings — tells the window nothing
+                // when the scale factor stays the same, so this is where it is
+                // first seen.
+                self.refresh_screen();
             }
             WindowEvent::Resized(new_size) => {
                 self.physical = new_size;
@@ -1058,7 +1071,8 @@ impl AppHandler {
             },
             None,
         )
-        .with_screen(self.screen);
+        .with_screen(self.screen)
+        .with_display_dpi(self.display_dpi);
         // `scale` above is saudade's logical→physical factor, which a UI scale
         // lifts above the display's own; widgets asking what the *display* is
         // set to want that one.
@@ -1092,6 +1106,7 @@ impl AppHandler {
         let popup_phys_h = (p.anchor.h as f32 * p.scale).round() as i32;
         let anchor = p.anchor;
         let screen = self.screen;
+        let display_dpi = self.display_dpi;
         let mut surface_buf = p
             .surface
             .buffer_mut()
@@ -1110,7 +1125,8 @@ impl AppHandler {
             },
             Some(anchor),
         )
-        .with_screen(screen);
+        .with_screen(screen)
+        .with_display_dpi(display_dpi);
         painter.set_system_scale(system_scale);
         painter.fill(self.theme.background);
         painter.set_clip_phys(0, 0, popup_phys_w, popup_phys_h);
@@ -1126,8 +1142,22 @@ impl AppHandler {
     /// a [`PopupRequest`] is in, i.e. measured from the window's inner top-left
     /// corner. Widgets that open a top-level window of their own read it back
     /// through [`Painter::screen_area`] to keep that window on screen.
+    ///
+    /// And [`Self::display_dpi`], the density of that display.
     fn refresh_screen(&mut self) {
         self.screen = self.compute_screen();
+        let dpi = self.compute_display_dpi();
+        if dpi != self.display_dpi {
+            // A window dragged onto a display of another density at the same
+            // scale factor has nothing else to repaint for, but anything drawn
+            // to its real size has to be drawn again.
+            self.display_dpi = dpi;
+            self.needs_redraw = true;
+        }
+    }
+
+    fn compute_display_dpi(&self) -> Option<f32> {
+        display_dpi(&self.main_win.as_ref()?.current_monitor()?)
     }
 
     /// The scale factor the OS itself reports — [`Self::scale`] with the UI
@@ -1198,10 +1228,11 @@ impl AppHandler {
     /// it was.
     ///
     /// The drawn scale is the half that normally moves: the UI scale between
-    /// them is the platform's own ratio — 1 on Windows and X11, 9/8 on macOS —
-    /// wherever the snap has no work to do, so crossing between a Retina screen
-    /// and a 1x one moves the scale from 2.25 to 1.17 and barely touches the
-    /// ratio. Only a factor the snap rounds can move it, so both are checked.
+    /// them is the platform's own ratio — 4/3 on Windows and X11, 3/2 on macOS
+    /// — wherever the snap has no work to do, so crossing between a Retina
+    /// screen and a 1x one moves the scale from 3 to 1.5 and leaves the ratio
+    /// where it was. Only a factor the snap rounds can move it, so both are
+    /// checked.
     ///
     /// A no-op when neither half has moved, which is not a redundant check: the
     /// macOS backend reports `ScaleFactorChanged` when a new window settles as
@@ -1634,6 +1665,43 @@ fn desktop_insets(win: &Window) -> (i32, i32, i32, i32) {
 #[cfg(not(target_os = "macos"))]
 fn desktop_insets(_win: &Window) -> (i32, i32, i32, i32) {
     (0, 0, 0, 0)
+}
+
+/// How many device pixels `monitor` fits to the inch, going by the physical
+/// size it reports for itself — [`Painter::display_dpi`].
+///
+/// macOS has the size in millimetres from the display's EDID, zero where there
+/// is none. winit's pixel size is the framebuffer's, points times
+/// `backingScaleFactor`, which is what a device pixel is on a Mac whatever the
+/// panel underneath runs at.
+#[cfg(target_os = "macos")]
+fn display_dpi(monitor: &MonitorHandle) -> Option<f32> {
+    use winit::platform::macos::MonitorHandleExtMacOS;
+    let mm = objc2_core_graphics::CGDisplayScreenSize(monitor.native_id()).width;
+    let px = monitor.size().width;
+    (mm > 0.0 && px > 0).then(|| (px as f64 * 25.4 / mm) as f32)
+}
+
+/// Windows works the same figure out from the EDID itself: the raw DPI, which
+/// unlike the effective one has no scaling setting in it.
+#[cfg(windows)]
+fn display_dpi(monitor: &MonitorHandle) -> Option<f32> {
+    use windows_sys::Win32::Graphics::Gdi::HMONITOR;
+    use windows_sys::Win32::UI::HiDpi::{GetDpiForMonitor, MDT_RAW_DPI};
+    use winit::platform::windows::MonitorHandleExtWindows;
+    let (mut x, mut y) = (0, 0);
+    // SAFETY: the handle is one winit has just looked up for a live window, and
+    // both out-pointers are locals. A display that reports no size, or one
+    // mirrored onto another, fails rather than answering.
+    let hr =
+        unsafe { GetDpiForMonitor(monitor.hmonitor() as HMONITOR, MDT_RAW_DPI, &mut x, &mut y) };
+    (hr == 0 && x > 0).then_some(x as f32)
+}
+
+/// X11 has the sizes in RandR, which winit does not surface.
+#[cfg(not(any(target_os = "macos", windows)))]
+fn display_dpi(_monitor: &MonitorHandle) -> Option<f32> {
+    None
 }
 
 /// The `NSWindow` behind a winit window, or `None` if its view can't be

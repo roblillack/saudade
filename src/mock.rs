@@ -48,6 +48,9 @@ pub struct MockBackend {
     /// against the display. `None` — the default — is the honest answer for an
     /// offscreen render; [`Self::with_screen_area`] fakes one.
     screen: Option<Rect>,
+    /// What [`Painter::display_dpi`] reports. `None` by default, for the same
+    /// reason; [`Self::with_display_dpi`] fakes one.
+    display_dpi: Option<f32>,
 }
 
 /// Which backdrop the content pass fills behind the widget tree, mirroring the
@@ -79,6 +82,7 @@ impl MockBackend {
                 color: PATTERN_COLORS[0].1,
             },
             screen: None,
+            display_dpi: None,
         }
     }
 
@@ -91,6 +95,15 @@ impl MockBackend {
     /// speak of" and leaves such a widget unbounded.
     pub fn with_screen_area(mut self, area: Rect) -> Self {
         self.screen = Some(area);
+        self
+    }
+
+    /// Pretend the window sits on a display fitting `dpi` device pixels to the
+    /// inch, which widgets drawing something at its real size read back through
+    /// [`Painter::display_dpi`]. Unset by default: an offscreen render has no
+    /// glass to measure.
+    pub fn with_display_dpi(mut self, dpi: f32) -> Self {
+        self.display_dpi = Some(dpi);
         self
     }
 
@@ -201,7 +214,8 @@ impl MockBackend {
                 },
                 None,
             )
-            .with_screen(self.screen);
+            .with_screen(self.screen)
+            .with_display_dpi(self.display_dpi);
             match backdrop {
                 Backdrop::Plain => painter.fill(self.theme.background),
                 // Mirrors the live runtime: a root that paints its own
@@ -243,7 +257,8 @@ impl MockBackend {
                 },
                 Some(req.rect),
             )
-            .with_screen(self.screen);
+            .with_screen(self.screen)
+            .with_display_dpi(self.display_dpi);
             painter.set_clip_phys(popup_phys_x, popup_phys_y, popup_phys_w, popup_phys_h);
             root.paint(&mut painter, &self.theme);
             painter.clear_clip();

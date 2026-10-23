@@ -10,6 +10,21 @@ While pre-1.0, the minor version is bumped for breaking changes.
 
 ## [Unreleased] - ReleaseDate
 
+### Changed
+
+- A logical pixel now targets 72 dpi rather than 96, whatever resolution or
+  density the display runs at. That is closer to the screens the Windows 3.1
+  metrics were designed for. Windows, X11 and macOS now draw at 4/3 of the
+  scale factor they report: 1.333x at 100%, 2x at 150%, 2.667x on a Retina
+  Mac. `SAUDADE_UI_DPI=96` restores the old size. Wayland, which renders at
+  the compositor's integer buffer scale, is unaffected. (#54)
+- Fonts and widgets are adapted to the new size. The theme's `font_size`
+  drops from 13 to 11. Push buttons set their labels in bold
+  (`Theme::button_style`, drawn with the new `Painter::text_centered_styled`).
+  Chrome lines and bevels are a whole number of device pixels thick at every
+  scale (`Frame::bevel_ring`). A `List`'s selection band spans the full field
+  width. (#54)
+
 ### Fixed
 
 - Dragging a window between two Windows displays of different densities no
@@ -35,20 +50,27 @@ While pre-1.0, the minor version is bumped for breaking changes.
   every widget at that scale, and nothing accumulates. Chrome at 1.0x, below
   1.5x and at integer scales is byte-for-byte unchanged; 1.5x moves, and so does
   `etched_h_line` below it, it having had no crisp pass before. (#53)
-- A logical pixel now lands the size it claims to on macOS. Its
-  `backingScaleFactor` counts device pixels per point and says nothing about
-  density, while a point is laid out at about 1/108 in, so the scale a window is
-  drawn at there is `108/96 × factor` — a Retina Mac draws at 2.25x where it
-  drew at 2.0x. Windows and X11 are unaffected. Two overrides sit outside that
-  derivation: `SAUDADE_UI_SCALE`, and `App::with_ui_scale`, set the drawn scale
-  outright, and `SAUDADE_UI_DPI` moves the 96-dpi reference density every scale
-  is derived against. Both accept `auto` and both win over the program's own
-  choice, so a UI can be tried at another size without a rebuild. The Wayland
-  backend implements neither: it renders at the integer buffer scale the
-  compositor asks for. (#53)
 
 ### Added
 
+- Two overrides of the scale a window draws at: `SAUDADE_UI_SCALE`, and
+  `App::with_ui_scale`, set it outright, and `SAUDADE_UI_DPI` moves the
+  reference density every scale is derived against (72 dpi, see _Changed_).
+  Both variables accept `auto` and win over the program's own choice, so a UI
+  can be tried at another size without a rebuild. The Wayland backend
+  implements neither: it renders at the integer buffer scale the compositor
+  asks for. (#53)
+- Merged widget frames. Two widgets that share a border, such as a list or
+  editor field and its scrollbar, now draw it as one line on HiDPI screens
+  instead of two lines a device pixel apart. A frame marks the shared edge as
+  merged (`Merged`, `Painter::crisp_merged`, merged variants of the frame
+  primitives, and `Painter::push_clip_frame` to clip to the frame's interior).
+  `List`, `TextEditor` and the scrollbar thumb use it. (#54)
+- `Painter::display_dpi`, the display's physical density where the display
+  reports its size (macOS and Windows). (#54)
+- Two examples: `fonts`, a specimen sheet of every font face at a range of
+  sizes, and `credit_card`, which draws a bank card at its real size using
+  `Painter::display_dpi`. (#54)
 - Function keys. `NamedKey` gains `F1` to `F24`, which every backend now
   reports as `KeyDown` / `KeyUp` instead of dropping them, and accelerators
   take them like any other key: `with_accel("F5")`, `"Shift+F5"`,

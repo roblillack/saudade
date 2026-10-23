@@ -224,6 +224,10 @@ pub(crate) struct Metrics {
     bw: i32,
     /// Separator / thin-line / divider thickness (one logical px).
     unit: i32,
+    /// How deep one and two logical px of a title-bar button's bevel run:
+    /// `unit` and twice it, except from 1.5x up to 1.75x, where the bevel is
+    /// drawn at 1.5x as the content's own buttons' is — 2 and 3.
+    bevel: (i32, i32),
     /// Soft-shadow extent.
     shadow: i32,
 }
@@ -238,7 +242,13 @@ pub(crate) fn metrics(content_phys: Size, scale: f32, chrome: &WindowChrome) -> 
 
     let bw = px(chrome.frame.border_width());
     let tbh = px(titlebar_height());
-    let unit = px(1).max(1);
+    // Thin lines are a whole number of device pixels, the same as the frames
+    // the content's own widgets draw.
+    let unit = crate::painter::chrome_px(scale);
+    let bevel = (
+        crate::painter::bevel_depth(1, scale),
+        crate::painter::bevel_depth(2, scale),
+    );
     let margin = px(chrome.margin);
     let shadow = px(SHADOW_SIZE);
 
@@ -262,6 +272,7 @@ pub(crate) fn metrics(content_phys: Size, scale: f32, chrome: &WindowChrome) -> 
         content,
         bw,
         unit,
+        bevel,
         shadow,
     }
 }
@@ -342,12 +353,12 @@ fn draw_buttons_and_title(painter: &mut Painter, m: &Metrics, chrome: &WindowChr
 
     if let Some(min) = slots.minimize {
         draw_divider(painter, min.x - unit, m, unit);
-        draw_raised_button(painter, min, unit);
+        draw_raised_button(painter, min, m.bevel);
         MINIMIZE_ICON.draw(painter, icon_box(min, icon));
     }
     if let Some(max) = slots.maximize {
         draw_divider(painter, max.x - unit, m, unit);
-        draw_raised_button(painter, max, unit);
+        draw_raised_button(painter, max, m.bevel);
         MAXIMIZE_ICON.draw(painter, icon_box(max, icon));
     }
 
@@ -374,25 +385,27 @@ fn draw_divider(painter: &mut Painter, x: i32, m: &Metrics, unit: i32) {
 
 /// A raised 3D button: gray face, white highlight on the top/left, a doubled
 /// gray shadow on the bottom/right — the bevel Canoe gives its min/max buttons.
-fn draw_raised_button(painter: &mut Painter, r: Rect, unit: i32) {
+/// `one` and `two` are how deep its first and second logical px run:
+/// [`Metrics::bevel`].
+fn draw_raised_button(painter: &mut Painter, r: Rect, (one, two): (i32, i32)) {
     painter.fill_rect(r, BUTTON_BG);
     // Highlight: top and left edges.
-    painter.fill_rect(Rect::new(r.x, r.y, r.w, unit), BUTTON_HIGHLIGHT);
-    painter.fill_rect(Rect::new(r.x, r.y, unit, r.h), BUTTON_HIGHLIGHT);
-    // Inner shadow.
-    if r.w >= 3 * unit && r.h >= 3 * unit {
+    painter.fill_rect(Rect::new(r.x, r.y, r.w, one), BUTTON_HIGHLIGHT);
+    painter.fill_rect(Rect::new(r.x, r.y, one, r.h), BUTTON_HIGHLIGHT);
+    // Inner shadow, from `one` in to `two`.
+    if r.w >= one + two && r.h >= one + two {
         painter.fill_rect(
-            Rect::new(r.x + unit, r.bottom() - 2 * unit, r.w - 2 * unit, unit),
+            Rect::new(r.x + one, r.bottom() - two, r.w - 2 * one, two - one),
             BUTTON_SHADOW,
         );
         painter.fill_rect(
-            Rect::new(r.right() - 2 * unit, r.y + unit, unit, r.h - 2 * unit),
+            Rect::new(r.right() - two, r.y + one, two - one, r.h - 2 * one),
             BUTTON_SHADOW,
         );
     }
     // Outer shadow: bottom and right edges.
-    painter.fill_rect(Rect::new(r.x, r.bottom() - unit, r.w, unit), BUTTON_SHADOW);
-    painter.fill_rect(Rect::new(r.right() - unit, r.y, unit, r.h), BUTTON_SHADOW);
+    painter.fill_rect(Rect::new(r.x, r.bottom() - one, r.w, one), BUTTON_SHADOW);
+    painter.fill_rect(Rect::new(r.right() - one, r.y, one, r.h), BUTTON_SHADOW);
 }
 
 /// Draw the title text: left-aligned after the close box, vertically centered in

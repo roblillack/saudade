@@ -3,7 +3,7 @@ use std::time::{Duration, Instant};
 use crate::event::{Event, EventCtx, MouseButton};
 use crate::geometry::{Color, Point, Rect};
 use crate::include_svg;
-use crate::painter::Painter;
+use crate::painter::{Merged, Painter};
 use crate::svg::SvgImage;
 use crate::theme::Theme;
 use crate::widget::Widget;
@@ -408,33 +408,39 @@ impl Widget for ScrollBar {
         painter.light_button(down, theme, pos_pressed);
         if let Some(thumb) = thumb_opt {
             // Where the thumb sits flush against an arrow button, overlap that
-            // button's frame by 1px so the thumb's black outline lands on the
-            // *same* row/column as the button's, collapsing the divider to a
-            // single 1px line instead of stacking the two 1px frames into a 2px
-            // band.
+            // button's frame by 1px — and mark the edge as merged, so the
+            // thumb's black outline lands on the *same* device pixels as the
+            // button's at every scale, collapsing the divider to a single line
+            // instead of stacking the two frames into a double band (or, at
+            // fractional scales, into two lines a device pixel apart).
             let track = self.track_rect();
             let mut t = thumb;
+            let mut merged = Merged::NONE;
             match self.orientation {
                 Orientation::Vertical => {
                     if thumb.y <= track.y {
                         t.y -= 1;
                         t.h += 1;
+                        merged.top = true;
                     }
                     if thumb.bottom() >= track.bottom() {
                         t.h += 1;
+                        merged.bottom = true;
                     }
                 }
                 Orientation::Horizontal => {
                     if thumb.x <= track.x {
                         t.x -= 1;
                         t.w += 1;
+                        merged.left = true;
                     }
                     if thumb.right() >= track.right() {
                         t.w += 1;
+                        merged.right = true;
                     }
                 }
             }
-            painter.light_button(t, theme, false);
+            painter.light_button_merged(t, merged, theme, false);
         }
 
         // A single black outline around the whole bar. Its long sides are the

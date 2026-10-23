@@ -4,7 +4,7 @@ use std::time::{Duration, Instant};
 use crate::event::{Cursor, Event, EventCtx, Key, MouseButton, NamedKey};
 use crate::font::{FontFamily, FontStyle};
 use crate::geometry::{Color, Point, Rect};
-use crate::painter::Painter;
+use crate::painter::{Merged, Painter};
 use crate::theme::Theme;
 use crate::widget::Widget;
 use crate::widgets::scrollbar::{SCROLLBAR_THICKNESS, ScrollBar};
@@ -562,10 +562,16 @@ impl Widget for TextEditor {
         };
         painter.fill_rect(text, field_bg);
         // The bevel + border self-manage the crisp physical-pixel pass at
-        // fractional scales, so the field border doesn't alias against the
-        // embedded scrollbar's gutter.
-        painter.sunken_bevel(text, theme.highlight, theme.shadow);
-        painter.stroke_rect(text, theme.border);
+        // fractional scales; the right edge sits on the scrollbar's own left
+        // border (see `text_area`), so it is merged — the field's line lands
+        // on the very device pixels the scrollbar's line occupies.
+        let merged = if self.v_scrollbar.rect().w > 0 {
+            Merged::RIGHT
+        } else {
+            Merged::NONE
+        };
+        painter.sunken_bevel_merged(text, merged, theme.highlight, theme.shadow);
+        painter.stroke_rect_merged(text, merged, theme.border);
 
         let text_x = text.x + PADDING_X;
         let text_y0 = text.y + PADDING_Y;

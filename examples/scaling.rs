@@ -18,11 +18,10 @@
 //!
 //! The factor is the *absolute* logical→physical scale, the same number the OS
 //! reports. Try the fractional steps (1.25x, 1.5x): that's where saudade's
-//! crisp physical-pixel chrome pass earns its keep. The presets walk the ladder
-//! the runtime itself picks from — the factor itself on Windows and X11, an
-//! eighth over it on a Mac (2.25x on a Retina one) — up into the range where a
-//! logical pixel is worth two-and-a-fraction physical ones and every edge has
-//! to round.
+//! crisp physical-pixel chrome pass earns its keep. The presets walk the quarter
+//! ladder Windows and X11 hand over — what the runtime draws at, a Mac's factor
+//! included, under `SAUDADE_UI_DPI=96` — up into the range where a logical
+//! pixel is worth two-and-a-fraction physical ones and every edge has to round.
 //!
 //! Two checkboxes along the bottom pick how the rendered panel reaches the
 //! screen, and they are the two halves of what a scale factor means:
@@ -49,9 +48,10 @@
 //! (`Painter::system_scale`) — independent of the preview slider above — and,
 //! when it differs, the scale the window is really being drawn at. It differs
 //! on Wayland, where a fractional display (say 150%) is oversampled at 2.0x and
-//! resampled down by the compositor; on macOS, where saudade corrects the factor
-//! for a point that is nearer 1/108 in than the 96-dpi pixel it draws in; and
-//! anywhere `SAUDADE_UI_DPI` has moved that pixel.
+//! resampled down by the compositor; and everywhere else, where saudade aims its
+//! pixel at 72 dpi — 4/3 of the factor, a Windows unit and a Mac point both
+//! counting as a 96-dpi pixel — or wherever `SAUDADE_UI_DPI` has moved that
+//! pixel to.
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -106,10 +106,10 @@ const MAX_PCT: i32 = 350;
 /// 1.0x to 2.0x and the second carries on to 3.0x, with a 3.5x at the end.
 ///
 /// Every one is a quarter step, which is the ladder Windows and X11 hand over
-/// and saudade passes through: 1.0x is 100%, 1.25x is 125%, 2.0x is 200% (see
-/// `saudade::ui_scale`). A Retina Mac's 2.25x is on it too, an eighth over its
-/// factor of 2; the 3.5x at the end is headroom, a display denser than any of
-/// them, to see the chrome hold its geometry.
+/// and saudade passes through under `SAUDADE_UI_DPI=96`: 1.0x is 100%, 1.25x is
+/// 125%, 2.0x is 200% or a Retina Mac (see `saudade::ui_scale`). The 3.5x at
+/// the end is headroom, a display denser than any of them, to see the chrome
+/// hold its geometry.
 const PRESETS: [(&str, i32); 10] = [
     ("1.0x", 100),
     ("1.25x", 125),
@@ -678,8 +678,8 @@ impl Widget for FactorReadout {
 /// rasterizes at. Two things make those differ, and the bar appends the
 /// rendering scale when they do: Wayland oversamples a fractional display (we
 /// draw at 2.0x, the compositor resamples down to 1.5x), and everywhere else the
-/// OS factor is multiplied by a correction that draws the Win 3.1 chrome a
-/// quarter over its nominal 96-dpi size.
+/// OS factor is multiplied by a correction that aims a logical pixel at 1/72 in:
+/// 4/3 on Windows and X11, 3/2 on macOS.
 struct StatusBar {
     win: Rc<Cell<Size>>,
 }
