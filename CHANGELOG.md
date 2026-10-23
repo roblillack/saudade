@@ -24,6 +24,17 @@ While pre-1.0, the minor version is bumped for breaking changes.
   Chrome lines and bevels are a whole number of device pixels thick at every
   scale (`Frame::bevel_ring`). A `List`'s selection band spans the full field
   width. (#54)
+- Rounded corners and bevel corners look better at high scales. From 1.75x,
+  push buttons and slider thumbs round their corners along a real curve.
+  Before, the 1.0x design's missing corner pixel was enlarged into a square
+  notch. Below 1.75x the corners are unchanged. Where a bevel's light and dark
+  sides meet, at the top-right and bottom-left, they now split the corner
+  along a diagonal. Before, the dark side took the whole corner, which looked
+  like a staircase from 1.5x up. A `Dropdown`'s arrow button now uses the
+  scrollbar arrows' square-cornered chrome instead of a push button's. Custom
+  chrome can draw the same shapes with `Frame::rounded_band`,
+  `Painter::fill_rounded_band`, `Painter::fill_ring_near` and
+  `Painter::fill_ring_far`. (#58)
 
 ### Fixed
 
