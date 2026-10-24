@@ -1222,6 +1222,46 @@ mod tests {
     }
 
     #[test]
+    fn the_wheel_scrolls_the_file_list() {
+        let dir = unique_temp();
+        for i in 0..40 {
+            std::fs::write(dir.join(format!("f{i:02}.txt")), b"x").unwrap();
+        }
+
+        let chosen: Rc<RefCell<Option<PathBuf>>> = Rc::new(RefCell::new(None));
+        let mut dlg = FileDialog::new().with_directory(&dir);
+        {
+            let chosen = chosen.clone();
+            dlg.show_open(move |_cx, path| *chosen.borrow_mut() = Some(path.to_path_buf()));
+        }
+        let backend = MockBackend::new(DIALOG_W, DIALOG_H);
+        backend.render(&mut dlg);
+
+        // Combined list: "..", then f00.txt … f39.txt — far more than fit. One
+        // detent down over the list scrolls it three rows, so the top visible
+        // row is now f02.txt; clicking it and accepting proves the view moved.
+        let g = geo();
+        backend.dispatch(
+            &mut dlg,
+            &Event::Scroll {
+                pos: Point::new(g.list.x + 24, row_y(g.list, 1)),
+                delta_x: 0.0,
+                delta_y: crate::event::WHEEL_LINES_PER_DETENT,
+            },
+        );
+        click(&backend, &mut dlg, g.list.x + 24, row_y(g.list, 0));
+        backend.dispatch(&mut dlg, &key(NamedKey::Enter, true));
+        backend.dispatch(&mut dlg, &key(NamedKey::Enter, false));
+
+        assert_eq!(
+            chosen.borrow().as_deref(),
+            Some(dir.join("f02.txt").as_path()),
+            "the wheel scrolled the list three rows down"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn typing_a_wildcard_refilters_without_accepting() {
         let dir = unique_temp();
         std::fs::write(dir.join("hello.txt"), b"hi").unwrap();
