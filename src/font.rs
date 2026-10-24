@@ -147,10 +147,10 @@ fn resolve_style(present: [bool; STYLE_COUNT], style: FontStyle) -> FontStyle {
 /// the font).
 ///
 /// The glyph bitmaps are the memory-heavy half, so that cache is LRU-bounded
-/// to [`GLYPH_CACHE_CAP`] entries: an app that cycles through many sizes (a
-/// smooth zoom) or a large character range (CJK) keeps only the most recently
-/// drawn glyphs instead of growing without limit. The advance cache holds a
-/// single `f32` per entry, so it stays an unbounded plain map.
+/// to 1024 entries: an app that cycles through many sizes (a smooth zoom) or a
+/// large character range (CJK) keeps only the most recently drawn glyphs
+/// instead of growing without limit. The advance cache holds a single `f32`
+/// per entry, so it stays an unbounded plain map.
 pub struct Font {
     /// Where glyphs come from: font files parsed by fontdue, or the host's own
     /// text stack.
@@ -183,7 +183,7 @@ type AdvanceKey = (char, u32, FontStyle);
 /// once. The on-screen working set is a few hundred at most (printable ASCII
 /// across one or two sizes and styles), so this leaves generous headroom while
 /// still capping memory when an app renders text at many sizes or over a wide
-/// script.
+/// script. [`Font`]'s docs quote the number, so update them along with it.
 const GLYPH_CACHE_CAP: usize = 1024;
 
 /// One rasterized glyph: where to put it, and its coverage bitmap.

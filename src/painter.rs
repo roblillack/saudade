@@ -156,9 +156,20 @@ impl Merged {
 /// A depth is worth a whole number of device pixels — [`Painter::chrome_unit`]
 /// of them — rather than the scale itself, so the frame is the design's own
 /// drawn at an integer zoom and every ring in it is exactly as thick as every
-/// other. See [`Frame::new`] for why. The one exception is a bevel's rings,
-/// asked for with [`Frame::bevel_ring`]: from 1.5x up to 1.75x the bevel is
-/// drawn at 1.5x inside a one-pixel outline.
+/// other. Scaling the depths by a fractional factor only distorts the frame's
+/// proportions, since half a device pixel of rounding error is most of a line
+/// one or two pixels thick. At 1.25x it would put a 3-pixel bevel under a
+/// 1-pixel border where the design says 2 and 1, and at 2.5x a 3-pixel border
+/// over a bevel of a 2-pixel ring and a 3-pixel one where the design says 1
+/// and 1 and 1. A whole multiple keeps the drawn proportions exactly — at 2.5x
+/// the frame is the 1.25x one doubled — and spends the rest of the scale on
+/// the face instead: the button comes out a little roomier and a lot sharper.
+///
+/// Spending it all on the face goes too far from 1.5x up to 1.75x, where the
+/// face is half as big again as the design's and the 1-pixel bevel reads as no
+/// relief at all. There the bevel alone is drawn at 1.5x under the 1-pixel
+/// outline — 3 device pixels for the design's 2, in rings of 2 and 1 — and
+/// [`Frame::bevel_ring`] is how a recipe asks for it.
 ///
 /// A frame whose widget shares an edge with a neighbouring frame — the
 /// 1-logical-pixel-overlap composition — is built over a rect whose shared
@@ -178,25 +189,9 @@ pub struct Frame {
 
 impl Frame {
     /// A frame over `rect` (already in device pixels) for a window drawn at
-    /// `scale`.
-    ///
-    /// The depths are the design's own times a whole number of device pixels,
-    /// [`chrome_px`], and not times the scale: scaling them by a fractional
-    /// factor only distorts the frame's proportions, since half a device pixel
-    /// of rounding error is most of a line one or two pixels thick. At 1.25x it
-    /// would put a 3-pixel bevel under a 1-pixel border where the design says 2
-    /// and 1, and at 2.5x a 3-pixel border over a bevel of a 2-pixel ring and a
-    /// 3-pixel one where the design says 1 and 1 and 1. A whole multiple keeps
-    /// the drawn proportions exactly — at 2.5x the frame is the 1.25x one
-    /// doubled — and spends the rest of the scale on the face instead: the
-    /// button comes out a little roomier and a lot sharper.
-    ///
-    /// Spending it all on the face goes too far from 1.5x up to 1.75x, where
-    /// the face is half as big again as the design's and the 1-pixel bevel
-    /// reads as no relief at all. There the bevel alone is drawn at 1.5x under
-    /// the 1-pixel outline — 3 device pixels for the design's 2, in rings of 2
-    /// and 1 — and [`Frame::bevel_ring`] is how a recipe asks for it. See
-    /// [`bevel_depth`] for what the uneven rings cost.
+    /// `scale`. Its depths are the design's own times a whole number of device
+    /// pixels, [`chrome_px`], and not times the scale: the type docs say why.
+    /// See [`bevel_depth`] for what the uneven bevel rings cost.
     fn new(rect: Rect, scale: f32) -> Self {
         Self {
             rect,
@@ -213,7 +208,7 @@ impl Frame {
     /// Device pixels from the frame's edge in to logical depth `d`. `depth(0)`
     /// is the edge itself; `depth(1)` the far side of a one-pixel border.
     ///
-    /// Exactly `d` [`Painter::chrome_unit`]s — see [`Frame::new`], where the
+    /// Exactly `d` [`Painter::chrome_unit`]s — see [`Frame`], where the
     /// reasoning lives.
     pub fn depth(&self, d: i32) -> i32 {
         (d * self.per_pixel).max(0)
@@ -461,7 +456,8 @@ impl<'a> Painter<'a> {
     }
 
     /// Like [`Painter::new`] but tags the painter as running inside a
-    /// popup top-level window whose [`PopupRequest::rect`] is `anchor`.
+    /// popup top-level window whose
+    /// [`PopupRequest::rect`](crate::PopupRequest::rect) is `anchor`.
     /// `None` means the main window pass (equivalent to [`Painter::new`]).
     /// Widgets compare `anchor` against their own popup request in
     /// `paint_overlay` so that, when several popups are stacked, the
@@ -514,8 +510,8 @@ impl<'a> Painter<'a> {
         self.popup_anchor.is_some()
     }
 
-    /// [`PopupRequest::rect`] of the popup this painter is drawing into,
-    /// or `None` in the main pass. Widgets that report a
+    /// [`PopupRequest::rect`](crate::PopupRequest::rect) of the popup this
+    /// painter is drawing into, or `None` in the main pass. Widgets that report a
     /// [`Widget::popup_request`](crate::Widget::popup_request) use this in
     /// `paint_overlay` to decide whether the current popup pass is *theirs*
     /// — only then should they draw their popup body.
@@ -670,8 +666,8 @@ impl<'a> Painter<'a> {
     /// display). On the Wayland backend this can differ from [`Self::scale`],
     /// the integer buffer scale the content is actually rasterized at before
     /// the compositor resamples it down to the fractional size; on every other
-    /// backend the two are equal. Defaults to [`Self::scale`] until a backend
-    /// calls [`Self::set_system_scale`].
+    /// backend the two are equal. Defaults to [`Self::scale`] until the
+    /// backend records the display's own scale.
     pub fn system_scale(&self) -> f32 {
         self.system_scale
     }
@@ -742,12 +738,12 @@ impl<'a> Painter<'a> {
     }
 
     /// Device pixels one logical pixel of chrome is worth: a whole number, 1
-    /// below [`CHROME_PIN`] and the scale's whole part above it, 1.75x up to 2x
-    /// excepted — see [`chrome_px`]. The thickness every ring of a [`Frame`] is
-    /// drawn at (bar a bevel's from 1.5x up to 1.75x — see
-    /// [`Frame::bevel_ring`]), the same `unit` the window chrome in
-    /// [`crate::chrome`] draws its frame lines at, and what a widget wants for
-    /// a *lone* thin line — a divider, a caret, a grid rule.
+    /// below 1.75x, 2 from 1.75x up to 3x, and the scale's whole part from
+    /// there on. The thickness every ring of a [`Frame`] is drawn at (bar a
+    /// bevel's from 1.5x up to 1.75x — see [`Frame::bevel_ring`]), the same
+    /// `unit` the window chrome in [`crate::chrome`] draws its frame lines at,
+    /// and what a widget wants for a *lone* thin line — a divider, a caret, a
+    /// grid rule.
     ///
     /// A frame is still built off a [`Frame`] rather than out of this: the
     /// frame measures every ring from the widget's own snapped edge, which a
@@ -892,7 +888,7 @@ impl<'a> Painter<'a> {
     /// Render `f` at logical→physical scale `scale` into the on-screen region
     /// `area`, over a `bg` backdrop, then magnify the rendered pixels by the
     /// integer factor `zoom` using nearest-neighbor replication. `zoom == 1`
-    /// draws straight into `area` (no allocation, via [`Self::with_scale`]);
+    /// draws straight into `area`, with no allocation;
     /// `zoom > 1` renders once into an offscreen buffer at `scale` and blits it
     /// `zoom`× larger, so each device pixel becomes a `zoom × zoom` block.
     ///
@@ -1001,9 +997,9 @@ impl<'a> Painter<'a> {
     ///
     /// The resample is an area average: a destination pixel is the mean of the
     /// source pixels it overlaps, each weighted by how much of it the
-    /// destination pixel covers (to a 256th of a source pixel — see
-    /// [`AxisMap`]). Downscaling therefore blends rather than drops pixels, so
-    /// a scale's extra resolution reads as detail instead of dropouts; and
+    /// destination pixel covers (to a 256th of a source pixel). Downscaling
+    /// therefore blends rather than drops pixels, so a scale's extra
+    /// resolution reads as detail instead of dropouts; and
     /// where `area` is a whole multiple of the buffer every destination pixel
     /// falls inside a single source pixel, which reproduces
     /// [`Self::draw_scaled`]'s nearest-neighbor magnification exactly.

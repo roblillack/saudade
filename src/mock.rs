@@ -19,7 +19,7 @@
 //! ```
 //!
 //! Input simulation is not implemented yet — once added, callers will be
-//! able to feed [`Event`](crate::event::Event)s into the same backend to
+//! able to feed [`Event`]s into the same backend to
 //! drive widgets between renders.
 
 use crate::background::{BackgroundPattern, BackgroundState, PATTERN_COLORS};
