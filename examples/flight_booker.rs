@@ -31,6 +31,13 @@ const RETURN: usize = 1;
 const INITIAL_DATE: &str = "27.03.2014";
 
 fn main() {
+    let (config, root) = window();
+    App::new(config, root).with_theme(Theme::windows_31()).run();
+}
+
+/// The window and the widget tree inside it, kept apart from `main` so
+/// `examples/screenshots.rs` can render the same window offscreen.
+pub fn window() -> (WindowConfig, impl Widget) {
     let flight_type = Rc::new(RefCell::new(
         Dropdown::new(Rect::new(16, 16, 268, 24)).with_items(["one-way flight", "return flight"]),
     ));
@@ -154,9 +161,7 @@ fn main() {
         .add_fill(content)
         .add_overlay(SharedDialog(dialog.clone()));
 
-    App::new(WindowConfig::new("Flight Booker", W, H), root)
-        .with_theme(Theme::windows_31())
-        .run();
+    (WindowConfig::new("Flight Booker", W, H), root)
 }
 
 /// Parse a 7GUIs `D.M.YYYY` date into a `(year, month, day)` tuple that orders

@@ -23,24 +23,6 @@ const W: i32 = 260;
 const H: i32 = 120;
 
 fn main() {
-    // A small "about box"-style client area to sit inside the chrome.
-    let build = || -> Box<dyn Widget> {
-        Box::new(
-            Container::new(W, H)
-                .with_background(Color::LIGHT_GRAY)
-                .add(Bevel::sunken(Rect::new(16, 16, W - 32, 48)))
-                .add(Label::new(
-                    Rect::new(28, 26, W - 56, 16),
-                    "Saudade Utilities",
-                ))
-                .add(Label::new(
-                    Rect::new(28, 42, W - 56, 16),
-                    "Version 1.0 — © 1992",
-                ))
-                .add(Button::new(Rect::new((W - 80) / 2, 80, 80, 26), "OK").default(true)),
-        )
-    };
-
     // Render each frame style at 2× so the screenshots are crisp, and write a
     // PNG per style. The window is always captured in its active (focused)
     // state. A real font gives the title bar and labels text; without one the
@@ -59,8 +41,25 @@ fn main() {
         if let Some(font) = Font::load_sans() {
             backend = backend.with_sans_font(font);
         }
-        let snap = backend.render_framed(build().as_mut(), &chrome);
+        let snap = backend.render_framed(&mut about_box(), &chrome);
         std::fs::write(file, snap.to_png()).unwrap_or_else(|e| panic!("write {file}: {e}"));
         println!("wrote {file} ({}×{})", snap.width(), snap.height());
     }
+}
+
+/// A small "about box"-style client area to sit inside the chrome, `W × H`
+/// logical pixels. Public so `examples/screenshots.rs` can frame it too.
+pub fn about_box() -> impl Widget {
+    Container::new(W, H)
+        .with_background(Color::LIGHT_GRAY)
+        .add(Bevel::sunken(Rect::new(16, 16, W - 32, 48)))
+        .add(Label::new(
+            Rect::new(28, 26, W - 56, 16),
+            "Saudade Utilities",
+        ))
+        .add(Label::new(
+            Rect::new(28, 42, W - 56, 16),
+            "Version 1.0 — © 1992",
+        ))
+        .add(Button::new(Rect::new((W - 80) / 2, 80, 80, 26), "OK").default(true))
 }

@@ -21,6 +21,13 @@ const W: i32 = 320;
 const H: i32 = 72;
 
 fn main() {
+    let (config, root) = window();
+    App::new(config, root).with_theme(Theme::windows_31()).run();
+}
+
+/// The window and the widget tree inside it, kept apart from `main` so
+/// `examples/screenshots.rs` can render the same window offscreen.
+pub fn window() -> (WindowConfig, impl Widget) {
     let celsius = Rc::new(RefCell::new(TextInput::new(Rect::new(16, 24, 70, 24))));
     let fahrenheit = Rc::new(RefCell::new(TextInput::new(Rect::new(170, 24, 70, 24))));
 
@@ -50,9 +57,7 @@ fn main() {
         .add(SharedTextInput(fahrenheit.clone()))
         .add(Label::new(Rect::new(248, 29, 64, 16), "Fahrenheit"));
 
-    App::new(WindowConfig::new("TempConv", W, H), root)
-        .with_theme(Theme::windows_31())
-        .run();
+    (WindowConfig::new("TempConv", W, H), root)
 }
 
 /// Format a converted temperature: round to one decimal, then drop a trailing

@@ -101,6 +101,18 @@ While pre-1.0, the minor version is bumped for breaking changes.
 - Two examples: `fonts`, a specimen sheet of every font face at a range of
   sizes, and `credit_card`, which draws a bank card at its real size using
   `Painter::display_dpi`. (#54)
+- Screenshots of several windows on one desktop. `mock::Desktop` is a
+  backdrop to arrange framed windows on: `MockBackend::place_window` draws a
+  window there, its drop shadow falling over the windows placed before, and
+  `MockBackend::place_dialog` draws the dialog a widget tree has open as the
+  separate window it is on a real desktop. `WindowChrome::inactive` draws a
+  window without the focus: a white title bar and a smaller shadow, as Canoe
+  does.
+- Screenshots of every example in the README's example table, and a new
+  headline screenshot. A new `screenshots` example renders them
+  (`cargo run --example screenshots`): it builds each example's own window
+  offscreen with `MockBackend`, stages it with a few synthetic events, and
+  frames it in window chrome.
 - Function keys. `NamedKey` gains `F1` to `F24`, which every backend now
   reports as `KeyDown` / `KeyUp` instead of dropping them, and accelerators
   take them like any other key: `with_accel("F5")`, `"Shift+F5"`,

@@ -119,18 +119,24 @@ impl Widget for Demo {
 
 fn main() {
     let start_fullscreen = std::env::args().any(|a| a == "--fullscreen");
+    let (config, root) = window(start_fullscreen);
+    App::new(config, root).with_theme(Theme::windows_31()).run();
+}
+
+/// The window and the widget tree inside it, opening fullscreen if
+/// `start_fullscreen`, kept apart from `main` so `examples/screenshots.rs` can
+/// render the same window offscreen.
+pub fn window(start_fullscreen: bool) -> (WindowConfig, impl Widget) {
     let demo = Demo {
         rect: Rect::new(0, 0, 0, 0),
         button: Button::new(Rect::new(0, 0, 0, 0), "Full Screen")
             .on_click(|cx| cx.toggle_fullscreen()),
         fullscreen: start_fullscreen,
     };
-    App::new(
+    (
         WindowConfig::new("Fullscreen", 420, 260)
             .resizable(true)
             .fullscreen(start_fullscreen),
         Column::new().add_fill(demo),
     )
-    .with_theme(Theme::windows_31())
-    .run();
 }

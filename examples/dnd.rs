@@ -15,13 +15,18 @@ const W: i32 = 460;
 const H: i32 = 320;
 
 fn main() {
+    let (config, root) = window();
+    App::new(config, root).with_theme(Theme::windows_31()).run();
+}
+
+/// The window and the widget tree inside it, kept apart from `main` so
+/// `examples/screenshots.rs` can render the same window offscreen.
+pub fn window() -> (WindowConfig, impl Widget) {
     let root = Column::new()
         .with_background(Color::WHITE)
         .add_fill(DropZone::new());
 
-    App::new(WindowConfig::new("Drag & Drop", W, H).resizable(true), root)
-        .with_theme(Theme::windows_31())
-        .run();
+    (WindowConfig::new("Drag & Drop", W, H).resizable(true), root)
 }
 
 /// Fills its slot with a sunken panel that floods navy (the Win 3.1 "selected"

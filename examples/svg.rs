@@ -82,12 +82,17 @@ const H: i32 = 430;
 
 fn main() {
     benchmark();
-    App::new(
+    let (config, root) = window();
+    App::new(config, root).with_theme(Theme::windows_31()).run();
+}
+
+/// The window and the widget tree inside it, kept apart from `main` so
+/// `examples/screenshots.rs` can render the same window offscreen.
+pub fn window() -> (WindowConfig, impl Widget) {
+    (
         WindowConfig::new("include_svg! vs include_str!", W, H),
         Demo,
     )
-    .with_theme(Theme::windows_31())
-    .run();
 }
 
 // ---------------------------------------------------------------------------

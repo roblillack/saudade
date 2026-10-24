@@ -247,6 +247,13 @@ fn fit_area(content: Rect) -> Rect {
 type FlexLabel = (Rc<RefCell<Label>>, fn(i32) -> Rect);
 
 fn main() {
+    let (config, root) = window();
+    App::new(config, root).with_theme(Theme::windows_31()).run();
+}
+
+/// The window and the widget tree inside it, kept apart from `main` so
+/// `examples/screenshots.rs` can render the same window offscreen.
+pub fn window() -> (WindowConfig, impl Widget) {
     // Shared state. `factor` is the scale the preview renders at — 0.0 until the
     // first paint adopts the OS scale (see `Root::paint`). `zoom` is the 2×
     // magnify toggle and `fit` the scale-to-fit one; `win` caches the window's
@@ -364,7 +371,7 @@ fn main() {
     body.push(Shared(fit_box.clone()));
     body.push(StatusBar { win: win.clone() });
 
-    App::new(
+    (
         WindowConfig::new("Scale Factor", init_w, init_h)
             .resizable(true)
             .min_size(MIN_W, MIN_H),
@@ -379,8 +386,6 @@ fn main() {
             fit_box,
         ),
     )
-    .with_theme(Theme::windows_31())
-    .run();
 }
 
 /// Root wrapper. It lets the content fill the window instead of being centered

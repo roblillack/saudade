@@ -48,11 +48,15 @@ const DOUBLE_CLICK: Duration = Duration::from_millis(400);
 const GRID_LINE: Color = Color::rgb(0xD0, 0xD0, 0xD0);
 
 fn main() {
-    let root = Container::new(W, H).add(Grid::new(seed_sheet()));
+    let (config, root) = window();
+    App::new(config, root).with_theme(Theme::windows_31()).run();
+}
 
-    App::new(WindowConfig::new("Cells", W, H), root)
-        .with_theme(Theme::windows_31())
-        .run();
+/// The window and the widget tree inside it, kept apart from `main` so
+/// `examples/screenshots.rs` can render the same window offscreen.
+pub fn window() -> (WindowConfig, impl Widget) {
+    let root = Container::new(W, H).add(Grid::new(seed_sheet()));
+    (WindowConfig::new("Cells", W, H), root)
 }
 
 /// A small starter sheet: a two-row "invoice" with a couple of formulas, so the

@@ -7,12 +7,19 @@
 //! the mouse or tabbing through the form. A label hands focus to the *next
 //! focusable widget* added after it, so each caption simply precedes its field.
 
-use saudade::{App, Container, FocusLabel, Rect, TextInput, Theme, WindowConfig};
+use saudade::{App, Container, FocusLabel, Rect, TextInput, Theme, Widget, WindowConfig};
 
 const W: i32 = 300;
 const H: i32 = 148;
 
 fn main() {
+    let (config, root) = window();
+    App::new(config, root).with_theme(Theme::windows_31()).run();
+}
+
+/// The window and the widget tree inside it, kept apart from `main` so
+/// `examples/screenshots.rs` can render the same window offscreen.
+pub fn window() -> (WindowConfig, impl Widget) {
     let label = |y, text| FocusLabel::new(Rect::new(16, y, 72, 24), text);
     let field = |y| TextInput::new(Rect::new(96, y, 188, 24));
 
@@ -25,7 +32,5 @@ fn main() {
         .add(label(96, "&Email:"))
         .add(field(96));
 
-    App::new(WindowConfig::new("Focus form", W, H), content)
-        .with_theme(Theme::windows_31())
-        .run();
+    (WindowConfig::new("Focus form", W, H), content)
 }

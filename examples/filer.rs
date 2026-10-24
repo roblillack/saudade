@@ -33,14 +33,17 @@ fn main() {
         .unwrap_or_else(|| PathBuf::from("/"));
     let start = start.canonicalize().unwrap_or_else(|_| PathBuf::from("/"));
 
-    let browser = FileBrowser::new(start);
+    let (config, root) = window(start);
+    App::new(config, root).with_theme(Theme::windows_31()).run();
+}
 
-    App::new(
+/// The window and the widget tree inside it, browsing `start`, kept apart from
+/// `main` so `examples/screenshots.rs` can render the same window offscreen.
+pub fn window(start: PathBuf) -> (WindowConfig, impl Widget) {
+    (
         WindowConfig::new("File Manager", WINDOW_W, WINDOW_H).resizable(true),
-        browser,
+        FileBrowser::new(start),
     )
-    .with_theme(Theme::windows_31())
-    .run();
 }
 
 // ============================================================================

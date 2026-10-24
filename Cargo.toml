@@ -11,8 +11,9 @@ categories = ["gui"]
 
 # Test snapshot baselines (2.2 MB of PNGs) and the test fonts are only needed to
 # run the test suite, not to build or use the library. Keep them out of the
-# published crate.
-exclude = ["tests/snapshots", "tests/fonts"]
+# published crate, along with the README's screenshots (docs/, ~1 MB):
+# crates.io renders the README's relative images from the `repository`.
+exclude = ["tests/snapshots", "tests/fonts", "docs"]
 
 # saudade-specific cargo-release settings (workspace-wide defaults live in
 # release.toml). These rewrites run on each `saudade` release (not the macro

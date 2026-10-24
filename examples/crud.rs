@@ -46,6 +46,13 @@ const H: i32 = 268;
 const LIST_RECT: Rect = Rect::new(12, 46, 230, 174);
 
 fn main() {
+    let (config, root) = window();
+    App::new(config, root).with_theme(Theme::windows_31()).run();
+}
+
+/// The window and the widget tree inside it, kept apart from `main` so
+/// `examples/screenshots.rs` can render the same window offscreen.
+pub fn window() -> (WindowConfig, impl Widget) {
     // The database and its current filtered projection live together so the
     // list rebuild and the button predicates share one source of truth.
     let model = Rc::new(RefCell::new(Model {
@@ -175,9 +182,7 @@ fn main() {
         .add(update)
         .add(delete);
 
-    App::new(WindowConfig::new("CRUD", W, H), root)
-        .with_theme(Theme::windows_31())
-        .run();
+    (WindowConfig::new("CRUD", W, H), root)
 }
 
 // ============================================================================

@@ -9,8 +9,8 @@
 //! The look reproduces the default rendering style of **Canoe** (the Win 3.1
 //! styled stacking window manager saudade is usually paired with): a teal
 //! desktop, a soft drop shadow, a navy active title bar, light-gray beveled
-//! window controls, and a black multi-layer border. Windows are always drawn
-//! in their *active* (focused) state.
+//! window controls, and a black multi-layer border. Windows are drawn in their
+//! *active* (focused) state unless [`WindowChrome::inactive`] says otherwise.
 //!
 //! The caller picks one of three frame styles via [`WindowFrame`], mirroring
 //! the three Canoe paints for a window:
@@ -23,7 +23,8 @@
 //!   bulk layer takes the title-bar color so the frame reads as one with the
 //!   title.
 //!
-//! Drive it through [`MockBackend::render_framed`](crate::mock::MockBackend::render_framed).
+//! Drive it through [`MockBackend::render_framed`](crate::mock::MockBackend::render_framed),
+//! or arrange several windows on one [`Desktop`](crate::mock::Desktop).
 
 use crate::geometry::{Color, Rect, Size};
 use crate::include_svg;
@@ -33,11 +34,14 @@ use crate::svg::SvgImage;
 // --- Canoe default palette (its `UiConfig::default`), in saudade colors. ---
 
 /// The teal Canoe desktop.
-const DESKTOP_BACKGROUND: Color = Color::rgb(0x00, 0x80, 0x80);
+pub(crate) const DESKTOP_BACKGROUND: Color = Color::rgb(0x00, 0x80, 0x80);
 /// Active title-bar fill (Win 3.1 navy).
 const TITLEBAR_BG: Color = Color::NAVY;
 /// Active title-bar text.
 const TITLEBAR_TEXT: Color = Color::WHITE;
+/// Inactive title-bar fill and text: black on white.
+const TITLEBAR_BG_INACTIVE: Color = Color::WHITE;
+const TITLEBAR_TEXT_INACTIVE: Color = Color::BLACK;
 /// Outer/inner thin border layers, the separator, and the button dividers.
 const BORDER_DARK: Color = Color::BLACK;
 /// The bulk middle border layer for resizable / fixed windows.
@@ -68,7 +72,9 @@ const BORDER_NORMAL: i32 = 4;
 /// The 1px outline a fixed-size window collapses its border to.
 const BORDER_FIXED: i32 = 1;
 /// Active-window soft-shadow extent.
-const SHADOW_SIZE: i32 = 20;
+pub(crate) const SHADOW_SIZE: i32 = 20;
+/// Inactive-window soft-shadow extent.
+const SHADOW_SIZE_INACTIVE: i32 = 10;
 /// Default teal margin between the window (with its shadow) and the image edge.
 const DEFAULT_MARGIN: i32 = 40;
 /// Padding on each side of the title text within its slot.
@@ -120,10 +126,11 @@ impl WindowFrame {
         matches!(self, WindowFrame::Resizable)
     }
 
-    /// The bulk middle border layer color. Dialogs blend it into the title bar.
-    fn mid_color(self) -> Color {
+    /// The bulk middle border layer color. Dialogs blend it into the title bar,
+    /// filled `titlebar_bg`.
+    fn mid_color(self, titlebar_bg: Color) -> Color {
         match self {
-            WindowFrame::Dialog => TITLEBAR_BG,
+            WindowFrame::Dialog => titlebar_bg,
             _ => BORDER_MID,
         }
     }
@@ -152,17 +159,19 @@ impl WindowFrame {
 pub struct WindowChrome {
     title: String,
     frame: WindowFrame,
+    active: bool,
     desktop_background: Color,
     margin: i32,
 }
 
 impl WindowChrome {
-    /// Chrome with the given window `title` and frame style, on the default
-    /// teal desktop with the default margin.
+    /// Chrome with the given window `title` and frame style, drawn active, on
+    /// the default teal desktop with the default margin.
     pub fn new(title: impl Into<String>, frame: WindowFrame) -> Self {
         Self {
             title: title.into(),
             frame,
+            active: true,
             desktop_background: DESKTOP_BACKGROUND,
             margin: DEFAULT_MARGIN,
         }
@@ -181,6 +190,15 @@ impl WindowChrome {
     /// A dialog window (no minimize / maximize buttons, dialog-style frame).
     pub fn dialog(title: impl Into<String>) -> Self {
         Self::new(title, WindowFrame::Dialog)
+    }
+
+    /// Draw the window *inactive*, as one without the focus: black title text
+    /// on a white bar, and a drop shadow half the size. For a screenshot of
+    /// several windows on a [`Desktop`](crate::mock::Desktop), where only one
+    /// of them can be the active window.
+    pub fn inactive(mut self) -> Self {
+        self.active = false;
+        self
     }
 
     /// Override the teal desktop backdrop.
@@ -204,6 +222,19 @@ impl WindowChrome {
     pub(crate) fn paints_background_pattern(&self) -> bool {
         self.frame != WindowFrame::Dialog
     }
+
+    pub(crate) fn desktop_background(&self) -> Color {
+        self.desktop_background
+    }
+
+    /// The title bar's fill and text color.
+    fn titlebar_colors(&self) -> (Color, Color) {
+        if self.active {
+            (TITLEBAR_BG, TITLEBAR_TEXT)
+        } else {
+            (TITLEBAR_BG_INACTIVE, TITLEBAR_TEXT_INACTIVE)
+        }
+    }
 }
 
 /// Physical-pixel geometry of a framed render, derived from the content size,
@@ -215,7 +246,7 @@ pub(crate) struct Metrics {
     /// Full framed buffer size.
     pub buffer: Size,
     /// The window frame (border + title bar + content), shadow excluded.
-    frame: Rect,
+    pub frame: Rect,
     /// The title-bar strip (inside the border, above the separator).
     titlebar: Rect,
     /// Where the content blits in: top-left and (== the rendered content) size.
@@ -250,7 +281,11 @@ pub(crate) fn metrics(content_phys: Size, scale: f32, chrome: &WindowChrome) -> 
         crate::painter::bevel_depth(2, scale),
     );
     let margin = px(chrome.margin);
-    let shadow = px(SHADOW_SIZE);
+    let shadow = px(if chrome.active {
+        SHADOW_SIZE
+    } else {
+        SHADOW_SIZE_INACTIVE
+    });
 
     let cw = content_phys.w.max(1);
     let ch = content_phys.h.max(1);
@@ -277,27 +312,28 @@ pub(crate) fn metrics(content_phys: Size, scale: f32, chrome: &WindowChrome) -> 
     }
 }
 
-/// Paint the desktop, shadow, border, title bar, buttons, and title into the
-/// painter (which must cover [`Metrics::buffer`] at scale 1.0). The content
-/// area is left untouched for the caller to blit the rendered widget tree into.
-pub(crate) fn paint(painter: &mut Painter, m: &Metrics, chrome: &WindowChrome) {
-    // Desktop backdrop, then the soft drop shadow over it.
-    painter.fill(chrome.desktop_background);
+/// Paint the shadow, border, title bar, buttons, and title into the painter
+/// (which draws at scale 1.0, in [`Metrics::buffer`]'s coordinates). The
+/// shadow falls over whatever the painter already holds — the desktop. The
+/// content area is left untouched for the caller to blit the rendered widget
+/// tree into.
+pub(crate) fn paint_window(painter: &mut Painter, m: &Metrics, chrome: &WindowChrome) {
     draw_shadow(painter, m);
 
     // Border ring(s). The interior is filled here and then mostly overdrawn by
     // the title bar / separator / content, leaving just the border layers.
+    let (titlebar_bg, _) = chrome.titlebar_colors();
     painter.fill_rect(m.frame, BORDER_DARK);
     if chrome.frame != WindowFrame::Fixed {
         let outer = m.unit;
         let inner = m.unit;
         let mid = (m.bw - outer - inner).max(0);
-        painter.fill_rect(m.frame.inset(outer), chrome.frame.mid_color());
+        painter.fill_rect(m.frame.inset(outer), chrome.frame.mid_color(titlebar_bg));
         painter.fill_rect(m.frame.inset(outer + mid), BORDER_DARK);
     }
 
     // Title bar, then the black separator line beneath it.
-    painter.fill_rect(m.titlebar, TITLEBAR_BG);
+    painter.fill_rect(m.titlebar, titlebar_bg);
     painter.fill_rect(
         Rect::new(m.titlebar.x, m.titlebar.bottom(), m.titlebar.w, m.unit),
         BORDER_DARK,
@@ -434,7 +470,8 @@ fn draw_title(painter: &mut Painter, m: &Metrics, slots: &ButtonSlots, chrome: &
     let ty = m.titlebar.y + ((m.titlebar.h - text_h) / 2).max(0);
 
     let clip = painter.push_clip(Rect::new(text_start, m.titlebar.y, text_w, m.titlebar.h));
-    painter.text(text_start, ty, &chrome.title, font_px, TITLEBAR_TEXT);
+    let (_, text_color) = chrome.titlebar_colors();
+    painter.text(text_start, ty, &chrome.title, font_px, text_color);
     painter.restore_clip(clip);
 }
 

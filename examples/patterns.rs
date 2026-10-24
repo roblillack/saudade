@@ -27,12 +27,17 @@ const W: i32 = 480;
 const H: i32 = 320;
 
 fn main() {
-    App::new(
+    let (config, root) = window();
+    App::new(config, root).with_theme(Theme::windows_31()).run();
+}
+
+/// The window and the widget tree inside it, kept apart from `main` so
+/// `examples/screenshots.rs` can render the same window offscreen.
+pub fn window() -> (WindowConfig, impl Widget) {
+    (
         WindowConfig::new("Background Patterns", W, H).resizable(true),
         Workspace::new(),
     )
-    .with_theme(Theme::windows_31())
-    .run();
 }
 
 /// Fills the whole window with the currently-selected pattern (so this demo is

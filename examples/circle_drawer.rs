@@ -60,10 +60,15 @@ type SharedAdjust = Rc<RefCell<Option<Adjust>>>;
 type SharedModalHandle = Rc<RefCell<Modal>>;
 
 fn main() {
+    let (config, root) = window();
+    App::new(config, root).with_theme(Theme::windows_31()).run();
+}
+
+/// The window and the widget tree inside it, kept apart from `main` so
+/// `examples/screenshots.rs` can render the same window offscreen.
+pub fn window() -> (WindowConfig, impl Widget) {
     let (_doc, _adjust, _modal, root) = build_app();
-    App::new(WindowConfig::new("Circle Drawer", W, H), root)
-        .with_theme(Theme::windows_31())
-        .run();
+    (WindowConfig::new("Circle Drawer", W, H), root)
 }
 
 /// Build the whole widget tree plus the shared state behind it. Returns the
