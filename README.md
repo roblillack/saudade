@@ -55,7 +55,8 @@ Reference apps live under `examples/`. Run any of them with
 | `chrome`        | <img src="docs/screenshots/chrome.png" alt="The chrome example" width="300">               | Renders an "about box" offscreen and wraps it in Canoe-style window chrome (title bar, frame, drop shadow on a teal desktop) via `MockBackend::render_framed`, writing one PNG per frame style (`Resizable` / `Fixed` / `Dialog`). Opens no window — it generates screenshots.                                                                                                                                                                                                                                                                                                                                                                           |
 
 ```console
-$ cargo run --example notepad        # or: filer, dnd, picker, counter, temperature,
+$ cargo run --example notepad        # or: filer, dnd, fullscreen, picker, dialogs,
+                                     #     focus_form, counter, temperature,
                                      #     flight_booker, timer, crud, circle_drawer,
                                      #     cells, patterns, fonts, scaling,
                                      #     credit_card, svg
@@ -599,6 +600,18 @@ accelerator**: pressing Enter anywhere inside the same `Container` or
 focus. The widget that consumed the event sets `EventCtx::consume_event`
 so the focused widget (e.g., a list whose Enter handler would otherwise
 activate the selected row) doesn't also react to the same keystroke.
+
+`with_icon` leads the label with an `SvgImage` baked by `include_svg!` (see
+"Vector icons"), or shows the icon on its own when the label is empty. The
+icon is drawn tinted in the label's color, so it greys out along with the
+label on a disabled button — which makes it meant for single-color glyphs:
+
+```rust
+const UP: SvgImage = include_svg!("assets/icons/up.svg");
+
+Button::new(Rect::new(8, 8, 80, 24), "Up").with_icon(UP);
+Button::new(Rect::new(96, 8, 32, 24), "").with_icon(UP); // icon only
+```
 
 ### `Bevel`
 
