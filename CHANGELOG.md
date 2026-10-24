@@ -64,6 +64,9 @@ While pre-1.0, the minor version is bumped for breaking changes.
   every widget at that scale, and nothing accumulates. Chrome at 1.0x, below
   1.5x and at integer scales is byte-for-byte unchanged; 1.5x moves, and so does
   `etched_h_line` below it, it having had no crisp pass before. (#53)
+- The mouse wheel and trackpad scroll inside dialogs again, such as the file
+  list of a `FileDialog`. On Windows, macOS and X11, wheel events over a
+  dialog's window were dropped. Wayland was unaffected. (#64)
 
 ### Added
 
