@@ -20,13 +20,20 @@ const ICON: SvgImage = include_svg!("assets/icons/notepad.svg");
 
 fn main() {
     // First positional argument (if any) is the file we open and save to.
-    // Notepad has always had exactly one document — so do we, for now. The
-    // path is shared because Open / Save As now retarget it at runtime.
+    // Notepad has always had exactly one document — so do we, for now.
     let initial_path: PathBuf = env::args()
         .nth(1)
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("notepad.txt"));
 
+    let (config, root) = window(initial_path);
+    App::new(config, root).with_theme(Theme::windows_31()).run();
+}
+
+/// The window and the widget tree inside it, editing the file at
+/// `initial_path`, kept apart from `main` so `examples/screenshots.rs` can
+/// render the same window offscreen.
+pub fn window(initial_path: PathBuf) -> (WindowConfig, impl Widget) {
     // Initial editor rect doesn't matter: Column::layout will resize it to
     // fill the window the moment the runtime starts.
     let mut editor = TextEditor::new(Rect::new(0, 0, 0, 0)).with_font_size(11.0);
@@ -34,6 +41,7 @@ fn main() {
         editor.set_text(&content);
     }
     let editor = Rc::new(RefCell::new(editor));
+    // Shared because Open / Save As retarget it at runtime.
     let path = Rc::new(RefCell::new(initial_path));
 
     // Shared dialog for "not implemented yet" warnings and the About box.
@@ -186,14 +194,12 @@ fn main() {
         .add_overlay(SharedDialog(dialog.clone()))
         .add_overlay(SharedFileDialog(file_dialog.clone()));
 
-    App::new(
+    (
         WindowConfig::new("Notepad", WINDOW_W, WINDOW_H)
             .resizable(true)
             .icon(ICON),
         root,
     )
-    .with_theme(Theme::windows_31())
-    .run();
 }
 
 /// Point the file dialog at the directory holding the current document, so it

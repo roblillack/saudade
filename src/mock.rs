@@ -26,10 +26,10 @@ use crate::background::{BackgroundPattern, BackgroundState, PATTERN_COLORS};
 use crate::chrome::{self, WindowChrome};
 use crate::event::{Event, EventCtx};
 use crate::font::{Font, FontSet};
-use crate::geometry::{Color, Rect, Size};
+use crate::geometry::{Color, Point, Rect, Size};
 use crate::painter::Painter;
 use crate::theme::Theme;
-use crate::widget::Widget;
+use crate::widget::{PopupKind, PopupRequest, Widget};
 
 /// Offscreen renderer used by snapshot tests.
 pub struct MockBackend {
@@ -198,21 +198,30 @@ impl MockBackend {
 
     /// Lay out the widget at the backend's logical size, paint into a
     /// fresh buffer, and return a [`Snapshot`]. If the widget reports a
-    /// [`PopupRequest`](crate::widget::PopupRequest), the popup pass is
+    /// [`PopupRequest`], the popup pass is
     /// composited on top of the main pass so the snapshot looks the same
     /// as what the user sees on-screen.
     pub fn render(&self, root: &mut dyn Widget) -> Snapshot {
         // The bare client-area pass stays plain, like the live popup/dialog
         // pass; the window background pattern is reserved for the framed,
         // regular-window path (see [`Self::render_framed`]).
-        self.render_backdrop(root, Backdrop::Plain)
+        self.render_backdrop(root, Backdrop::Plain, true)
     }
 
     /// Shared body of [`Self::render`] and the content pass of
-    /// [`Self::render_framed`]. `backdrop` selects what is filled behind the
+    /// [`Self::render_framed`] and [`Self::place_window`]. `backdrop` selects
+    /// what is filled behind the
     /// widget tree before it paints — a plain theme fill or the window
     /// background pattern — exactly mirroring the live runtime's two passes.
-    fn render_backdrop(&self, root: &mut dyn Widget, backdrop: Backdrop) -> Snapshot {
+    ///
+    /// Without `dialogs`, an open dialog — and anything opened in it — is left
+    /// out, as it is a window of its own on a [`Desktop`].
+    fn render_backdrop(
+        &self,
+        root: &mut dyn Widget,
+        backdrop: Backdrop,
+        dialogs: bool,
+    ) -> Snapshot {
         let physical = self.physical_size();
         // The runtime derives the logical content rect from the actual
         // physical buffer size rather than the requested logical size —
@@ -232,11 +241,7 @@ impl MockBackend {
                 self.scale,
                 origin_x,
                 origin_y,
-                FontSet {
-                    sans: self.font.as_ref(),
-                    serif: self.serif_font.as_ref(),
-                    mono: self.mono_font.as_ref(),
-                },
+                self.fonts(),
                 None,
             )
             .with_screen(self.screen)
@@ -264,6 +269,10 @@ impl MockBackend {
         let mut popups = Vec::new();
         root.collect_popups(&mut popups);
         for req in &popups {
+            // Outermost-first, so whatever follows a dialog was opened in it.
+            if !dialogs && req.kind == PopupKind::Dialog {
+                break;
+            }
             let popup_phys_x = origin_x + (req.rect.x as f32 * self.scale).round() as i32;
             let popup_phys_y = origin_y + (req.rect.y as f32 * self.scale).round() as i32;
             let popup_phys_w = (req.rect.w as f32 * self.scale).round() as i32;
@@ -275,11 +284,7 @@ impl MockBackend {
                 self.scale,
                 origin_x,
                 origin_y,
-                FontSet {
-                    sans: self.font.as_ref(),
-                    serif: self.serif_font.as_ref(),
-                    mono: self.mono_font.as_ref(),
-                },
+                self.fonts(),
                 Some(req.rect),
             )
             .with_screen(self.screen)
@@ -309,10 +314,15 @@ impl MockBackend {
     /// [`WindowFrame::Dialog`] stays plain, matching the live runtime's
     /// popup/dialog pass.
     ///
-    /// The window is always drawn *active* (focused). [`WindowChrome`] picks
-    /// the title and the frame style — [`WindowFrame::Resizable`],
-    /// [`WindowFrame::Fixed`], or [`WindowFrame::Dialog`] — which differ in
-    /// their window controls and border, matching Canoe's three window paints.
+    /// The window is drawn *active* (focused) unless the chrome is
+    /// [inactive](WindowChrome::inactive). [`WindowChrome`] picks the title and
+    /// the frame style — [`WindowFrame::Resizable`], [`WindowFrame::Fixed`], or
+    /// [`WindowFrame::Dialog`] — which differ in their window controls and
+    /// border, matching Canoe's three window paints.
+    ///
+    /// With no desktop to put it on, a dialog `root` has open is drawn inside
+    /// the window, as [`Self::render`] draws it. To show it as the window of
+    /// its own it is on a real desktop, arrange both on a [`Desktop`].
     ///
     /// A [fullscreen](Self::is_fullscreen) window has no chrome to draw: it is
     /// the whole display, so the snapshot is just its content, over the
@@ -322,52 +332,207 @@ impl MockBackend {
     /// [`WindowFrame::Fixed`]: crate::WindowFrame::Fixed
     /// [`WindowFrame::Dialog`]: crate::WindowFrame::Dialog
     pub fn render_framed(&self, root: &mut dyn Widget, chrome: &WindowChrome) -> Snapshot {
-        let backdrop = if chrome.paints_background_pattern() {
-            Backdrop::Pattern
-        } else {
-            Backdrop::Plain
-        };
+        let content = self.render_backdrop(root, Backdrop::for_chrome(chrome), true);
         if self.is_fullscreen() {
-            return self.render_backdrop(root, backdrop);
+            return content;
         }
-        let content = self.render_backdrop(root, backdrop);
-        let content_size = Size::new(content.width, content.height);
-        let m = chrome::metrics(content_size, self.scale, chrome);
+        let m = chrome::metrics(content.size(), self.scale, chrome);
+        let mut framed = Snapshot::filled(m.buffer, chrome.desktop_background());
+        self.paint_frame(&mut framed, (0, 0), &m, chrome, &content);
+        framed
+    }
 
-        let mut pixels = vec![0u32; (m.buffer.w * m.buffer.h) as usize];
+    /// Render `root` and place it on `desktop`, framed in `chrome`, with its
+    /// frame's top-left corner at `at` (logical desktop pixels) — the
+    /// several-windows version of [`Self::render_framed`]. The window and its
+    /// drop shadow go over whatever is already on the desktop, so place windows
+    /// back to front. The desktop has its own color and size, so the chrome's
+    /// desktop color and margin don't apply.
+    ///
+    /// A dialog `root` has open is left out: on a desktop it is a window of its
+    /// own, which [`Self::place_dialog`] places. An open popup — a menu, a
+    /// dropdown's list — still draws over the window, as it does in
+    /// [`Self::render`].
+    pub fn place_window(
+        &self,
+        desktop: &mut Desktop,
+        at: Point,
+        root: &mut dyn Widget,
+        chrome: &WindowChrome,
+    ) {
+        let content = self.render_backdrop(root, Backdrop::for_chrome(chrome), false);
+        self.place(desktop, at, &content, chrome);
+    }
+
+    /// Place the dialog `root` has open on `desktop` as the window of its own
+    /// the live runtime opens for it: framed as a dialog and titled with the
+    /// dialog's title, its frame's top-left corner at `at` (logical desktop
+    /// pixels). It is drawn active, as a modal dialog has the focus. Of several
+    /// open dialogs, the frontmost is placed.
+    ///
+    /// Returns `false`, placing nothing, if `root` has no dialog open.
+    pub fn place_dialog(&self, desktop: &mut Desktop, at: Point, root: &mut dyn Widget) -> bool {
+        // The main pass first, as the live runtime paints the main window
+        // before its popups: it lays the tree out for the dialog to find its
+        // size in.
+        let _ = self.render_backdrop(root, Backdrop::Plain, false);
+        let mut popups = Vec::new();
+        root.collect_popups(&mut popups);
+        let Some(dialog) = popups.into_iter().rfind(|p| p.kind == PopupKind::Dialog) else {
+            return false;
+        };
+        let content = self.render_popup(root, &dialog);
+        let chrome = WindowChrome::dialog(dialog.title.unwrap_or_default());
+        self.place(desktop, at, &content, &chrome);
+        true
+    }
+
+    /// Paint `req`'s window on its own, sized to it, as the live runtime paints
+    /// each window it opens for a popup or dialog.
+    fn render_popup(&self, root: &mut dyn Widget, req: &PopupRequest) -> Snapshot {
+        let phys = |v: i32| (v as f32 * self.scale).round() as i32;
+        let size = Size::new(phys(req.rect.w).max(1), phys(req.rect.h).max(1));
+        let mut pixels = vec![0u32; (size.w * size.h) as usize];
+        {
+            let mut painter = Painter::with_popup_anchor(
+                &mut pixels,
+                size.w,
+                size.h,
+                self.scale,
+                -phys(req.rect.x),
+                -phys(req.rect.y),
+                self.fonts(),
+                Some(req.rect),
+            )
+            .with_screen(self.screen)
+            .with_display_dpi(self.display_dpi);
+            painter.fill(self.theme.background);
+            painter.set_clip_phys(0, 0, size.w, size.h);
+            root.paint(&mut painter, &self.theme);
+        }
+        Snapshot {
+            width: size.w,
+            height: size.h,
+            pixels,
+        }
+    }
+
+    /// Frame `content` in `chrome` on `desktop`, the frame's top-left corner at
+    /// `at` (logical desktop pixels).
+    fn place(&self, desktop: &mut Desktop, at: Point, content: &Snapshot, chrome: &WindowChrome) {
+        // Lay the frame out with just enough margin for its whole shadow; the
+        // metrics put the frame at that margin, and the offset moves it to `at`.
+        let chrome = chrome.clone().with_margin(chrome::SHADOW_SIZE);
+        let m = chrome::metrics(content.size(), self.scale, &chrome);
+        let x = (at.x as f32 * desktop.scale).round() as i32 - m.frame.x;
+        let y = (at.y as f32 * desktop.scale).round() as i32 - m.frame.y;
+        self.paint_frame(&mut desktop.snapshot, (x, y), &m, &chrome, content);
+    }
+
+    /// Paint the chrome `m` lays out, then blit `content` into its content
+    /// slot, onto `canvas` shifted by `(x, y)` physical pixels — over whatever
+    /// the canvas already holds, which shows through the drop shadow.
+    fn paint_frame(
+        &self,
+        canvas: &mut Snapshot,
+        (x, y): (i32, i32),
+        m: &chrome::Metrics,
+        chrome: &WindowChrome,
+        content: &Snapshot,
+    ) {
         {
             let mut painter = Painter::new(
-                &mut pixels,
-                m.buffer.w,
-                m.buffer.h,
+                &mut canvas.pixels,
+                canvas.width,
+                canvas.height,
                 // The chrome metrics are already in physical pixels, so the
                 // painter draws 1:1 — no second scale pass over the frame.
                 1.0,
-                0,
-                0,
-                FontSet {
-                    sans: self.font.as_ref(),
-                    serif: self.serif_font.as_ref(),
-                    mono: self.mono_font.as_ref(),
-                },
+                x,
+                y,
+                self.fonts(),
             );
-            chrome::paint(&mut painter, &m, chrome);
+            chrome::paint_window(&mut painter, m, chrome);
         }
+        canvas.blit(content, x + m.content.x, y + m.content.y);
+    }
 
-        // Blit the rendered client area into the frame's content slot. Both
-        // buffers are physical ARGB32 and the slot fits by construction, so a
-        // straight per-row copy suffices.
-        let cw = content.width as usize;
-        for row in 0..content.height {
-            let src = (row * content.width) as usize;
-            let dst = ((m.content.y + row) * m.buffer.w + m.content.x) as usize;
-            pixels[dst..dst + cw].copy_from_slice(&content.pixels[src..src + cw]);
+    fn fonts(&self) -> FontSet<'_> {
+        FontSet {
+            sans: self.font.as_ref(),
+            serif: self.serif_font.as_ref(),
+            mono: self.mono_font.as_ref(),
         }
+    }
+}
 
-        Snapshot {
-            width: m.buffer.w,
-            height: m.buffer.h,
-            pixels,
+/// A stretch of desktop to arrange several framed windows on — an app next to
+/// the dialog it has open, say — for a screenshot of more than one window.
+/// [`MockBackend::place_window`] and [`MockBackend::place_dialog`] each draw a
+/// window on it, over the windows placed before.
+///
+/// ```no_run
+/// use saudade::*;
+/// use saudade::mock::{Desktop, MockBackend};
+///
+/// let mut editor = Container::new(240, 120).with_background(Color::WHITE);
+/// let mut about = Container::new(160, 80);
+///
+/// let mut desktop = Desktop::new(420, 220, 2.0);
+/// MockBackend::new(240, 120).with_scale(2.0).place_window(
+///     &mut desktop,
+///     Point::new(20, 20),
+///     &mut editor,
+///     &WindowChrome::resizable("Editor").inactive(),
+/// );
+/// MockBackend::new(160, 80).with_scale(2.0).place_window(
+///     &mut desktop,
+///     Point::new(220, 100),
+///     &mut about,
+///     &WindowChrome::fixed("About"),
+/// );
+/// std::fs::write("desktop.png", desktop.snapshot().to_png()).unwrap();
+/// ```
+pub struct Desktop {
+    scale: f32,
+    snapshot: Snapshot,
+}
+
+impl Desktop {
+    /// An empty desktop of `width × height` logical pixels, in Canoe's teal, at
+    /// `scale` — the scale of the backends that place windows on it.
+    pub fn new(width: i32, height: i32, scale: f32) -> Self {
+        let scale = scale.max(0.01);
+        let phys = |v: i32| ((v as f32 * scale).round() as i32).max(1);
+        Self {
+            scale,
+            snapshot: Snapshot::filled(
+                Size::new(phys(width), phys(height)),
+                chrome::DESKTOP_BACKGROUND,
+            ),
+        }
+    }
+
+    /// Fill the desktop with `color` instead of the teal. It paints over every
+    /// window placed so far, so pick the color first.
+    pub fn with_background(mut self, color: Color) -> Self {
+        self.snapshot.pixels.fill(color.0);
+        self
+    }
+
+    /// The desktop, with every window placed on it so far.
+    pub fn snapshot(&self) -> &Snapshot {
+        &self.snapshot
+    }
+}
+
+impl Backdrop {
+    /// What a window framed in `chrome` fills behind its widgets.
+    fn for_chrome(chrome: &WindowChrome) -> Self {
+        if chrome.paints_background_pattern() {
+            Backdrop::Pattern
+        } else {
+            Backdrop::Plain
         }
     }
 }
@@ -411,6 +576,34 @@ impl Snapshot {
     /// Raw ARGB32 pixel buffer, row-major, top-down.
     pub fn pixels(&self) -> &[u32] {
         &self.pixels
+    }
+
+    /// A `size` buffer filled with `color`.
+    fn filled(size: Size, color: Color) -> Self {
+        Self {
+            width: size.w,
+            height: size.h,
+            pixels: vec![color.0; (size.w * size.h) as usize],
+        }
+    }
+
+    fn size(&self) -> Size {
+        Size::new(self.width, self.height)
+    }
+
+    /// Copy `src` in with its top-left corner at `(x, y)`, cropped to fit.
+    fn blit(&mut self, src: &Snapshot, x: i32, y: i32) {
+        let x0 = x.max(0);
+        let x1 = (x + src.width).min(self.width);
+        if x0 >= x1 {
+            return;
+        }
+        let n = (x1 - x0) as usize;
+        for row in y.max(0)..(y + src.height).min(self.height) {
+            let from = ((row - y) * src.width + (x0 - x)) as usize;
+            let to = (row * self.width + x0) as usize;
+            self.pixels[to..to + n].copy_from_slice(&src.pixels[from..from + n]);
+        }
     }
 
     /// Encode the framebuffer as a deterministic PNG byte stream — the
@@ -502,5 +695,87 @@ mod tests {
             .with_background_pattern(BackgroundPattern::Solid, distinct)
             .render(&mut root);
         assert!(snap.pixels().iter().all(|&px| px != distinct.0));
+    }
+
+    fn count(snap: &Snapshot, color: Color) -> usize {
+        snap.pixels().iter().filter(|&&px| px == color.0).count()
+    }
+
+    /// An inactive window's title bar is white where an active one's is navy.
+    #[test]
+    fn inactive_window_has_white_title_bar() {
+        let backend = MockBackend::new(120, 30);
+        let active =
+            backend.render_framed(&mut Container::new(120, 30), &WindowChrome::fixed("App"));
+        let inactive = backend.render_framed(
+            &mut Container::new(120, 30),
+            &WindowChrome::fixed("App").inactive(),
+        );
+        assert!(count(&active, Color::NAVY) > 0);
+        assert_eq!(count(&inactive, Color::NAVY), 0);
+    }
+
+    /// Windows on a desktop stack back to front: a later window covers an
+    /// earlier one where they overlap, and its drop shadow falls over it.
+    #[test]
+    fn desktop_stacks_windows_back_to_front() {
+        let distinct = Color::rgb(0xAB, 0xCD, 0xEF);
+        let backend =
+            MockBackend::new(40, 30).with_background_pattern(BackgroundPattern::Solid, distinct);
+        let chrome = WindowChrome::fixed("App");
+        let mut desktop = Desktop::new(120, 100, 1.0);
+
+        backend.place_window(
+            &mut desktop,
+            Point::new(10, 10),
+            &mut Container::new(40, 30),
+            &chrome,
+        );
+        assert_eq!(count(desktop.snapshot(), distinct), 40 * 30);
+        // The pixel the second window's shadow will fall on: inside the first
+        // window's content, left of the second window's frame.
+        let at = |desktop: &Desktop| desktop.snapshot().pixels()[50 * 120 + 25];
+        assert_eq!(at(&desktop), distinct.0);
+
+        backend.place_window(
+            &mut desktop,
+            Point::new(30, 30),
+            &mut Container::new(40, 30),
+            &chrome,
+        );
+        // The second window's content is whole, the first lost the overlap.
+        assert!(count(desktop.snapshot(), distinct) < 2 * 40 * 30);
+        assert!(count(desktop.snapshot(), distinct) >= 40 * 30);
+        let shaded = at(&desktop);
+        assert!(
+            shaded & 0xFF < distinct.0 & 0xFF,
+            "no shadow over the window behind"
+        );
+    }
+
+    /// On a desktop, a dialog is a window of its own: `place_window` leaves it
+    /// out of its parent, and `place_dialog` places it, framed and active.
+    #[test]
+    fn desktop_shows_dialog_as_window_of_its_own() {
+        let backend = MockBackend::new(200, 150);
+        let place = |dialog: crate::Dialog| {
+            let mut root = crate::Column::new().add_overlay(dialog);
+            let mut desktop = Desktop::new(300, 250, 1.0);
+            let chrome = WindowChrome::fixed("App").inactive();
+            backend.place_window(&mut desktop, Point::new(10, 10), &mut root, &chrome);
+            let parent = desktop.snapshot().pixels().to_vec();
+            let placed = backend.place_dialog(&mut desktop, Point::new(60, 60), &mut root);
+            (parent, placed, count(desktop.snapshot(), Color::NAVY))
+        };
+
+        let (closed, placed, _) = place(crate::Dialog::new());
+        assert!(!placed, "no dialog open, none to place");
+
+        let mut dialog = crate::Dialog::new();
+        dialog.show_info("Note", "Hello");
+        let (parent, placed, navy) = place(dialog);
+        assert_eq!(parent, closed, "the dialog drew inside its parent window");
+        assert!(placed);
+        assert!(navy > 0, "the dialog should have an active title bar");
     }
 }

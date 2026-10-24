@@ -17,6 +17,13 @@ const W: i32 = 220;
 const H: i32 = 64;
 
 fn main() {
+    let (config, root) = window();
+    App::new(config, root).with_theme(Theme::windows_31()).run();
+}
+
+/// The window and the widget tree inside it, kept apart from `main` so
+/// `examples/screenshots.rs` can render the same window offscreen.
+pub fn window() -> (WindowConfig, impl Widget) {
     let count = Rc::new(RefCell::new(0i32));
     let display = Rc::new(RefCell::new(Label::new(Rect::new(28, 24, 64, 16), "0")));
 
@@ -37,9 +44,7 @@ fn main() {
         .add(SharedLabel(display.clone()))
         .add(button);
 
-    App::new(WindowConfig::new("Counter", W, H), root)
-        .with_theme(Theme::windows_31())
-        .run();
+    (WindowConfig::new("Counter", W, H), root)
 }
 
 /// Adapter so the button callback and the widget tree can share one `Label`.

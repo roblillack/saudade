@@ -106,11 +106,16 @@ const MARGIN: i32 = 16;
 const LINE: i32 = 14;
 
 fn main() {
+    let (config, root) = window();
+    App::new(config, root).with_theme(Theme::windows_31()).run();
+}
+
+/// The window and the widget tree inside it, kept apart from `main` so
+/// `examples/screenshots.rs` can render the same window offscreen.
+pub fn window() -> (WindowConfig, impl Widget) {
     let sheet = Sheet::new();
     let size = sheet.size;
-    App::new(WindowConfig::new("Credit Card", size.w, size.h), sheet)
-        .with_theme(Theme::windows_31())
-        .run();
+    (WindowConfig::new("Credit Card", size.w, size.h), sheet)
 }
 
 /// Everything in the window — the instruction, the card, the readout — laid

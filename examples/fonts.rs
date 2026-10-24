@@ -68,13 +68,19 @@ const H_STEP: i32 = 24;
 const GRID_LINE: Color = Color::rgb(0xD0, 0xD0, 0xD0);
 
 fn main() {
-    App::new(
+    let (config, root) = window();
+    App::new(config, root).run();
+}
+
+/// The window and the widget tree inside it, kept apart from `main` so
+/// `examples/screenshots.rs` can render the same window offscreen.
+pub fn window() -> (WindowConfig, impl Widget) {
+    (
         WindowConfig::new("Fonts", W, H)
             .resizable(true)
             .min_size(320, 200),
         Specimen::new(),
     )
-    .run();
 }
 
 /// One line of the table.

@@ -31,6 +31,13 @@ const MAX_SECONDS: i32 = 30;
 const DEFAULT_SECONDS: i32 = 15;
 
 fn main() {
+    let (config, root) = window();
+    App::new(config, root).with_theme(Theme::windows_31()).run();
+}
+
+/// The window and the widget tree inside it, kept apart from `main` so
+/// `examples/screenshots.rs` can render the same window offscreen.
+pub fn window() -> (WindowConfig, impl Widget) {
     // Elapsed time in seconds. Shared between the clock engine (writes it),
     // the slider's live re-fill, and the reset button (zeroes it).
     let elapsed = Rc::new(RefCell::new(0.0f64));
@@ -93,9 +100,7 @@ fn main() {
         .add(reset)
         .add(engine);
 
-    App::new(WindowConfig::new("Timer", W, H), root)
-        .with_theme(Theme::windows_31())
-        .run();
+    (WindowConfig::new("Timer", W, H), root)
 }
 
 /// Invisible widget that turns `Event::Tick` into elapsed-time progress. It
