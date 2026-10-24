@@ -20,9 +20,11 @@ pub enum MenuItem {
         label: String,
         /// Optional keyboard accelerator. Shown right-aligned in the drop-down
         /// (rendered through the bar's [`ModifierScheme`]) *and* live: a
-        /// matching chord against the closed bar fires the item directly — see
-        /// [`MenuBar::fire_accel`]. [`MenuItem::with_enabled`] gates it like
-        /// any other way of firing.
+        /// matching chord pressed while the bar is closed fires the item
+        /// directly, without opening its menu, and the keystroke goes no
+        /// further. [`MenuItem::with_enabled`] gates it like any other way of
+        /// firing: a chord that only matches disabled items reaches the
+        /// focused widget instead.
         accel: Option<Accel>,
         callback: Box<dyn FnMut(&mut EventCtx)>,
         /// Optional predicate gating the item, evaluated live each paint / fire.

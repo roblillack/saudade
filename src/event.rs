@@ -192,10 +192,10 @@ pub enum Event {
     /// measured in document *lines*, and positive values scroll toward the end
     /// of the content — down for `delta_y`, right for `delta_x` — the same
     /// direction a [`ScrollBar`](crate::widgets::ScrollBar)'s value grows. One
-    /// wheel notch is [`WHEEL_LINES_PER_DETENT`] lines; trackpad pixel deltas
-    /// are converted to a fractional line count, which is why the fields are
-    /// `f32`. `pos` is the cursor's position when the wheel turned, so a
-    /// container can route the gesture to the widget under the pointer.
+    /// wheel notch is three lines; trackpad pixel deltas are converted to a
+    /// fractional line count, which is why the fields are `f32`. `pos` is the
+    /// cursor's position when the wheel turned, so a container can route the
+    /// gesture to the widget under the pointer.
     Scroll {
         pos: Point,
         delta_x: f32,

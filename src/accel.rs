@@ -1,32 +1,10 @@
-//! Keyboard accelerators for menu items.
-//!
-//! An [`Accel`] names a chord in *platform-independent* terms: its modifiers
-//! are roles ([`AccelMods`]) rather than physical keys, resolved through a
-//! [`ModifierScheme`] both when the chord is matched against keyboard input
-//! and when its label is rendered. An application declares
-//! `Accel::primary('r')` once; on a Mac that means ⌘R (displayed "Cmd+R"),
-//! everywhere else Ctrl+R (displayed "Ctrl+R").
-//!
-//! The role → key mapping is chosen so that translation between platforms is
-//! *injective* — no two distinct chords on one platform collapse into the same
-//! chord on another:
-//!
-//! | role        | macOS         | elsewhere       |
-//! |-------------|---------------|-----------------|
-//! | `primary`   | ⌘ Command     | Ctrl            |
-//! | `secondary` | ⌃ Control     | Super (Win key) |
-//! | `alt`       | ⌥ Option      | Alt             |
-//! | `shift`     | Shift         | Shift           |
-//!
-//! `secondary` is best-effort outside macOS: the OS or compositor claims many
-//! Super chords for itself (Win+X on Windows, window management on Wayland),
-//! so reserve it for rare power chords that also carry `primary` — the way
-//! macOS uses ⌃⌘.
+//! Keyboard accelerators for menu items. See [`Accel`] for how a chord's
+//! modifier roles map onto each platform's keys.
 
 use crate::event::{Key, Modifiers, NamedKey};
 
 /// How the abstract modifier roles of an [`Accel`] map onto the physical
-/// modifier keys of [`Modifiers`]. See the [module docs](self) for the table.
+/// modifier keys of [`Modifiers`]. See [`Accel`] for the table.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ModifierScheme {
     /// `primary` is the Command (logo) key, `secondary` the Control key.
@@ -61,6 +39,29 @@ pub struct AccelMods {
 }
 
 /// A keyboard accelerator: a chord of modifier *roles* plus a key.
+///
+/// An `Accel` names a chord in *platform-independent* terms: its modifiers are
+/// roles ([`AccelMods`]) rather than physical keys, resolved through a
+/// [`ModifierScheme`] both when the chord is matched against keyboard input
+/// and when its label is rendered. An application declares
+/// `Accel::primary('r')` once; on a Mac that means ⌘R (displayed "Cmd+R"),
+/// everywhere else Ctrl+R (displayed "Ctrl+R").
+///
+/// The role → key mapping is chosen so that translation between platforms is
+/// *injective* — no two distinct chords on one platform collapse into the same
+/// chord on another:
+///
+/// | role        | macOS         | elsewhere       |
+/// |-------------|---------------|-----------------|
+/// | `primary`   | ⌘ Command     | Ctrl            |
+/// | `secondary` | ⌃ Control     | Super (Win key) |
+/// | `alt`       | ⌥ Option      | Alt             |
+/// | `shift`     | Shift         | Shift           |
+///
+/// `secondary` is best-effort outside macOS: the OS or compositor claims many
+/// Super chords for itself (Win+X on Windows, window management on Wayland),
+/// so reserve it for rare power chords that also carry `primary` — the way
+/// macOS uses ⌃⌘.
 ///
 /// Build one with [`Accel::primary`] (or [`Accel::new`] for a key without the
 /// command modifier, such as F5) and the chainable [`shift`](Self::shift) /
@@ -110,7 +111,7 @@ impl Accel {
     }
 
     /// Add the secondary system modifier (⌃ on macOS, Super elsewhere) to the
-    /// chord. Best-effort outside macOS — see the [module docs](self).
+    /// chord. Best-effort outside macOS — see [`Accel`].
     pub fn secondary(mut self) -> Self {
         self.mods.secondary = true;
         self
