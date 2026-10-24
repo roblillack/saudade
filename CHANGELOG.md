@@ -10,6 +10,78 @@ While pre-1.0, the minor version is bumped for breaking changes.
 
 ## [Unreleased] - ReleaseDate
 
+### Added
+
+- Fullscreen windows! `EventCtx::set_fullscreen` makes the main window fill
+  the display it is on — borderless, over the title bar and the taskbar, menu
+  bar or panels — or puts it back where it was, at the size it had;
+  `toggle_fullscreen` flips it, and `is_fullscreen` reports the current state,
+  including a switch the user made through the platform. The new size arrives
+  through `layout` like any resize. `WindowConfig::fullscreen` opens a window
+  fullscreen. Windows and X11 switch in place, macOS moves the window into its
+  own fullscreen space, and on Wayland saudade restores the windowed size the
+  compositor needn't suggest. (#62)
+- `WindowConfig::icon(SvgImage)` gives a program the icon the desktop shows for
+  it. One `include_svg!` mark goes to every place that wants one: the Windows
+  title bar (`ICON_SMALL`) and taskbar / Alt-Tab switcher (`ICON_BIG`), both
+  rasterized at the window's own DPI, so a 150% display gets a 24-pixel icon
+  drawn as 24 pixels rather than a 16-pixel one stretched; `_NET_WM_ICON` on
+  X11; `xdg_toplevel_icon_v1` on Wayland, at the sizes the compositor asks for
+  (with a 16→128 ladder for compositors that name none, and nothing at all for
+  those without the protocol, where the app_id's desktop-entry file is the only
+  icon there is); and the dock tile on macOS, whose windows have no icon of
+  their own. Dialog windows get it too, so one doesn't sit beside the main
+  window wearing the system default. Vectors rather than a bitmap precisely
+  because that list spans 16 px to 512: every size is rasterized from the
+  geometry, so none of them is a resample. `SvgImage::rasterize_rgba(size)`
+  is that rasterization on its own, for anything else that wants an image
+  rather than a draw call. (#56)
+- Function keys. `NamedKey` gains `F1` to `F24`, which every backend now
+  reports as `KeyDown` / `KeyUp` instead of dropping them, and accelerators
+  take them like any other key: `with_accel("F5")`, `"Shift+F5"`,
+  `"Ctrl+F1"`, labelled the same way in the menu. `Accel::new` builds a
+  chord without the command modifier, such as F5 alone. A `match` over
+  `NamedKey` without a catch-all arm needs the new variants. (#63)
+- `Button::with_icon` leads a push button's label with a compile-time-baked
+  `SvgImage`, or shows the icon alone when the label is empty. The icon is
+  drawn tinted in the label's color, so it engraves along with the label on a
+  disabled button. (#61)
+- Two overrides of the scale a window draws at: `SAUDADE_UI_SCALE`, and
+  `App::with_ui_scale`, set it outright, and `SAUDADE_UI_DPI` moves the
+  reference density every scale is derived against (72 dpi, see _Changed_).
+  Both variables accept `auto` and win over the program's own choice, so a UI
+  can be tried at another size without a rebuild. The Wayland backend
+  implements neither: it renders at the integer buffer scale the compositor
+  asks for. (#53)
+- `Painter::crisp(rect, |p, frame| …)` runs a frame recipe in device pixels,
+  against a `Frame` (`depth`, `ring`, `inside`) that scales and rounds each
+  boundary on the way to the buffer — the mechanism behind the crisp-chrome
+  fix under _Fixed_, for custom chrome. `Painter::chrome_unit` is the scale
+  rounded to a whole pixel, for a lone thin line. `Painter::draw_resampled`
+  renders content at a scale of its own and area-averages it into a fixed
+  on-screen box, which is what a DPI preview pane wants from a slider. (#53)
+- Merged widget frames. Two widgets that share a border, such as a list or
+  editor field and its scrollbar, now draw it as one line on HiDPI screens
+  instead of two lines a device pixel apart. A frame marks the shared edge as
+  merged (`Merged`, `Painter::crisp_merged`, merged variants of the frame
+  primitives, and `Painter::push_clip_frame` to clip to the frame's interior).
+  `List`, `TextEditor` and the scrollbar thumb use it. (#54)
+- `Painter::display_dpi`, the display's physical density where the display
+  reports its size (macOS and Windows). (#54)
+- `Checkbox::set_rect` moves a checkbox after construction, as `Slider`,
+  `Dropdown`, `ProgressBar` and `ScrollBar` already allow — for a layout that
+  reflows, e.g. a control pinned to the bottom edge of a resizable window.
+  (#53)
+- Two examples: `fonts`, a specimen sheet of every font face at a range of
+  sizes, and `credit_card`, which draws a bank card at its real size using
+  `Painter::display_dpi`. (#54)
+- Screenshots of several windows at once: `mock::Desktop` arranges framed
+  windows (`MockBackend::place_window`) and open dialogs
+  (`MockBackend::place_dialog`) on one desktop, and `WindowChrome::inactive`
+  draws a window without the focus. (#65)
+- The README shows a screenshot of every example, rendered by the new
+  `screenshots` example. (#65)
+
 ### Changed
 
 - A logical pixel now targets 72 dpi rather than 96, whatever resolution or
@@ -35,6 +107,15 @@ While pre-1.0, the minor version is bumped for breaking changes.
   chrome can draw the same shapes with `Frame::rounded_band`,
   `Painter::fill_rounded_band`, `Painter::fill_ring_near` and
   `Painter::fill_ring_far`. (#58)
+- The folder icon in `FileDialog` and the `filer` example is slightly
+  improved. (#55)
+
+### Removed
+
+- `Painter::wants_1x_crispness`, whose `[0.9, 1.5)` range described a narrower
+  fix than the one that replaced it: `Painter::crisp` is unconditional, so a
+  widget no longer branches on the scale at all. Custom chrome that gated a
+  `Painter::physical` pass on it becomes one `crisp` call. (#53)
 
 ### Fixed
 
@@ -67,90 +148,6 @@ While pre-1.0, the minor version is bumped for breaking changes.
 - The mouse wheel and trackpad scroll inside dialogs again, such as the file
   list of a `FileDialog`. On Windows, macOS and X11, wheel events over a
   dialog's window were dropped. Wayland was unaffected. (#64)
-
-### Added
-
-- Fullscreen windows! `EventCtx::set_fullscreen` makes the main window fill
-  the display it is on — borderless, over the title bar and the taskbar, menu
-  bar or panels — or puts it back where it was, at the size it had;
-  `toggle_fullscreen` flips it, and `is_fullscreen` reports the current state,
-  including a switch the user made through the platform. The new size arrives
-  through `layout` like any resize. `WindowConfig::fullscreen` opens a window
-  fullscreen. Windows and X11 switch in place, macOS moves the window into its
-  own fullscreen space, and on Wayland saudade restores the windowed size the
-  compositor needn't suggest. (#62)
-- `Button::with_icon` leads a push button's label with a compile-time-baked
-  `SvgImage`, or shows the icon alone when the label is empty. The icon is
-  drawn tinted in the label's color, so it engraves along with the label on a
-  disabled button. (#61)
-- Two overrides of the scale a window draws at: `SAUDADE_UI_SCALE`, and
-  `App::with_ui_scale`, set it outright, and `SAUDADE_UI_DPI` moves the
-  reference density every scale is derived against (72 dpi, see _Changed_).
-  Both variables accept `auto` and win over the program's own choice, so a UI
-  can be tried at another size without a rebuild. The Wayland backend
-  implements neither: it renders at the integer buffer scale the compositor
-  asks for. (#53)
-- Merged widget frames. Two widgets that share a border, such as a list or
-  editor field and its scrollbar, now draw it as one line on HiDPI screens
-  instead of two lines a device pixel apart. A frame marks the shared edge as
-  merged (`Merged`, `Painter::crisp_merged`, merged variants of the frame
-  primitives, and `Painter::push_clip_frame` to clip to the frame's interior).
-  `List`, `TextEditor` and the scrollbar thumb use it. (#54)
-- `Painter::display_dpi`, the display's physical density where the display
-  reports its size (macOS and Windows). (#54)
-- Two examples: `fonts`, a specimen sheet of every font face at a range of
-  sizes, and `credit_card`, which draws a bank card at its real size using
-  `Painter::display_dpi`. (#54)
-- Screenshots of several windows at once: `mock::Desktop` arranges framed
-  windows (`MockBackend::place_window`) and open dialogs
-  (`MockBackend::place_dialog`) on one desktop, and `WindowChrome::inactive`
-  draws a window without the focus. (#65)
-- The README shows a screenshot of every example, rendered by the new
-  `screenshots` example. (#65)
-- Function keys. `NamedKey` gains `F1` to `F24`, which every backend now
-  reports as `KeyDown` / `KeyUp` instead of dropping them, and accelerators
-  take them like any other key: `with_accel("F5")`, `"Shift+F5"`,
-  `"Ctrl+F1"`, labelled the same way in the menu. `Accel::new` builds a
-  chord without the command modifier, such as F5 alone. A `match` over
-  `NamedKey` without a catch-all arm needs the new variants. (#63)
-- `WindowConfig::icon(SvgImage)` gives a program the icon the desktop shows for
-  it. One `include_svg!` mark goes to every place that wants one: the Windows
-  title bar (`ICON_SMALL`) and taskbar / Alt-Tab switcher (`ICON_BIG`), both
-  rasterized at the window's own DPI, so a 150% display gets a 24-pixel icon
-  drawn as 24 pixels rather than a 16-pixel one stretched; `_NET_WM_ICON` on
-  X11; `xdg_toplevel_icon_v1` on Wayland, at the sizes the compositor asks for
-  (with a 16→128 ladder for compositors that name none, and nothing at all for
-  those without the protocol, where the app_id's desktop-entry file is the only
-  icon there is); and the dock tile on macOS, whose windows have no icon of
-  their own. Dialog windows get it too, so one doesn't sit beside the main
-  window wearing the system default. Vectors rather than a bitmap precisely
-  because that list spans 16 px to 512: every size is rasterized from the
-  geometry, so none of them is a resample. `SvgImage::rasterize_rgba(size)`
-  is that rasterization on its own, for anything else that wants an image
-  rather than a draw call. (#56)
-- `Painter::crisp(rect, |p, frame| …)` runs a frame recipe in device pixels,
-  against a `Frame` (`depth`, `ring`, `inside`) that scales and rounds each
-  boundary on the way to the buffer — the mechanism behind the fix above, for
-  custom chrome. `Painter::chrome_unit` is the scale rounded to a whole pixel,
-  for a lone thin line. `Painter::draw_resampled` renders content at a scale of
-  its own and area-averages it into a fixed on-screen box, which is what a DPI
-  preview pane wants from a slider. `Checkbox::set_rect` moves a checkbox after
-  construction, as `Slider` and `ScrollBar` already allow. (#53)
-- `Checkbox::set_rect` moves a checkbox after construction, as `Slider`,
-  `Dropdown`, `ProgressBar` and `ScrollBar` already allow — for a layout that
-  reflows, e.g. a control pinned to the bottom edge of a resizable window.
-  (#53)
-
-### Changed
-
-- Slightly improve folder icon. (#55)
-
-### Removed
-
-- `Painter::wants_1x_crispness`, whose `[0.9, 1.5)` range described a narrower
-  fix than the one that replaced it: `Painter::crisp` is unconditional, so a
-  widget no longer branches on the scale at all. Custom chrome that gated a
-  `Painter::physical` pass on it becomes one `crisp` call. (#53)
 
 ## [0.6.1] - 2026-08-25
 
