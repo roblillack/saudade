@@ -17,7 +17,7 @@
 //! `chrome-dialog.png` in the current directory, one per frame style.
 
 use saudade::mock::MockBackend;
-use saudade::{Bevel, Button, Color, Container, Font, Label, Rect, Widget, WindowChrome};
+use saudade::{Bevel, Button, Container, Font, Label, Painter, Rect, Theme, Widget, WindowChrome};
 
 const W: i32 = 260;
 const H: i32 = 120;
@@ -51,7 +51,7 @@ fn main() {
 /// logical pixels. Public so `examples/screenshots.rs` can frame it too.
 pub fn about_box() -> impl Widget {
     Container::new(W, H)
-        .with_background(Color::LIGHT_GRAY)
+        .add(Face(Rect::new(0, 0, W, H)))
         .add(Bevel::sunken(Rect::new(16, 16, W - 32, 48)))
         .add(Label::new(
             Rect::new(28, 26, W - 56, 16),
@@ -62,4 +62,18 @@ pub fn about_box() -> impl Widget {
             "Version 1.0 — © 1992",
         ))
         .add(Button::new(Rect::new((W - 80) / 2, 80, 80, 26), "OK").default(true))
+}
+
+/// The about box's gray ground: the theme's button face, rather than a fixed
+/// light gray, so the box goes dark along with the rest of a dark theme.
+struct Face(Rect);
+
+impl Widget for Face {
+    fn bounds(&self) -> Rect {
+        self.0
+    }
+
+    fn paint(&mut self, painter: &mut Painter, theme: &Theme) {
+        painter.fill_rect(self.0, theme.face);
+    }
 }

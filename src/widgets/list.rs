@@ -77,14 +77,18 @@ enum IconArt {
     /// A compile-time-baked vector image — crisp at any DPI, drawn straight
     /// into the row. Typically produced by [`include_svg!`](crate::include_svg).
     Svg(SvgImage),
+    /// The same, but a one-color mark drawn in the row's text color.
+    Glyph(SvgImage),
 }
 
 /// A single entry inside a [`List`]: a text label and an optional icon shown to
 /// its left. The icon may be a raster [`ListIcon`] (via [`with_icon`]) or a
-/// compile-time-baked [`SvgImage`] (via [`with_svg_icon`]).
+/// compile-time-baked [`SvgImage`] (via [`with_svg_icon`] in its own colors,
+/// or [`with_svg_glyph`] in the label's).
 ///
 /// [`with_icon`]: ListItem::with_icon
 /// [`with_svg_icon`]: ListItem::with_svg_icon
+/// [`with_svg_glyph`]: ListItem::with_svg_glyph
 pub struct ListItem {
     pub label: String,
     icon: Option<IconArt>,
@@ -110,6 +114,16 @@ impl ListItem {
     /// straight from [`include_svg!`](crate::include_svg).
     pub fn with_svg_icon(mut self, icon: SvgImage) -> Self {
         self.icon = Some(IconArt::Svg(icon));
+        self
+    }
+
+    /// Show a one-color [`SvgImage`] to the left of the label, drawn in the
+    /// label's own color whatever color the SVG paints it — like the label,
+    /// it turns white on the selection band, and light on a dark theme. For a
+    /// plain mark such as the file dialog's "up one level" arrow, which a
+    /// fixed black would lose on either.
+    pub fn with_svg_glyph(mut self, glyph: SvgImage) -> Self {
+        self.icon = Some(IconArt::Glyph(glyph));
         self
     }
 }
@@ -543,7 +557,7 @@ impl Widget for List {
         // (sunken bevel + 1-px outer border) self-manage the crisp physical-
         // pixel pass so they don't alias against the row separators or the
         // scrollbar gutter.
-        painter.fill_rect(text, Color::WHITE);
+        painter.fill_rect(text, theme.background);
         painter.sunken_bevel_merged(text, merged, theme.highlight, theme.shadow);
         painter.stroke_rect_merged(text, merged, theme.border);
 
@@ -601,6 +615,11 @@ impl Widget for List {
                 Some(IconArt::Svg(svg)) => {
                     let icon_y = y + (ROW_HEIGHT - ICON_SIZE) / 2;
                     painter.draw_svg(svg, Rect::new(icon_x, icon_y, ICON_SIZE, ICON_SIZE));
+                }
+                Some(IconArt::Glyph(svg)) => {
+                    let icon_y = y + (ROW_HEIGHT - ICON_SIZE) / 2;
+                    let rect = Rect::new(icon_x, icon_y, ICON_SIZE, ICON_SIZE);
+                    painter.draw_svg_tinted(svg, rect, text_color);
                 }
                 None => {}
             }

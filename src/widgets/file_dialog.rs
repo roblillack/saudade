@@ -423,7 +423,7 @@ impl FileDialogBody {
         let mut items = Vec::new();
         let mut entries = Vec::new();
         if self.dir.parent().is_some() {
-            items.push(ListItem::new("..").with_svg_icon(UP_ICON));
+            items.push(ListItem::new("..").with_svg_glyph(UP_ICON));
             entries.push(Entry {
                 name: "..".to_string(),
                 is_dir: true,

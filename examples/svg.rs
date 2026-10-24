@@ -160,8 +160,13 @@ impl Widget for Demo {
         Rect::new(0, 0, W, H)
     }
 
-    fn paint(&mut self, painter: &mut Painter, theme: &Theme) {
-        painter.fill(Color::WHITE);
+    fn paint(&mut self, painter: &mut Painter, _theme: &Theme) {
+        // The icons are drawn for a white workspace — black outlines that a
+        // dark one would swallow — and the resvg side is composited over white
+        // too. So the comparison keeps to the light palette even when the app
+        // is dark.
+        let theme = &Theme::windows_31();
+        painter.fill(theme.background);
 
         painter.text(
             16,

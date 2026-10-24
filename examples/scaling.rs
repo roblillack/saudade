@@ -57,9 +57,9 @@ use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use saudade::{
-    App, Button, Checkbox, Color, Container, Dropdown, Event, EventCtx, Label, Painter,
-    PopupRequest, ProgressBar, Rect, SCROLLBAR_THICKNESS, ScrollBar, Size, Slider, TextInput,
-    Theme, Widget, WindowConfig,
+    App, Button, Checkbox, Container, Dropdown, Event, EventCtx, Label, Painter, PopupRequest,
+    ProgressBar, Rect, SCROLLBAR_THICKNESS, ScrollBar, Size, Slider, TextInput, Theme, Widget,
+    WindowConfig,
 };
 
 /// Layout metrics. The controls occupy a fixed-height band at the top (down to
@@ -302,9 +302,7 @@ pub fn window() -> (WindowConfig, impl Widget) {
         ),
         (
             Rc::new(RefCell::new(
-                Label::new(max_tick_rect(init_w), "3.5x")
-                    .with_size(9.0)
-                    .with_color(Color::DARK_GRAY),
+                Label::new(max_tick_rect(init_w), "3.5x").with_size(9.0),
             )),
             max_tick_rect,
         ),
@@ -449,7 +447,7 @@ impl Widget for Root {
                 .borrow_mut()
                 .set_value((os * 100.0).round() as i32);
         }
-        painter.fill_rect(self.bounds, Color::WHITE);
+        painter.fill_rect(self.bounds, theme.background);
         self.inner.paint(painter, theme);
     }
     fn paint_overlay(&mut self, painter: &mut Painter, theme: &Theme) {
@@ -593,9 +591,9 @@ impl Widget for ScalePreview {
         let logical_h = (painter.size().h as f32 / win_scale).round() as i32;
         let rect = canvas_rect(logical_w, logical_h);
 
-        // Canvas chrome: a white field with a sunken bevel, so the preview
-        // reads as an inset pane rather than free-floating widgets.
-        painter.fill_rect(rect, Color::WHITE);
+        // Canvas chrome: a field with a sunken bevel, so the preview reads as
+        // an inset pane rather than free-floating widgets.
+        painter.fill_rect(rect, theme.background);
         painter.sunken_bevel(rect, theme.highlight, theme.shadow);
 
         let content = rect.inset(2);
@@ -613,11 +611,13 @@ impl Widget for ScalePreview {
         // the pane.
         let saved = painter.push_clip(content);
         if self.fit.get() {
-            painter.draw_resampled(fit_area(content), SAMPLE, factor, Color::WHITE, draw);
+            let bg = theme.background;
+            painter.draw_resampled(fit_area(content), SAMPLE, factor, bg, draw);
         } else {
             let zoom = if self.zoom.get() { 2 } else { 1 };
             let (fw, fh) = footprint(factor, self.zoom.get(), win_scale);
-            painter.draw_scaled(centered(content, fw, fh), factor, zoom, Color::WHITE, draw);
+            let bg = theme.background;
+            painter.draw_scaled(centered(content, fw, fh), factor, zoom, bg, draw);
         }
         painter.restore_clip(saved);
     }

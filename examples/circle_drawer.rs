@@ -47,8 +47,11 @@ const DEFAULT_DIAMETER: i32 = 30;
 const MIN_DIAMETER: i32 = 4;
 const MAX_DIAMETER: i32 = 160;
 
-/// Gray fill of the selected circle.
-const SELECTED_FILL: Color = Color::rgb(0xC8, 0xC8, 0xC8);
+/// Gray fill of the selected circle: #C8C8C8 on the light theme, a gray as far
+/// off the canvas on the dark one.
+fn selected_fill(theme: &Theme) -> Color {
+    theme.background.mix(theme.text, 0.216)
+}
 
 /// Logical size of the diameter-adjustment dialog.
 const DIALOG_W: i32 = 300;
@@ -426,7 +429,7 @@ impl Widget for Canvas {
 
     fn paint(&mut self, painter: &mut Painter, theme: &Theme) {
         let c = CANVAS_RECT;
-        painter.fill_rect(c, Color::WHITE);
+        painter.fill_rect(c, theme.background);
         painter.sunken_bevel(c, theme.highlight, theme.shadow);
         painter.stroke_rect(c, theme.border);
 
@@ -438,7 +441,7 @@ impl Widget for Canvas {
         for (i, circle) in circles.iter().enumerate() {
             let r = render_diameter(i, circle.d, adjust.as_ref()) / 2;
             if Some(i) == hi {
-                fill_disk(painter, circle.x, circle.y, r, SELECTED_FILL);
+                fill_disk(painter, circle.x, circle.y, r, selected_fill(theme));
             }
             draw_circle_outline(painter, circle.x, circle.y, r, theme.text);
         }

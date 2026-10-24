@@ -463,7 +463,7 @@ impl Widget for TextInput {
         let font_size = self.font_size_for(theme);
 
         let field_bg = if self.enabled {
-            Color::WHITE
+            theme.background
         } else {
             theme.face
         };

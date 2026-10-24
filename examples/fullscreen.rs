@@ -12,8 +12,7 @@
 //! ```
 
 use saudade::{
-    App, Button, Color, Column, Event, EventCtx, Key, NamedKey, Painter, Rect, Theme, Widget,
-    WindowConfig,
+    App, Button, Column, Event, EventCtx, Key, NamedKey, Painter, Rect, Theme, Widget, WindowConfig,
 };
 
 const CARD_W: i32 = 280;
@@ -54,7 +53,7 @@ impl Widget for Demo {
 
     fn paint(&mut self, painter: &mut Painter, theme: &Theme) {
         let card = self.card();
-        painter.fill_rect(card, Color::WHITE);
+        painter.fill_rect(card, theme.background);
         painter.stroke_rect(card, theme.border);
         let state = if self.fullscreen {
             "Full screen"

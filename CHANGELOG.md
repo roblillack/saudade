@@ -10,6 +10,39 @@ While pre-1.0, the minor version is bumped for breaking changes.
 
 ## [Unreleased] - ReleaseDate
 
+### Added
+
+- Dark mode! Every app now paints with one of two themes, whichever matches
+  the system's light or dark appearance, and switches over live when the user
+  flips it. The dark one is the new `Theme::windows_31_dark()`: the same
+  chrome — black outlines, bevels lit from the top left — on a charcoal
+  workspace, with dark-gray faces and light text. `App::with_dark_theme`
+  brings an app's own. The
+  appearance comes from winit on macOS and Windows, and from the freedesktop
+  settings portal's `color-scheme` on X11 and Wayland, read by a minimal D-Bus
+  client of saudade's own rather than a new dependency; without a portal, an
+  app stays light. `SAUDADE_THEME=dark` or `light` overrides the system,
+  title bars included where the platform draws them; `auto` follows it.
+- `Color::mix` blends two colors, for shades that should follow the theme
+  rather than be pinned.
+- `ListItem::with_svg_glyph` shows a one-color mark in the row's text color.
+  The `..` row of `FileDialog` and the `filer` example uses it, so its arrow
+  turns white on the selection band and stays visible on the dark theme.
+
+### Changed
+
+- `App::with_theme` now sets the theme for light mode only. An app that
+  customizes it gets the stock dark theme in dark mode unless it passes one
+  to `App::with_dark_theme` as well; passing the same theme to both keeps one
+  look whatever the system says.
+- Text inputs, text editors, lists and dropdowns fill their fields with
+  `theme.background` rather than a fixed white. The drop shadow under menus
+  and dropdown lists, the default ink of the window background pattern, and
+  the progress bar's fill now derive from the theme, so they come out the same
+  on the light theme and suit the dark one.
+- The examples take their colors from the theme, so they all go dark with the
+  system — except `svg`, whose comparison is drawn for a white workspace.
+
 ## [0.7.0] - 2026-10-24
 
 ### Added

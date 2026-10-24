@@ -102,7 +102,9 @@ impl Widget for Workspace {
     }
 
     fn paint(&mut self, painter: &mut Painter, theme: &Theme) {
-        painter.fill_pattern(Color::WHITE, self.pattern, self.color());
+        // On the theme's own background, as `SAUDADE_WINDOW_PATTERN_COLOR`
+        // would draw it — so on a dark theme, `black` all but disappears.
+        painter.fill_pattern(theme.background, self.pattern, self.color());
 
         let cw = 300;
         let ch = 132;

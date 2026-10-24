@@ -552,11 +552,11 @@ impl Widget for TextEditor {
         self.sync_scrollbar();
         let text = self.text_area();
 
-        // Sunken field with 1-px black outer border around the whole widget
-        // (text area + scrollbar live inside) — white when live, grey when
-        // disabled.
+        // Sunken field with 1-px outer border around the whole widget (text
+        // area + scrollbar live inside) — the background when live, the face
+        // when disabled.
         let field_bg = if self.enabled {
-            Color::WHITE
+            theme.background
         } else {
             theme.face
         };

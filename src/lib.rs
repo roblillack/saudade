@@ -7,7 +7,8 @@
 //! * widgets are ordinary Rust values implementing [`Widget`]
 //! * events are typed (no integer message IDs)
 //! * widgets request repaint / window close via [`EventCtx`]
-//! * the default [`Theme`] paints chrome that matches Windows 3.1
+//! * the default [`Theme`] paints chrome that matches Windows 3.1 — in light
+//!   or dark, as the system's appearance says
 //!
 //! ## Minimal example
 //!
@@ -15,7 +16,6 @@
 //! use saudade::*;
 //!
 //! let root = Container::new(200, 80)
-//!     .with_background(Color::WHITE)
 //!     .add(Label::new(Rect::new(10, 10, 180, 16), "Hello, world!"))
 //!     .add(
 //!         Button::new(Rect::new(60, 40, 80, 24), "OK")
@@ -33,6 +33,7 @@ extern crate self as saudade;
 
 mod accel;
 mod app;
+mod appearance;
 mod background;
 pub mod chrome;
 #[cfg(target_os = "macos")]
@@ -43,6 +44,9 @@ mod geometry;
 mod icon;
 pub mod mock;
 mod painter;
+// Only used off macOS, but built on every Unix so its tests run on a Mac too.
+#[cfg(unix)]
+mod portal;
 mod svg;
 mod theme;
 mod ui_scale;

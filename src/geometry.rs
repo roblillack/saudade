@@ -89,6 +89,27 @@ impl Color {
         self.0 as u8
     }
 
+    /// The color `t` of the way from `self` to `other`, channel by channel
+    /// (alpha included): `0.0` is `self`, `1.0` is `other`. For a shade that
+    /// should follow the theme rather than be pinned — a grid line a little
+    /// darker than the background on a light theme is a little lighter on a
+    /// dark one when it is mixed toward the text color:
+    ///
+    /// ```
+    /// # use saudade::*;
+    /// let grid = Color::WHITE.mix(Color::BLACK, 0.25);
+    /// assert_eq!(grid, Color::rgb(0xBF, 0xBF, 0xBF));
+    /// ```
+    pub fn mix(self, other: Color, t: f32) -> Color {
+        let t = t.clamp(0.0, 1.0);
+        let channel = |shift: u32| {
+            let a = ((self.0 >> shift) & 0xFF) as f32;
+            let b = ((other.0 >> shift) & 0xFF) as f32;
+            ((a + (b - a) * t).round() as u32) << shift
+        };
+        Color(channel(24) | channel(16) | channel(8) | channel(0))
+    }
+
     pub const TRANSPARENT: Color = Color(0);
     pub const BLACK: Color = Color::rgb(0x00, 0x00, 0x00);
     pub const WHITE: Color = Color::rgb(0xFF, 0xFF, 0xFF);
