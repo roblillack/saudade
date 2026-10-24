@@ -844,6 +844,28 @@ impl AppHandler {
                 self.dispatch(&event, event_loop);
                 self.mark_popups_dirty();
             }
+            WindowEvent::MouseWheel { delta, .. } => {
+                // As in the main window, the wheel lands at the last cursor
+                // location. Pixel deltas are in *this* window's physical
+                // pixels, and a dialog may sit on a display of its own DPI.
+                let Some((pos, scale)) = self
+                    .popups
+                    .get(idx)
+                    .and_then(|p| Some((p.cursor?, p.scale)))
+                else {
+                    return;
+                };
+                let (delta_x, delta_y) = scroll_delta_lines(delta, scale);
+                self.dispatch(
+                    &Event::Scroll {
+                        pos,
+                        delta_x,
+                        delta_y,
+                    },
+                    event_loop,
+                );
+                self.mark_popups_dirty();
+            }
             WindowEvent::ModifiersChanged(new_mods) => {
                 let s = new_mods.state();
                 self.modifiers = Modifiers {
