@@ -10,6 +10,8 @@ While pre-1.0, the minor version is bumped for breaking changes.
 
 ## [Unreleased] - ReleaseDate
 
+## [0.7.0] - 2026-10-24
+
 ### Added
 
 - Fullscreen windows! `EventCtx::set_fullscreen` makes the main window fill
@@ -602,8 +604,9 @@ FontStyle::Regular)`, and get caret offsets with the new
 Initial release.
 
 <!-- next-url -->
+[Unreleased]: https://github.com/roblillack/saudade/compare/v0.7.0...HEAD
 
-[Unreleased]: https://github.com/roblillack/saudade/compare/v0.6.1...HEAD
+[0.7.0]: https://github.com/roblillack/saudade/compare/v0.6.1...v0.7.0
 [0.6.1]: https://github.com/roblillack/saudade/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/roblillack/saudade/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/roblillack/saudade/compare/v0.4.0...v0.5.0
