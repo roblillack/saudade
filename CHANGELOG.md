@@ -23,6 +23,9 @@ While pre-1.0, the minor version is bumped for breaking changes.
   from, and sharing that window in a video call now shows its open menus and
   dropdowns. A popup is now an owned `WS_POPUP` window that never activates,
   like a native menu, instead of an application window of its own. (#71)
+- Windows: a menu or dropdown opened from a window on a display of another
+  scale than the primary one is no longer cut off at its right and bottom
+  edges. (#73)
 
 ## [0.7.0] - 2026-10-24
 

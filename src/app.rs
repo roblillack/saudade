@@ -1908,10 +1908,12 @@ impl AppHandler {
         };
         let mut requested = None;
         let size = physical_at(rect.into(), scale);
-        // Windows: centering the dialog above may have taken it to another
-        // display already, and winit gave it a size of its own for that one.
-        let resized_by_winit =
-            cfg!(windows) && request.kind == PopupKind::Dialog && win.inner_size() != size;
+        // Windows: the window is created on the primary display and only then
+        // moved where it belongs — to its anchor by winit, or over its owner
+        // above, for a dialog. On a display of another density winit has
+        // given it a size of its own for that one, in the platform's logical
+        // unit, which a popup drawn at its parent's scale overflows.
+        let resized_by_winit = cfg!(windows) && win.inner_size() != size;
         if scale != parent_scale || resized_by_winit {
             #[cfg(all(unix, not(target_os = "macos")))]
             pin_dialog_size(&win, size);
