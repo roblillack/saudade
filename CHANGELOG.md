@@ -10,6 +10,13 @@ While pre-1.0, the minor version is bumped for breaking changes.
 
 ## [Unreleased] - ReleaseDate
 
+### Changed
+
+- Windows: a dialog is now owned by the window it belongs to, like a native
+  one. It opens centered over that window rather than wherever Windows puts a
+  new window, stays above it, has no taskbar button of its own, and shows up
+  when that window is shared in a video call. (#72)
+
 ### Fixed
 
 - The Wayland backend draws the UI at the size the other backends do. It laid
@@ -30,9 +37,22 @@ While pre-1.0, the minor version is bumped for breaking changes.
   mode `wl_output` reports, so `examples/credit_card` draws a card at its real
   85.60 mm there rather than falling back to a nominal 72 logical pixels to the
   inch. (#76)
+- Windows: opening a menu or dropdown no longer deactivates the window it drops
+  from, and sharing that window in a video call now shows its open menus and
+  dropdowns. A popup is now an owned `WS_POPUP` window that never activates,
+  like a native menu, instead of an application window of its own. (#71)
+- Windows: a menu or dropdown opened from a window on a display of another
+  scale than the primary one is no longer cut off at its right and bottom
+  edges. (#73)
+- Windows: a click is no longer ignored when the pointer has just come back
+  into a window at the very spot it left it — after a menu that opened under
+  the pointer closes again, for instance. (#74)
 - `examples/scaling` opens its slider at the scale the window is really drawn
   at. It read that once, on the first paint — which on Wayland comes before the
   compositor has reported a scale at all. (#76)
+- The `circle_drawer` example's right-click menu now takes the keyboard:
+  Escape, the arrow keys and Enter did nothing. `ContextMenu`'s docs now say
+  that a widget owning one forwards `accepts_accelerators` to it too. (#75)
 
 ## [0.7.0] - 2026-10-24
 
