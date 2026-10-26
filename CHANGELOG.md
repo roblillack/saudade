@@ -10,6 +10,12 @@ While pre-1.0, the minor version is bumped for breaking changes.
 
 ## [Unreleased] - ReleaseDate
 
+### Fixed
+
+- The `circle_drawer` example's right-click menu now takes the keyboard:
+  Escape, the arrow keys and Enter did nothing. `ContextMenu`'s docs now say
+  that a widget owning one forwards `accepts_accelerators` to it too.
+
 ## [0.7.0] - 2026-10-24
 
 ### Added
