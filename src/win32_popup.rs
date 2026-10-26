@@ -26,14 +26,25 @@
 //! losing the keyboard instead. A click on that window's own title bar or frame
 //! doesn't move the keyboard anywhere, so [`dismiss_popups_on_frame_click`]
 //! catches it there.
+//!
+//! A dialog is [`owned_by`] the window it belongs to as well, as a native one
+//! is: it stays above that window, is hidden along with it, has no taskbar
+//! button of its own, hands the activation back to it on closing, and shows up
+//! when that window is shared. An owned window is a `WS_POPUP` one, though, and
+//! Windows puts those at the top left of the primary display unless told where
+//! to go — winit doesn't — so [`center_on_owner`] does.
 
 use std::cell::RefCell;
 
-use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
+use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM};
+use windows_sys::Win32::Graphics::Gdi::{
+    GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromWindow,
+};
 use windows_sys::Win32::UI::Shell::{DefSubclassProc, RemoveWindowSubclass, SetWindowSubclass};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    GW_OWNER, GetWindow, MA_NOACTIVATE, SendMessageW, WM_CLOSE, WM_MOUSEACTIVATE, WM_NCDESTROY,
-    WM_NCLBUTTONDOWN, WM_NCMBUTTONDOWN, WM_NCRBUTTONDOWN, WM_NCXBUTTONDOWN,
+    GW_OWNER, GetWindow, GetWindowRect, MA_NOACTIVATE, SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER,
+    SendMessageW, SetWindowPos, WM_CLOSE, WM_MOUSEACTIVATE, WM_NCDESTROY, WM_NCLBUTTONDOWN,
+    WM_NCMBUTTONDOWN, WM_NCRBUTTONDOWN, WM_NCXBUTTONDOWN,
 };
 use winit::platform::windows::WindowAttributesExtWindows;
 use winit::window::{Window, WindowAttributes};
@@ -52,11 +63,59 @@ thread_local! {
 /// `attrs` for a popup hanging off `owner`: owned by it, and shown without
 /// taking the activation from it.
 pub(crate) fn attributes(attrs: WindowAttributes, owner: &Window) -> WindowAttributes {
-    let attrs = attrs.with_active(false);
+    owned_by(attrs.with_active(false), owner)
+}
+
+/// `attrs` for a window owned by `owner`.
+pub(crate) fn owned_by(attrs: WindowAttributes, owner: &Window) -> WindowAttributes {
     match hwnd(owner) {
         // winit's own `HWND` is the pointer as an integer.
         Some(owner) => attrs.with_owner_window(owner as isize),
         None => attrs,
+    }
+}
+
+/// Move `win` to the middle of the window that owns it, kept within the work
+/// area of the display that one is on, so its title bar can't land under the
+/// taskbar or off the screen. A window without an owner is left alone.
+pub(crate) fn center_on_owner(win: &Window) {
+    let Some(hwnd) = hwnd(win) else {
+        return;
+    };
+    // SAFETY: plain calls on live windows of this thread, with out-pointers to
+    // locals; `cbSize` is set as `GetMonitorInfoW` requires.
+    unsafe {
+        let owner = GetWindow(hwnd, GW_OWNER);
+        let mut outer: RECT = std::mem::zeroed();
+        let mut own: RECT = std::mem::zeroed();
+        if owner.is_null() || GetWindowRect(owner, &mut outer) == 0 {
+            return;
+        }
+        if GetWindowRect(hwnd, &mut own) == 0 {
+            return;
+        }
+        let (w, h) = (own.right - own.left, own.bottom - own.top);
+        let mut x = (outer.left + outer.right - w) / 2;
+        let mut y = (outer.top + outer.bottom - h) / 2;
+        let mut info: MONITORINFO = std::mem::zeroed();
+        info.cbSize = size_of::<MONITORINFO>() as u32;
+        let monitor = MonitorFromWindow(owner, MONITOR_DEFAULTTONEAREST);
+        if GetMonitorInfoW(monitor, &mut info) != 0 {
+            // The top left last: a dialog bigger than the work area keeps its
+            // title bar on screen, to be dragged by.
+            let work = info.rcWork;
+            x = x.min(work.right - w).max(work.left);
+            y = y.min(work.bottom - h).max(work.top);
+        }
+        SetWindowPos(
+            hwnd,
+            std::ptr::null_mut(),
+            x,
+            y,
+            0,
+            0,
+            SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
+        );
     }
 }
 
