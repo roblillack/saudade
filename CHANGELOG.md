@@ -15,7 +15,7 @@ While pre-1.0, the minor version is bumped for breaking changes.
 - Windows: opening a menu or dropdown no longer deactivates the window it drops
   from, and sharing that window in a video call now shows its open menus and
   dropdowns. A popup is now an owned `WS_POPUP` window that never activates,
-  like a native menu, instead of an application window of its own.
+  like a native menu, instead of an application window of its own. (#71)
 
 ## [0.7.0] - 2026-10-24
 
