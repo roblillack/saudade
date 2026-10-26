@@ -13,8 +13,10 @@
 //! a small panel of real widgets — a text input, a dropdown, a checkbox,
 //! buttons (one of them focused, for its dotted focus rectangle), a progress
 //! bar, a scrollbar — at that scale, in a canvas below the controls. The slider
-//! starts at this display's actual OS scale, so the panel opens looking exactly
-//! like the rest of the window.
+//! starts at the scale this window is really drawn at, so the panel opens
+//! looking exactly like the rest of the window — and follows it until the
+//! preview is dragged somewhere else, which matters on Wayland, where the
+//! compositor says what it presents the surface at only once the window is up.
 //!
 //! The factor is the *absolute* logical→physical scale, the same number the OS
 //! reports. Try the fractional steps (1.25x, 1.5x): that's where saudade's
@@ -46,12 +48,14 @@
 //!
 //! A status bar along the bottom reports the window's *actual* OS scale factor
 //! (`Painter::system_scale`) — independent of the preview slider above — and,
-//! when it differs, the scale the window is really being drawn at. It differs
-//! on Wayland, where a fractional display (say 150%) is oversampled at 2.0x and
-//! resampled down by the compositor; and everywhere else, where saudade aims its
-//! pixel at 72 dpi — 4/3 of the factor, a Windows unit and a Mac point both
-//! counting as a 96-dpi pixel — or wherever `SAUDADE_UI_DPI` has moved that
-//! pixel to.
+//! when it differs, the scale the window is really being drawn at. It always
+//! differs, saudade aiming its pixel at 72 dpi — 4/3 of the factor, a Windows
+//! unit, a Mac point and a Wayland surface coordinate all counting as a 96-dpi
+//! pixel — or wherever `SAUDADE_UI_DPI` has moved that pixel to. On a Wayland
+//! compositor with no `wp_viewporter` it differs by more again: a fractional
+//! display (say 150%) can only be rasterized at an integer buffer scale, so it
+//! is oversampled at 2.0x and resampled down by the compositor, and the drawn
+//! scale carries that integer scale too.
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -398,6 +402,10 @@ struct Root {
     inner: Container,
     bounds: Rect,
     factor: Rc<Cell<f32>>,
+    /// The window scale the preview was last seeded from, so a seed can be
+    /// taken again when the window's scale moves and told apart from a scale
+    /// the user picked. Zero until the first paint.
+    seed: Cell<f32>,
     win: Rc<Cell<Size>>,
     // The controls that follow an edge, repositioned on every `layout`: the
     // width-spanning band at the top, and the toggles pinned to the bottom.
@@ -425,6 +433,7 @@ impl Root {
             inner,
             bounds: Rect::new(0, 0, w, h),
             factor,
+            seed: Cell::new(0.0),
             win,
             slider,
             labels,
@@ -440,14 +449,23 @@ impl Widget for Root {
         self.bounds
     }
     fn paint(&mut self, painter: &mut Painter, theme: &Theme) {
-        // First paint: adopt the OS scale as the starting preview scale and move
-        // the slider thumb to match, before any child reads either.
-        if self.factor.get() <= 0.0 {
-            let os = painter.scale();
-            self.factor.set(os);
+        // The preview opens at the window's own scale, so the panel starts out
+        // looking like the rest of the window. The first paint is not always
+        // the place to read that: a Wayland compositor reports the scale it
+        // presents the surface at a frame or two after the window is up, and
+        // until it does the window draws at what the ladder makes of a factor
+        // of 1 (1.333x) — which is what the slider used to be left showing.
+        // So the seed is taken again whenever the window's scale moves, and
+        // stops being taken once the preview is the user's: the slider's step
+        // and the presets are whole percents, never the exact float put here,
+        // so "still ours" is just "still the number we seeded".
+        let win_scale = painter.scale();
+        if self.factor.get() == self.seed.get() && self.seed.get() != win_scale {
+            self.seed.set(win_scale);
+            self.factor.set(win_scale);
             self.slider
                 .borrow_mut()
-                .set_value((os * 100.0).round() as i32);
+                .set_value((win_scale * 100.0).round() as i32);
         }
         painter.fill_rect(self.bounds, Color::WHITE);
         self.inner.paint(painter, theme);
@@ -681,10 +699,12 @@ impl Widget for FactorReadout {
 /// reads both scales from the painter each frame: `system_scale()` is the scale
 /// the display reports (e.g. 1.50x) and `scale()` the one saudade actually
 /// rasterizes at. Two things make those differ, and the bar appends the
-/// rendering scale when they do: Wayland oversamples a fractional display (we
-/// draw at 2.0x, the compositor resamples down to 1.5x), and everywhere else the
-/// OS factor is multiplied by a correction that aims a logical pixel at 1/72 in:
-/// 4/3 on Windows and X11, 3/2 on macOS.
+/// rendering scale when they do: the OS factor is multiplied by a correction
+/// that aims a logical pixel at 1/72 in — 4/3 on every platform, a Windows
+/// unit, a Mac point and a Wayland surface coordinate all counting as a 96-dpi
+/// pixel — and, on a Wayland compositor with no `wp_viewporter`, the integer
+/// buffer scale rides along on top, a fractional display being oversampled (we
+/// draw at 2.0x for 1.5x) and resampled down by the compositor.
 struct StatusBar {
     win: Rc<Cell<Size>>,
 }

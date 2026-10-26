@@ -154,10 +154,13 @@ impl App {
     /// instead, which changes the scale on every display rather than pinning
     /// one. Set to `auto`, either is as good as unset.
     ///
-    /// Has no effect under the Wayland backend, which renders at the integer
-    /// buffer scale the compositor asks for — and whose logical unit is
-    /// normalized against 96 dpi, so the 72-dpi reference does not apply there
-    /// either.
+    /// The Wayland backend works the scale out the same way, from the scale
+    /// the compositor presents the surface at — the one
+    /// `wp_fractional_scale_v1` reports, else the integer buffer scale. A
+    /// surface-local unit is the platform's own, nominally 96-dpi one there as
+    /// much as on Windows or X11, so the same ladder applies; the integer
+    /// buffer scale the content is rasterized at sits on top of it and is the
+    /// compositor's business, not the app's.
     pub fn with_ui_scale(mut self, scale: f32) -> Self {
         self.ui_scale = Some(scale.max(0.01));
         self
@@ -185,8 +188,8 @@ impl App {
     }
 
     #[cfg(all(unix, not(target_os = "macos")))]
-    pub(crate) fn into_parts(self) -> (WindowConfig, Theme, Box<dyn Widget>) {
-        (self.window, self.theme, self.root)
+    pub(crate) fn into_parts(self) -> (WindowConfig, Theme, Box<dyn Widget>, Option<f32>) {
+        (self.window, self.theme, self.root, self.ui_scale)
     }
 }
 

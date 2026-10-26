@@ -401,10 +401,11 @@ pub struct Painter<'a> {
     /// monitor (always ≥ 1 in practice).
     scale: f32,
     /// The OS/display scale the window is *presented* at — e.g. 1.5 on a 150%
-    /// display. On the Wayland backend `scale` is the integer buffer scale the
-    /// content is rasterized at (2.0 for a 150% display) and the compositor
-    /// resamples 2.0→1.5; `system_scale` records the real 1.5 so UI can report
-    /// it. Equal to `scale` on every other backend and until a backend calls
+    /// display. Always below `scale`, which carries the UI scale on top of it,
+    /// and further below on a Wayland compositor with no `wp_viewporter`, where
+    /// `scale` then also carries the integer buffer scale the content is
+    /// rasterized at before being resampled down to the fractional size. Equal
+    /// to `scale` until a backend calls
     /// [`Self::set_system_scale`]. Unlike `scale`, it is *not* swapped out by
     /// [`Self::with_scale`] / [`Self::physical`] — it describes the window, not
     /// the current draw transform.
@@ -552,15 +553,20 @@ impl<'a> Painter<'a> {
     /// Windows' Display Settings, "Larger Text" on a Mac — which the scale only
     /// carries mixed in with the display's density.
     ///
-    /// On macOS a device pixel is a pixel of the framebuffer, which is not
-    /// always one of the panel's: a 27" 4K panel in the 2560x1440 mode macOS
-    /// picks for it renders 5120 wide and is resampled down, so it comes out at
-    /// 217 here rather than the panel's own 163.
+    /// A device pixel is not always one of the panel's. On macOS it is a pixel
+    /// of the framebuffer: a 27" 4K panel in the 2560x1440 mode macOS picks for
+    /// it renders 5120 wide and is resampled down, so it comes out at 217 here
+    /// rather than the panel's own 163. On Wayland it is the panel's wherever
+    /// `wp_viewporter` lets the buffer be the fractional size the compositor
+    /// presents; on a compositor without it, a fractional display is
+    /// oversampled at the integer scale above and resampled down, so a 157-dpi
+    /// panel presented at 125% comes out at 252 — the density of what we are
+    /// drawing into, either way.
     ///
     /// `None` when there is no answer: an offscreen
     /// [`MockBackend`](crate::mock::MockBackend) render, unless it fakes one;
-    /// X11 and Wayland, which saudade does not ask; and a display that reports
-    /// no size of its own, as a projector may not.
+    /// X11, which saudade does not ask; and a display that reports no size of
+    /// its own, as a projector may not.
     pub fn display_dpi(&self) -> Option<f32> {
         self.display_dpi
     }
@@ -663,11 +669,16 @@ impl<'a> Painter<'a> {
     }
 
     /// The OS/display scale the window is presented at (e.g. 1.5 on a 150%
-    /// display). On the Wayland backend this can differ from [`Self::scale`],
-    /// the integer buffer scale the content is actually rasterized at before
-    /// the compositor resamples it down to the fractional size; on every other
-    /// backend the two are equal. Defaults to [`Self::scale`] until the
-    /// backend records the display's own scale.
+    /// display) — the figure a native app on the same display would see.
+    ///
+    /// It is not [`Self::scale`], which is what a logical pixel is really worth
+    /// in the pixels being drawn: that carries the UI scale aiming a logical
+    /// pixel at 1/72 in, and on a Wayland compositor without `wp_viewporter`
+    /// the integer buffer scale as well, the content being rasterized at that
+    /// and resampled down to the fractional size the compositor presents. A
+    /// widget asking how the *display* is set wants this one; one placing
+    /// pixels wants `scale`. Defaults to [`Self::scale`] until the backend
+    /// records the display's own scale.
     pub fn system_scale(&self) -> f32 {
         self.system_scale
     }
