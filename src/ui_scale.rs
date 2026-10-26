@@ -20,7 +20,12 @@
 //! 2. **The system's scaling factor** — what the platform reports for the
 //!    display, which carries both its density and the scaling the user set
 //!    in the OS: the percentage in Windows' Display Settings, `Xft.dpi` on
-//!    X11, `backingScaleFactor` on macOS.
+//!    X11, `backingScaleFactor` on macOS, and on Wayland the scale the
+//!    compositor presents the surface at — `wp_fractional_scale_v1`'s, where
+//!    it is there to say, else the integer buffer scale. A Wayland surface
+//!    coordinate is one of the platform's own 96-dpi units like the rest, so
+//!    the alignment above applies there too; the integer scale the buffer is
+//!    rasterized at is a separate matter, and the compositor's.
 //!
 //! The product is snapped to a twelfth ([`STEP`]). Both halves of the
 //! derivation are configurable, from the environment or from the code, and the

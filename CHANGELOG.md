@@ -19,6 +19,24 @@ While pre-1.0, the minor version is bumped for breaking changes.
 
 ### Fixed
 
+- The Wayland backend draws the UI at the size the other backends do. It laid
+  its widgets out in raw surface coordinates, so the 96→72 dpi alignment (see
+  "How big a logical pixel is") was missing there and a window came out a third
+  smaller than the same program under X11. The scale now follows the factor the
+  compositor presents the surface at, and a window keeps its logical size when
+  that moves. (#76)
+- `App::with_ui_scale`, `SAUDADE_UI_SCALE` and `SAUDADE_UI_DPI` work on
+  Wayland, having been silently ignored there. (#76)
+- Wayland windows are rasterized at the scale they are presented at, through
+  `wp_viewporter`, rather than at the integer buffer scale above it: a display
+  presented at 125% is drawn at 1.667x and goes to the glass 1:1, instead of
+  being drawn at 2.667x for the compositor to rescale by 0.625 — which undid
+  the painter's snapping, the grid every edge landed on no longer being the
+  panel's. Compositors without the protocol keep the integer path. (#76)
+- `Painter::display_dpi` answers on Wayland, off the physical size and current
+  mode `wl_output` reports, so `examples/credit_card` draws a card at its real
+  85.60 mm there rather than falling back to a nominal 72 logical pixels to the
+  inch. (#76)
 - Windows: opening a menu or dropdown no longer deactivates the window it drops
   from, and sharing that window in a video call now shows its open menus and
   dropdowns. A popup is now an owned `WS_POPUP` window that never activates,
@@ -29,6 +47,9 @@ While pre-1.0, the minor version is bumped for breaking changes.
 - Windows: a click is no longer ignored when the pointer has just come back
   into a window at the very spot it left it — after a menu that opened under
   the pointer closes again, for instance. (#74)
+- `examples/scaling` opens its slider at the scale the window is really drawn
+  at. It read that once, on the first paint — which on Wayland comes before the
+  compositor has reported a scale at all. (#76)
 - The `circle_drawer` example's right-click menu now takes the keyboard:
   Escape, the arrow keys and Enter did nothing. `ContextMenu`'s docs now say
   that a widget owning one forwards `accepts_accelerators` to it too. (#75)

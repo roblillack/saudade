@@ -50,7 +50,7 @@ Reference apps live under `examples/`. Run any of them with
 | `patterns`      | <img src="docs/screenshots/patterns.png" alt="The patterns example" width="300">           | Previews the window background patterns (`none`, `solid`, `dots`, `lines`, `diagonal`, `cross-stitch`): press `p` to cycle the pattern and `c` to cycle the color. Every app draws one behind its widgets — default `superlight` `diagonal`, overridable with `SAUDADE_WINDOW_PATTERN` / `SAUDADE_WINDOW_PATTERN_COLOR` (e.g. `SAUDADE_WINDOW_PATTERN=dots SAUDADE_WINDOW_PATTERN_COLOR=light`).                                                                                                                                                                                                                                                         |
 | `fonts`         | <img src="docs/screenshots/fonts.png" alt="The fonts example" width="300">                 | A type specimen: all twelve faces — sans / serif / monospace, each in regular, bold, italic and bold-italic — drawn at nine sizes in one large scrolling table (`Painter::text_styled`, columns sized from `measure_text_styled`, size header and style column frozen). The column matching `Theme::font_size` is highlighted; a family the host has no font for says so in place of its four rows.                                                                                                                                                                                                                                                      |
 | `scaling`       | <img src="docs/screenshots/scaling.png" alt="The scaling example" width="300">             | Previews widgets at an arbitrary logical→physical scale via `Painter::draw_scaled`: a `Slider` and two rows of preset `Button`s walking a quarter ladder (1.0x / 1.25x / … / 3.0x, plus 3.5x) drive a "preview scale" — starting at the display's OS scale — that a small panel of real widgets (`TextInput`, `Dropdown`, `Checkbox`, `Button`s including a focused one for its dotted focus rectangle, `ProgressBar`) redraws at, plus a "zoom in 2x" `Checkbox` that magnifies the result. The window resizes itself (via `EventCtx::request_window_size`) to fit the preview at the chosen scale. The window's own (OS-owned) scale is never touched. |
-| `credit_card`   | <img src="docs/screenshots/credit_card.png" alt="The credit_card example" width="300">     | Draws an ISO/IEC 7810 bank card (85.60 × 53.98 mm) at its real size, whatever scaling the display is set to: the card is painted in device pixels from `Painter::display_dpi`, while the window around it follows the scale factor. A readout compares how big a logical pixel came out on this display with the 1/72 in it aims for. Where the display reports no physical size (X11, Wayland) the card falls back to 72 logical pixels to the inch.                                                                                                                                                                                                    |
+| `credit_card`   | <img src="docs/screenshots/credit_card.png" alt="The credit_card example" width="300">     | Draws an ISO/IEC 7810 bank card (85.60 × 53.98 mm) at its real size, whatever scaling the display is set to: the card is painted in device pixels from `Painter::display_dpi`, while the window around it follows the scale factor. A readout compares how big a logical pixel came out on this display with the 1/72 in it aims for. Where the display reports no physical size (X11, a projector) the card falls back to 72 logical pixels to the inch; Wayland reports one off `wl_output`, and under fractional scaling the density is the oversampled buffer's rather than the panel's, which is the figure the card has to be counted in.                                                                                                                                                                                                    |
 | `svg`           | <img src="docs/screenshots/svg.png" alt="The svg example" width="300">                     | Compares `include_svg!` (SVG baked to polygons at compile time, filled at runtime — no SVG crate in the binary) against `include_str!` + `resvg` (parse + rasterize at runtime). Draws six icons both ways for a side-by-side fidelity check and prints a micro-benchmark to the console (run with `--release`). Needs `resvg` only as a dev-dependency, for the comparison.                                                                                                                                                                                                                                                                             |
 | `chrome`        | <img src="docs/screenshots/chrome.png" alt="The chrome example" width="300">               | Renders an "about box" offscreen and wraps it in Canoe-style window chrome (title bar, frame, drop shadow on a teal desktop) via `MockBackend::render_framed`, writing one PNG per frame style (`Resizable` / `Fixed` / `Dialog`). Opens no window — it generates screenshots.                                                                                                                                                                                                                                                                                                                                                                           |
 
@@ -1608,7 +1608,11 @@ The scale a window is drawn at is two factors multiplied together:
 2. **The system factor** — `winit`'s `scale_factor()`, which carries
    both the display's own density and whatever scaling the user set in
    the OS: the percentage in Windows' Display Settings, `Xft.dpi` on
-   X11, `backingScaleFactor` on macOS.
+   X11, `backingScaleFactor` on macOS. On Wayland it is the scale the
+   compositor presents the surface at — the one
+   `wp_fractional_scale_v1` reports, else the integer buffer scale —
+   since a surface coordinate is one of the platform's own 96-dpi
+   units just like the others.
 
 The product is snapped to a twelfth, which keeps the scales that occur
 in practice to a countable few:
@@ -1621,15 +1625,28 @@ in practice to a countable few:
 | Windows/X11 200% | 4/3       | 2.00   | 2.667 |
 | macOS 1x         | 4/3       | 1.00   | 1.333 |
 | macOS Retina     | 4/3       | 2.00   | 2.667 |
+| Wayland 100%     | 4/3       | 1.00   | 1.333 |
+| Wayland 125%     | 4/3       | 1.25   | 1.667 |
+| Wayland 200%     | 4/3       | 2.00   | 2.667 |
 
 Every rung is exact: a platform unit is sixteen twelfths of a 72-dpi
 pixel, so the snap only ever moves a factor off the ladder — an
 `Xft.dpi` set by hand — and by half a step at most.
 
-The Wayland backend is the exception: it renders at the integer buffer
-scale the compositor asks for, so neither factor applies there, and a
-Wayland window comes out about a quarter smaller than the same program
-under X11.
+Wayland reaches the same scale by a different route, because
+`wl_surface.set_buffer_scale` takes only an integer: a buffer can be
+said to be 1x or 2x the surface, never 1.25x. `wp_viewporter` is the
+way round that — a viewport states the surface's size outright, so the
+buffer is free to be exactly as many device pixels as the compositor
+will present — and with it a window at 125% is drawn at 1.667 into a
+buffer that goes to the glass 1:1, the same as on Windows or X11. On a
+compositor without it, the buffer can only be the integer scale above
+(2 for that 125% display, so `Painter::scale()` reads 2.667) and the
+compositor resamples the result down by 0.625. That costs the painter's
+work: every edge it snapped was snapped to the buffer's grid, which is
+then no longer the panel's. The window is the same *size* either way —
+the table above holds — so the integer scale is the compositor's
+business and never the app's.
 
 Both halves of that are configurable, from code or from the
 environment; the environment wins, in the spirit of winit's
@@ -1650,8 +1667,8 @@ touching the program.
 Either variable also accepts `auto`, meaning the default; anything else
 is ignored with a warning. `Painter::scale()` reports the scale the
 window draws at and `Painter::system_scale()` the factor the display
-reported. The Wayland backend implements neither knob — it renders at
-the integer buffer scale the compositor asks for.
+reported. Every backend honors both knobs, Wayland included, where the
+integer buffer scale goes on being the compositor's to pick.
 
 Note what a physical pixel is on a Mac: the framebuffer, which is not
 always the glass. A 27" 4K panel in the 2560x1440 mode macOS picks for
