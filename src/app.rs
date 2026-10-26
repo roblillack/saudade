@@ -1858,6 +1858,17 @@ impl AppHandler {
                         .with_min_inner_size(size)
                         .with_max_inner_size(size);
                 }
+
+                // Windows: owned by the window it belongs to — the dialog
+                // beneath it, or the main window — as a native dialog is. See
+                // `win32_popup`.
+                #[cfg(windows)]
+                {
+                    let owner = parent
+                        .filter(|p| p.kind == PopupKind::Dialog)
+                        .map_or(main_win.as_ref(), |p| p.win.as_ref());
+                    attrs = crate::win32_popup::owned_by(attrs, owner);
+                }
             }
         }
 
@@ -1877,6 +1888,9 @@ impl AppHandler {
             PopupKind::Dialog => {
                 crate::win32_dpi::watch_dpi_changes(&win);
                 crate::win32_popup::dismiss_popups_on_frame_click(&win);
+                // Before its scale is read below: this can take it to another
+                // display.
+                crate::win32_popup::center_on_owner(&win);
             }
             PopupKind::Popup => crate::win32_popup::never_activate(&win),
         }
@@ -1893,13 +1907,22 @@ impl AppHandler {
             }
         };
         let mut requested = None;
-        if scale != parent_scale {
-            let size = physical_at(rect.into(), scale);
+        let size = physical_at(rect.into(), scale);
+        // Windows: centering the dialog above may have taken it to another
+        // display already, and winit gave it a size of its own for that one.
+        let resized_by_winit =
+            cfg!(windows) && request.kind == PopupKind::Dialog && win.inner_size() != size;
+        if scale != parent_scale || resized_by_winit {
             #[cfg(all(unix, not(target_os = "macos")))]
             pin_dialog_size(&win, size);
             // `None` means the platform will report the new size later, in a
             // `Resized` event — take the requested size until it does.
             requested = Some(win.request_inner_size(size).unwrap_or(size));
+        }
+        // Centered again at the size it has now, frame included.
+        #[cfg(windows)]
+        if request.kind == PopupKind::Dialog {
+            crate::win32_popup::center_on_owner(&win);
         }
         // Before the first `set_visible` below, while the window is still
         // off-screen: the behavior applies to the animation that showing it

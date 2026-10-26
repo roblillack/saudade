@@ -10,6 +10,13 @@ While pre-1.0, the minor version is bumped for breaking changes.
 
 ## [Unreleased] - ReleaseDate
 
+### Changed
+
+- Windows: a dialog is now owned by the window it belongs to, like a native
+  one. It opens centered over that window rather than wherever Windows puts a
+  new window, stays above it, has no taskbar button of its own, and shows up
+  when that window is shared in a video call. (#72)
+
 ### Fixed
 
 - Windows: opening a menu or dropdown no longer deactivates the window it drops
