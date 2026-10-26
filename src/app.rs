@@ -1219,11 +1219,19 @@ impl AppHandler {
     /// on top. It dismisses by way of Escape, which the widget owning that
     /// popup consumes: that is what lets a dropdown open inside a dialog close
     /// without taking the dialog with it.
+    ///
+    /// What is on top is asked of the widget tree, not of the popup windows,
+    /// which only catch up with it once the event burst is over. The keyboard
+    /// moving from a dialog to the main window is two focus changes in one
+    /// burst, both of which call this: going by the windows, the second would
+    /// still see the dropdown the first one closed, and its Escape would cancel
+    /// the dialog.
     fn dismiss_transient_popup(&mut self, event_loop: &ActiveEventLoop) {
-        if self
-            .popups
+        let mut requests = Vec::new();
+        self.root.collect_popups(&mut requests);
+        if requests
             .last()
-            .is_some_and(|p| p.kind == PopupKind::Popup)
+            .is_some_and(|req| req.kind == PopupKind::Popup)
         {
             self.dismiss_via_escape(event_loop);
         }
