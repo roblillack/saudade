@@ -454,7 +454,10 @@ impl ApplicationHandler for AppHandler {
             .create_window(attrs)
             .expect("saudade: failed to create window");
         #[cfg(windows)]
-        crate::win32_dpi::watch_dpi_changes(&win);
+        {
+            crate::win32_dpi::watch_dpi_changes(&win);
+            crate::win32_popup::dismiss_popups_on_frame_click(&win);
+        }
         if let Some(image) = self.window_config.icon.as_ref() {
             crate::icon::set_window_icon(&win, image);
             crate::icon::set_app_icon(image);
@@ -546,7 +549,7 @@ impl ApplicationHandler for AppHandler {
         // aborts. Releasing every `Rc<Window>` now drops the windows while the
         // delegate is still configured. Order: surfaces/context before the
         // window handles, since they hold the other `Rc` clones.
-        self.popups.clear();
+        self.close_popups_from(0);
         self.main_surface = None;
         self.context = None;
         self.main_win = None;
@@ -583,7 +586,8 @@ impl AppHandler {
             // The main window took the keyboard back while a menu was up, so
             // something outside the menu was clicked — the title bar, most
             // often, on the way to dragging the window. Native menus don't
-            // survive that.
+            // survive that. (On Windows a menu never takes the keyboard in the
+            // first place: see the arm below.)
             WindowEvent::Focused(true) => {
                 self.dismiss_transient_popup(event_loop);
                 // A display's resolution or scaling changed in another app —
@@ -592,6 +596,11 @@ impl AppHandler {
                 // first seen.
                 self.refresh_screen();
             }
+            // Windows: a menu leaves the keyboard with the window it drops from
+            // (see `win32_popup`), so this losing it is the user going
+            // elsewhere — another app, or a dialog of this one.
+            #[cfg(windows)]
+            WindowEvent::Focused(false) => self.keyboard_left(None, event_loop),
             WindowEvent::Resized(new_size) => {
                 self.physical = new_size;
                 if let Some(s) = self.main_surface.as_mut() {
@@ -689,8 +698,10 @@ impl AppHandler {
             }
             WindowEvent::MouseWheel { delta, .. } => {
                 // The wheel carries no position; use the last cursor location.
-                let Some(pos) = self.cursor else { return };
-                let (delta_x, delta_y) = scroll_delta_lines(delta, self.scale);
+                let Some((pos, scale)) = self.wheel_target(None) else {
+                    return;
+                };
+                let (delta_x, delta_y) = scroll_delta_lines(delta, scale);
                 self.dispatch(
                     &Event::Scroll {
                         pos,
@@ -749,7 +760,9 @@ impl AppHandler {
             // app, or to another window of this one. Only the popup on top of
             // the stack speaks for the stack — a *parent* popup loses focus for
             // an innocent reason, namely a nested popup of its own opening
-            // above it (a dropdown inside a dialog).
+            // above it (a dropdown inside a dialog). Except on Windows, where
+            // that nested popup leaves the keyboard with the dialog, and the
+            // dialog losing it is the user going elsewhere.
             WindowEvent::Focused(focused) => {
                 let Some(p) = self.popups.get_mut(idx) else {
                     return;
@@ -761,8 +774,15 @@ impl AppHandler {
                 // A brand-new popup window reports one unfocused *before* it is
                 // given the keyboard, so a loss only means anything once it has
                 // actually held it.
-                if p.was_focused && idx + 1 == self.popups.len() {
+                if !p.was_focused {
+                    return;
+                }
+                if idx + 1 == self.popups.len() {
                     self.dismiss_transient_popup(event_loop);
+                }
+                #[cfg(windows)]
+                if self.popups[idx].kind == PopupKind::Dialog {
+                    self.keyboard_left(Some(idx), event_loop);
                 }
             }
             WindowEvent::Moved(_) => {
@@ -849,13 +869,10 @@ impl AppHandler {
             }
             WindowEvent::MouseWheel { delta, .. } => {
                 // As in the main window, the wheel lands at the last cursor
-                // location. Pixel deltas are in *this* window's physical
-                // pixels, and a dialog may sit on a display of its own DPI.
-                let Some((pos, scale)) = self
-                    .popups
-                    .get(idx)
-                    .and_then(|p| Some((p.cursor?, p.scale)))
-                else {
+                // location. Pixel deltas are in the physical pixels of the
+                // window under it, and a dialog may sit on a display of its own
+                // DPI.
+                let Some((pos, scale)) = self.wheel_target(Some(idx)) else {
                     return;
                 };
                 let (delta_x, delta_y) = scroll_delta_lines(delta, scale);
@@ -890,6 +907,29 @@ impl AppHandler {
             }
             _ => {}
         }
+    }
+
+    /// Where a wheel turn sent to the window at `idx` in the popup stack — the
+    /// main window for `None` — lands, and the scale of the window it lands in.
+    /// That is the pointer's place in that window, or, with the pointer over a
+    /// popup instead, its place there: Windows can send the wheel to the window
+    /// holding the keyboard rather than the one under the pointer ("Scroll
+    /// inactive windows" turned off), and a menu leaves the keyboard with the
+    /// window it drops from.
+    fn wheel_target(&self, idx: Option<usize>) -> Option<(Point, f32)> {
+        let own = match idx {
+            None => self.cursor.map(|pos| (pos, self.scale)),
+            Some(idx) => self
+                .popups
+                .get(idx)
+                .and_then(|p| Some((p.cursor?, p.scale))),
+        };
+        own.or_else(|| {
+            self.popups
+                .iter()
+                .rev()
+                .find_map(|p| Some((p.cursor?, p.scale)))
+        })
     }
 
     /// Mark every popup window dirty. Cheap, and the right thing after any
@@ -1186,6 +1226,21 @@ impl AppHandler {
             .is_some_and(|p| p.kind == PopupKind::Popup)
         {
             self.dismiss_via_escape(event_loop);
+        }
+    }
+
+    /// Windows: the window at `idx` in the popup stack — the main window for
+    /// `None` — lost the keyboard. If everything stacked above it is a transient
+    /// popup, it was holding the keyboard for them (see [`crate::win32_popup`]),
+    /// so they go too.
+    #[cfg(windows)]
+    fn keyboard_left(&mut self, idx: Option<usize>, event_loop: &ActiveEventLoop) {
+        let above = idx.map_or(0, |idx| idx + 1);
+        if self.popups[above..]
+            .iter()
+            .all(|p| p.kind == PopupKind::Popup)
+        {
+            self.dismiss_transient_popup(event_loop);
         }
     }
 
@@ -1625,6 +1680,15 @@ impl AppHandler {
         true
     }
 
+    /// Close the popup windows from `keep` up, topmost first: on Windows each
+    /// one is owned by the window beneath it, and destroying an owner takes the
+    /// windows it owns down with it, behind winit's back.
+    fn close_popups_from(&mut self, keep: usize) {
+        while self.popups.len() > keep {
+            self.popups.pop();
+        }
+    }
+
     fn sync_popup(&mut self, event_loop: &ActiveEventLoop) {
         let mut requests = Vec::new();
         self.root.collect_popups(&mut requests);
@@ -1658,7 +1722,7 @@ impl AppHandler {
             keep += 1;
         }
 
-        self.popups.truncate(keep);
+        self.close_popups_from(keep);
         for req in requests.into_iter().skip(keep) {
             // Nested popups anchor against the popup *above* them in the
             // stack (e.g. a dropdown opened inside a dialog tracks the
@@ -1733,6 +1797,14 @@ impl AppHandler {
                         .with_x11_window_type(vec![XWindowType::DropdownMenu]);
                 }
 
+                // Windows: owned by the window it drops from, which keeps the
+                // keyboard — see `win32_popup`.
+                #[cfg(windows)]
+                {
+                    let owner = parent.map_or(main_win.as_ref(), |p| p.win.as_ref());
+                    attrs = crate::win32_popup::attributes(attrs, owner);
+                }
+
                 // Absolute screen position = anchor window inner position
                 // + popup offset, where the anchor is the parent popup
                 // (for a nested popup) or the main window otherwise.
@@ -1790,10 +1862,15 @@ impl AppHandler {
         {
             crate::icon::set_window_icon(&win, image);
         }
-        // A dialog can be dragged to another display, like the main window.
         #[cfg(windows)]
-        if request.kind == PopupKind::Dialog {
-            crate::win32_dpi::watch_dpi_changes(&win);
+        match request.kind {
+            // A dialog can be dragged to another display, like the main window,
+            // and has a title bar of its own to click a dropdown away with.
+            PopupKind::Dialog => {
+                crate::win32_dpi::watch_dpi_changes(&win);
+                crate::win32_popup::dismiss_popups_on_frame_click(&win);
+            }
+            PopupKind::Popup => crate::win32_popup::never_activate(&win),
         }
         // The platform placed the dialog, and may have put it on a display of
         // another density than its parent's: draw it at that display's scale,
