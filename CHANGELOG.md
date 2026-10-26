@@ -14,7 +14,7 @@ While pre-1.0, the minor version is bumped for breaking changes.
 
 - The `circle_drawer` example's right-click menu now takes the keyboard:
   Escape, the arrow keys and Enter did nothing. `ContextMenu`'s docs now say
-  that a widget owning one forwards `accepts_accelerators` to it too.
+  that a widget owning one forwards `accepts_accelerators` to it too. (#75)
 
 ## [0.7.0] - 2026-10-24
 
