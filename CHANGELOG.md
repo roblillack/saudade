@@ -10,8 +10,25 @@ While pre-1.0, the minor version is bumped for breaking changes.
 
 ## [Unreleased] - ReleaseDate
 
+### Changed
+
+- Windows: a dialog is now owned by the window it belongs to, like a native
+  one. It opens centered over that window rather than wherever Windows puts a
+  new window, stays above it, has no taskbar button of its own, and shows up
+  when that window is shared in a video call. (#72)
+
 ### Fixed
 
+- Windows: opening a menu or dropdown no longer deactivates the window it drops
+  from, and sharing that window in a video call now shows its open menus and
+  dropdowns. A popup is now an owned `WS_POPUP` window that never activates,
+  like a native menu, instead of an application window of its own. (#71)
+- Windows: a menu or dropdown opened from a window on a display of another
+  scale than the primary one is no longer cut off at its right and bottom
+  edges. (#73)
+- Windows: a click is no longer ignored when the pointer has just come back
+  into a window at the very spot it left it — after a menu that opened under
+  the pointer closes again, for instance. (#74)
 - The `circle_drawer` example's right-click menu now takes the keyboard:
   Escape, the arrow keys and Enter did nothing. `ContextMenu`'s docs now say
   that a widget owning one forwards `accepts_accelerators` to it too. (#75)
