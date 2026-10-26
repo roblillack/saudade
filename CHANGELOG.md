@@ -28,7 +28,7 @@ While pre-1.0, the minor version is bumped for breaking changes.
   edges. (#73)
 - Windows: a click is no longer ignored when the pointer has just come back
   into a window at the very spot it left it — after a menu that opened under
-  the pointer closes again, for instance.
+  the pointer closes again, for instance. (#74)
 
 ## [0.7.0] - 2026-10-24
 
