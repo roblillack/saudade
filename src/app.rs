@@ -240,6 +240,11 @@ struct AppHandler {
 
     // Per-frame state:
     cursor: Option<Point>,
+    /// The pointer position winit last reported for the main window, kept when
+    /// the pointer leaves it: winit doesn't report it again for a pointer that
+    /// comes back to that very spot — see the `CursorEntered` arm in
+    /// [`Self::handle_main_event`].
+    last_pointer: Option<PhysicalPosition<f64>>,
     /// Pointer shape currently applied to the main window. Tracked so we only
     /// call into winit (whose cursor is a sticky window attribute) when a move
     /// actually changes the shape. Reset toward [`Cursor::Default`] when no
@@ -404,6 +409,7 @@ impl AppHandler {
             scale_pin: crate::ui_scale::pinned(app.ui_scale),
             reference_dpi: crate::ui_scale::reference_dpi(),
             cursor: None,
+            last_pointer: None,
             cursor_icon: Cursor::Default,
             buttons: PointerButtons::default(),
             modifiers: Modifiers::default(),
@@ -637,7 +643,24 @@ impl AppHandler {
                 self.adopt_scale(scale_factor as f32, &mut inner_size_writer);
                 self.needs_redraw = true;
             }
+            // winit sends no `CursorMoved` with this when the pointer comes
+            // back to the very spot it was last reported at — as it does when
+            // a popup that opened under it closes again: on Windows it never
+            // reports the same position twice in a row. Unreported, the pointer
+            // would have no position here, and the next click nowhere to land,
+            // so take up the one it was last seen at. Where winit does report a
+            // move, that one follows straight away.
+            WindowEvent::CursorEntered { device_id } => {
+                if let Some(position) = self.last_pointer {
+                    let moved = WindowEvent::CursorMoved {
+                        device_id,
+                        position,
+                    };
+                    self.handle_main_event(moved, event_loop);
+                }
+            }
             WindowEvent::CursorMoved { position, .. } => {
+                self.last_pointer = Some(position);
                 let content = self.root.bounds().into();
                 let (origin_x, origin_y) = origin(content, self.scale, self.physical);
                 let pos = physical_to_logical(position, self.scale, origin_x, origin_y);
@@ -806,10 +829,22 @@ impl AppHandler {
                     p.needs_redraw = true;
                 }
             }
+            // As in the main window: winit may not report where the pointer
+            // came back in.
+            WindowEvent::CursorEntered { device_id } => {
+                if let Some(position) = self.popups.get(idx).and_then(|p| p.last_pointer) {
+                    let moved = WindowEvent::CursorMoved {
+                        device_id,
+                        position,
+                    };
+                    self.handle_popup_event(idx, moved, event_loop);
+                }
+            }
             WindowEvent::CursorMoved { position, .. } => {
                 let Some(p) = self.popups.get_mut(idx) else {
                     return;
                 };
+                p.last_pointer = Some(position);
                 let pos = popup_position_to_widget(position, p);
                 p.cursor = Some(pos);
                 let ctx = self.dispatch(&Event::PointerMove { pos }, event_loop);
@@ -1951,6 +1986,7 @@ impl AppHandler {
             os_scale,
             display_dpi,
             cursor: None,
+            last_pointer: None,
             cursor_icon: Cursor::Default,
             was_focused: false,
             needs_redraw: true,
@@ -1980,6 +2016,9 @@ struct PopupWindow {
     /// Follows [`Self::scale`]: a popup's is its parent's.
     display_dpi: Option<f32>,
     cursor: Option<Point>,
+    /// The pointer position winit last reported for this window — see the same
+    /// field on [`AppHandler`].
+    last_pointer: Option<PhysicalPosition<f64>>,
     /// Pointer shape currently applied to this popup window — see the same
     /// field on [`AppHandler`].
     cursor_icon: Cursor,
