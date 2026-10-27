@@ -233,6 +233,9 @@ impl Widget for Modal {
                 content.on_cancel(ctx);
             }
             self.fire_dismiss(ctx);
+            // Handled: a modal this one is the content of — the dialog it was
+            // opened over — must not take the same Escape as its own.
+            ctx.consume_event();
         }
     }
 

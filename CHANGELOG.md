@@ -78,6 +78,10 @@ While pre-1.0, the minor version is bumped for breaking changes.
   dialog is open, as the owner of a native modal dialog is, so the keyboard and
   the active title bar stay with the dialog, and a click on that window closes a
   dropdown open in the dialog. (#82)
+- With a dialog open over another one, Escape or the close button of the one
+  on top closes just that one, rather than both. A `Modal` now consumes the
+  Escape it closes on, and a key still held as a window takes the keyboard is
+  no longer taken for a fresh press there (Windows, X11). (#83)
 
 ## [0.7.0] - 2026-10-24
 
