@@ -1781,6 +1781,14 @@ impl AppHandler {
     /// windows it owns down with it, behind winit's back.
     fn close_popups_from(&mut self, keep: usize) {
         while self.popups.len() > keep {
+            // Windows: the window beneath a dialog is enabled again before the
+            // dialog goes, to take the activation back — see `win32_popup`.
+            #[cfg(windows)]
+            if let Some(p) = self.popups.last()
+                && p.kind == PopupKind::Dialog
+            {
+                crate::win32_popup::enable_owner(&p.win);
+            }
             self.popups.pop();
         }
     }
@@ -2068,6 +2076,13 @@ impl AppHandler {
             PopupKind::Dialog => crate::macos_popup::attach_dialog(&win, owner),
         }
         win.set_visible(true);
+        // Windows: now that the dialog holds the activation, the window beneath
+        // it is disabled for as long as it is open, as a native modal dialog's
+        // owner is — see `win32_popup`.
+        #[cfg(windows)]
+        if request.kind == PopupKind::Dialog {
+            crate::win32_popup::disable_owner(&win);
+        }
 
         Some(PopupWindow {
             win,
