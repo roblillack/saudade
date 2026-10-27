@@ -1,4 +1,5 @@
-//! macOS: a menu or dropdown belongs to the window it drops from.
+//! macOS: a menu or dropdown belongs to the window it drops from, and a dialog
+//! to the window it opens over.
 //!
 //! saudade hosts every popup in a window of its own, and to AppKit a winit
 //! window is one like any other: unrelated to the window it drops from, and
@@ -13,14 +14,14 @@
 //!   window's child windows, even where they hang off its edge, but no other
 //!   window of the app lying on top of it.
 //!
-//! [`attach`] makes the popup a child window of the one it drops from, which the
-//! window server then carries along with it, and which capture counts as part
-//! of it. And the popup leaves the keyboard with that window, as a native menu
-//! does. winit's window class says yes to any window asking to become key or
-//! main, and a winit window has had its class swapped by key-value observing
-//! before we ever see it, so it can't be given a subclass of its own: the
-//! answer is changed on winit's class instead, to no for a window with a
-//! parent. The keyboard stays with the window beneath, and reaches the widget
+//! [`attach_popup`] makes the popup a child window of the one it drops from,
+//! which the window server then carries along with it, and which capture counts
+//! as part of it. And the popup leaves the keyboard with that window, as a
+//! native menu does. winit's window class says yes to any window asking to
+//! become key or main, and a winit window has had its class swapped by
+//! key-value observing before we ever see it, so it can't be given a subclass
+//! of its own: the answer is changed on winit's class instead, to no for a
+//! popup. The keyboard stays with the window beneath, and reaches the widget
 //! tree from there, as it does on X11 and Windows.
 //!
 //! A window that isn't key can't count on mouse-moved events: AppKit sends them
@@ -32,6 +33,18 @@
 //! or another window of this one taking over still shows, as the window beneath
 //! losing the keyboard instead. A click on that window's own title bar doesn't
 //! move the keyboard anywhere, so an event monitor catches it there.
+//!
+//! A dialog was a window of its own as well: left out when the window it opens
+//! over was shared, put behind that window when that one was clicked, and left
+//! behind when it moved. [`attach_dialog`] makes it a child window of that
+//! window too, which keeps it above it and has it move along and be shared
+//! with it. Unlike a popup it takes the keyboard, as any window with a title
+//! bar does, and keeps it for as long as it is open, as a modal one does: the
+//! window beneath refuses to become key or main meanwhile, so clicking that one
+//! leaves the keyboard and the active title bar with the dialog, rather than
+//! taking them while its keystrokes go to the dialog all the same. winit
+//! centers a window it is given no position for on its display, so
+//! [`center_over`] puts a dialog over its window instead.
 
 use std::cell::OnceCell;
 use std::mem;
@@ -44,15 +57,15 @@ use objc2::runtime::{AnyClass, AnyObject, Bool, Imp, NSObjectProtocol, Sel};
 use objc2::{AnyThread, MainThreadMarker, MainThreadOnly, ffi, sel};
 use objc2_app_kit::{
     NSEvent, NSEventMask, NSTrackingArea, NSTrackingAreaOptions, NSView, NSWindow,
-    NSWindowDelegate, NSWindowOrderingMode,
+    NSWindowDelegate, NSWindowOrderingMode, NSWindowStyleMask,
 };
-use objc2_core_foundation::CGRect;
+use objc2_core_foundation::{CGPoint, CGRect};
 use winit::window::Window;
 
 use crate::app::ns_window;
 
 /// What winit's window class answered `canBecomeKeyWindow` and
-/// `canBecomeMainWindow` with, in that order, before [`leave_keyboard_with_parent`]
+/// `canBecomeMainWindow` with, in that order, before [`take_over_key_answers`]
 /// took the two over. Set once, whether that worked or not.
 static ORIGINAL: OnceLock<[Option<Imp>; 2]> = OnceLock::new();
 
@@ -70,26 +83,83 @@ thread_local! {
 /// AppKit gives a child its parent's window level, which is fine: it keeps it
 /// ordered above the parent. Closing the popup takes it off the parent again.
 /// A window that can't be reached is left as it was.
-pub(crate) fn attach(win: &Window, parent: &Window) {
+pub(crate) fn attach_popup(win: &Window, parent: &Window) {
     let (Some(window), Some(parent)) = (ns_window(win), ns_window(parent)) else {
         return;
     };
     let mtm = window.mtm();
-    leave_keyboard_with_parent();
+    take_over_key_answers();
     dismiss_popups_on_frame_click(mtm);
     if let Some(view) = window.contentView() {
         track_mouse_moves(&view);
     }
-    // SAFETY: two live windows of this thread, and an ordering mode AppKit
-    // defines.
-    unsafe { parent.addChildWindow_ordered(&window, NSWindowOrderingMode::Above) };
+    add_child(&parent, &window);
 }
 
-/// Have winit's windows refuse to become key or main while they have a parent
-/// — a popup [`attach`]ed to the window it drops from — and answer as before
-/// otherwise. Done once; if winit's window class can't be found, a popup takes
-/// the keyboard as it would without.
-fn leave_keyboard_with_parent() {
+/// Make the dialog `win` a child window of `parent`, the window it opens over.
+/// As with [`attach_popup`], this shows it, and is called once, when the dialog
+/// is ready to be seen.
+pub(crate) fn attach_dialog(win: &Window, parent: &Window) {
+    if let (Some(window), Some(parent)) = (ns_window(win), ns_window(parent)) {
+        take_over_key_answers();
+        add_child(&parent, &window);
+    }
+}
+
+fn add_child(parent: &NSWindow, child: &NSWindow) {
+    // SAFETY: two live windows of this thread, and an ordering mode AppKit
+    // defines.
+    unsafe { parent.addChildWindow_ordered(child, NSWindowOrderingMode::Above) };
+}
+
+/// Move the dialog `win` to the middle of `parent`, kept within the part of the
+/// display `parent` is on that the menu bar and the Dock leave free, so its
+/// title bar can't land under either or off the screen.
+pub(crate) fn center_over(win: &Window, parent: &Window) {
+    let (Some(window), Some(parent)) = (ns_window(win), ns_window(parent)) else {
+        return;
+    };
+    let over = parent.frame();
+    let size = window.frame().size;
+    let mut x = over.origin.x + (over.size.width - size.width) / 2.0;
+    let mut y = over.origin.y + (over.size.height - size.height) / 2.0;
+    if let Some(screen) = parent.screen() {
+        // In points, with y growing upwards: the top edge, the title bar, is
+        // the one kept on screen where both can't be.
+        let free = screen.visibleFrame();
+        x = x
+            .min(free.origin.x + free.size.width - size.width)
+            .max(free.origin.x);
+        y = y
+            .max(free.origin.y)
+            .min(free.origin.y + free.size.height - size.height);
+    }
+    window.setFrameOrigin(CGPoint::new(x.round(), y.round()));
+}
+
+/// Whether `window` is a popup: a child window without a title bar. A dialog is
+/// a child window too, but has one, and takes the keyboard as any window with
+/// a title bar does.
+fn is_popup(window: &NSWindow) -> bool {
+    window.parentWindow().is_some() && !window.styleMask().contains(NSWindowStyleMask::Titled)
+}
+
+/// Whether a dialog is open over `window`: a child window with a title bar.
+fn has_dialog(window: &NSWindow) -> bool {
+    window.childWindows().is_some_and(|children| {
+        children
+            .to_vec()
+            .iter()
+            .any(|child| child.styleMask().contains(NSWindowStyleMask::Titled))
+    })
+}
+
+/// Have winit's windows refuse to become key or main while they are popups
+/// [`attach_popup`]ed to the window they drop from, or while a dialog is
+/// [`attach_dialog`]ed to them, and answer as before otherwise. Done once; if
+/// winit's window class can't be found, a popup takes the keyboard, and a window
+/// beneath a dialog can take it back, as they would without.
+fn take_over_key_answers() {
     ORIGINAL.get_or_init(|| {
         let Some(class) = AnyClass::get(c"WinitWindow") else {
             return [None, None];
@@ -137,14 +207,14 @@ unsafe extern "C-unwind" fn can_become_main_window(this: &NSWindow, cmd: Sel) ->
     unsafe { answer(this, cmd, 1) }
 }
 
-/// No for a window with a parent, and the original answer — the one at `idx`
-/// in [`ORIGINAL`] — for any other.
+/// No for a popup and for a window with a dialog open over it, and the original
+/// answer — the one at `idx` in [`ORIGINAL`] — for any other window.
 ///
 /// # Safety
 ///
 /// Called with the arguments the method being answered for was sent.
 unsafe fn answer(this: &NSWindow, cmd: Sel, idx: usize) -> Bool {
-    if this.parentWindow().is_some() {
+    if is_popup(this) || has_dialog(this) {
         return Bool::NO;
     }
     match ORIGINAL.get().and_then(|original| original[idx]) {
@@ -184,7 +254,8 @@ fn track_mouse_moves(view: &NSView) {
     view.addTrackingArea(&area);
 }
 
-/// Have a click on a window's title bar or frame close the popups it carries.
+/// Have a click on a window's title bar or frame close the popups it carries —
+/// not its dialogs, which stay open as they would over any other click.
 /// They are asked to close, as by their close button, which the runtime answers
 /// for a popup as it does Escape. Installed once, for every window of the app.
 fn dismiss_popups_on_frame_click(mtm: MainThreadMarker) {
@@ -224,7 +295,7 @@ fn close_popups_on_frame_click(event: &NSEvent, mtm: MainThreadMarker) {
     }
     // Before the press is handled: on the title bar that is the start of a
     // window move, which the popup is not to come along on.
-    for popup in popups.to_vec() {
+    for popup in popups.to_vec().into_iter().filter(|child| is_popup(child)) {
         if let Some(delegate) = popup.delegate()
             && delegate.respondsToSelector(sel!(windowShouldClose:))
         {

@@ -1677,9 +1677,9 @@ impl AppHandler {
     /// dialog above for a nested dropdown). Called when the main window —
     /// or a popup window — moves, since override-redirect popups are
     /// unmanaged top-levels that the WM doesn't drag along. Managed
-    /// dialogs (`PopupKind::Dialog`) keep their own screen position. A
-    /// macOS popup is a child window that AppKit has moved already (see
-    /// `macos_popup`), so this leaves it where it is.
+    /// dialogs (`PopupKind::Dialog`) keep their own screen position. On
+    /// macOS both are child windows that AppKit has moved already (see
+    /// `macos_popup`), so this leaves a popup where it is.
     fn reposition_popup(&mut self) {
         let Some(main_win) = self.main_win.as_ref() else {
             return;
@@ -1963,6 +1963,22 @@ impl AppHandler {
             }
             PopupKind::Popup => crate::win32_popup::never_activate(&win),
         }
+        // macOS: a child window of the window it belongs to — see
+        // `macos_popup`. That is the one a popup drops from, and for a dialog
+        // the dialog beneath it or the main window, as on Windows.
+        #[cfg(target_os = "macos")]
+        let owner = match request.kind {
+            PopupKind::Popup => parent.map_or(main_win.as_ref(), |p| p.win.as_ref()),
+            PopupKind::Dialog => parent
+                .filter(|p| p.kind == PopupKind::Dialog)
+                .map_or(main_win.as_ref(), |p| p.win.as_ref()),
+        };
+        // Over that window rather than wherever winit centers it, and before
+        // its scale is read below: this can take it to another display.
+        #[cfg(target_os = "macos")]
+        if request.kind == PopupKind::Dialog {
+            crate::macos_popup::center_over(&win, owner);
+        }
         // The platform placed the dialog, and may have put it on a display of
         // another density than its parent's: draw it at that display's scale,
         // as the main window would be there. Still hidden, so the resize this
@@ -1991,9 +2007,11 @@ impl AppHandler {
             requested = Some(win.request_inner_size(size).unwrap_or(size));
         }
         // Centered again at the size it has now, frame included.
-        #[cfg(windows)]
         if request.kind == PopupKind::Dialog {
+            #[cfg(windows)]
             crate::win32_popup::center_on_owner(&win);
+            #[cfg(target_os = "macos")]
+            crate::macos_popup::center_over(&win, owner);
         }
         // Before the first `set_visible` below, while the window is still
         // off-screen: the behavior applies to the animation that showing it
@@ -2022,13 +2040,13 @@ impl AppHandler {
         };
         let surface = Surface::new(context, win.clone(), actual, want)?;
         let transparent = surface.honors_alpha();
-        // macOS: a child window of the one it drops from, which keeps the
-        // keyboard — see `macos_popup`. That shows it, as a window that won't
-        // take the keyboard, which `set_visible` would otherwise hand it.
+        // macOS: made a child window of its owner, which shows it — a popup as
+        // a window that won't take the keyboard, which `set_visible` would
+        // otherwise hand it.
         #[cfg(target_os = "macos")]
-        if request.kind == PopupKind::Popup {
-            let parent_win = parent.map_or(main_win.as_ref(), |p| p.win.as_ref());
-            crate::macos_popup::attach(&win, parent_win);
+        match request.kind {
+            PopupKind::Popup => crate::macos_popup::attach_popup(&win, owner),
+            PopupKind::Dialog => crate::macos_popup::attach_dialog(&win, owner),
         }
         win.set_visible(true);
 
