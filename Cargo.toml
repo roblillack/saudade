@@ -103,9 +103,14 @@ windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Graphic
 # `CGDisplayScreenSize` is a fourth: a display's physical size, which
 # `Painter::display_dpi` works a density out of. And a popup window's own
 # Core Animation layer (see `macos_layer`), shown from a straight-alpha
-# `CGImage`, is the fifth: softbuffer 0.4's drops the alpha byte.
+# `CGImage`, is the fifth: softbuffer 0.4's drops the alpha byte. The sixth is
+# a popup window being a child of the window it drops from, which keeps the
+# keyboard (see `macos_popup`): `NSGraphics` has the ordering mode, an
+# `NSTrackingArea` brings it mouse moves, and an `NSEvent` monitor (a block,
+# hence `block2`) catches a click on that window's title bar.
 objc2 ={ version = "0.6", default-features = false, features = ["std"] }
-objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSApplication", "NSImage", "NSWindow", "NSResponder", "NSScreen", "NSView", "objc2-core-graphics", "objc2-quartz-core"] }
+block2 = { version = "0.6", default-features = false, features = ["std"] }
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "block2", "NSApplication", "NSEvent", "NSGraphics", "NSImage", "NSTrackingArea", "NSWindow", "NSResponder", "NSScreen", "NSView", "objc2-core-graphics", "objc2-quartz-core"] }
 objc2-core-foundation = { version = "0.3", default-features = false, features = ["CFBase", "CFData", "CFString", "CFCGTypes", "std"] }
 objc2-core-graphics = { version = "0.3", default-features = false, features = ["CGContext", "CGBitmapContext", "CGColorSpace", "CGDataProvider", "CGDirectDisplay", "CGDisplayConfiguration", "CGImage", "std"] }
 objc2-quartz-core = { version = "0.3", default-features = false, features = ["CALayer", "CATransaction", "objc2-core-foundation", "std"] }

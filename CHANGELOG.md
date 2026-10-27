@@ -41,6 +41,14 @@ While pre-1.0, the minor version is bumped for breaking changes.
   from, and sharing that window in a video call now shows its open menus and
   dropdowns. A popup is now an owned `WS_POPUP` window that never activates,
   like a native menu, instead of an application window of its own. (#71)
+- macOS: opening a menu or dropdown no longer takes the keyboard from the
+  window it drops from, whose title bar stays active; an open one moves along
+  with that window; and sharing that window in a video call now shows it. A
+  popup is now a child window of that window that never becomes key, like a
+  native menu, instead of a window of its own lying on top: the window server
+  carries it along, and ScreenCaptureKit's single-window capture, which Chrome
+  shares a window with, takes it in. A click on that window's title bar closes
+  it. (#77)
 - Windows: a menu or dropdown opened from a window on a display of another
   scale than the primary one is no longer cut off at its right and bottom
   edges. (#73)

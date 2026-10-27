@@ -43,6 +43,8 @@ mod geometry;
 mod icon;
 #[cfg(target_os = "macos")]
 mod macos_layer;
+#[cfg(target_os = "macos")]
+mod macos_popup;
 pub mod mock;
 mod painter;
 mod present;
