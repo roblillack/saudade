@@ -39,8 +39,12 @@
 //! behind when it moved. [`attach_dialog`] makes it a child window of that
 //! window too, which keeps it above it and has it move along and be shared
 //! with it. Unlike a popup it takes the keyboard, as any window with a title
-//! bar does. winit centers a window it is given no position for on its
-//! display, so [`center_over`] puts a dialog over its window instead.
+//! bar does, and keeps it for as long as it is open, as a modal one does: the
+//! window beneath refuses to become key or main meanwhile, so clicking that one
+//! leaves the keyboard and the active title bar with the dialog, rather than
+//! taking them while its keystrokes go to the dialog all the same. winit
+//! centers a window it is given no position for on its display, so
+//! [`center_over`] puts a dialog over its window instead.
 
 use std::cell::OnceCell;
 use std::mem;
@@ -61,7 +65,7 @@ use winit::window::Window;
 use crate::app::ns_window;
 
 /// What winit's window class answered `canBecomeKeyWindow` and
-/// `canBecomeMainWindow` with, in that order, before [`leave_keyboard_with_parent`]
+/// `canBecomeMainWindow` with, in that order, before [`take_over_key_answers`]
 /// took the two over. Set once, whether that worked or not.
 static ORIGINAL: OnceLock<[Option<Imp>; 2]> = OnceLock::new();
 
@@ -84,7 +88,7 @@ pub(crate) fn attach_popup(win: &Window, parent: &Window) {
         return;
     };
     let mtm = window.mtm();
-    leave_keyboard_with_parent();
+    take_over_key_answers();
     dismiss_popups_on_frame_click(mtm);
     if let Some(view) = window.contentView() {
         track_mouse_moves(&view);
@@ -97,6 +101,7 @@ pub(crate) fn attach_popup(win: &Window, parent: &Window) {
 /// is ready to be seen.
 pub(crate) fn attach_dialog(win: &Window, parent: &Window) {
     if let (Some(window), Some(parent)) = (ns_window(win), ns_window(parent)) {
+        take_over_key_answers();
         add_child(&parent, &window);
     }
 }
@@ -139,11 +144,22 @@ fn is_popup(window: &NSWindow) -> bool {
     window.parentWindow().is_some() && !window.styleMask().contains(NSWindowStyleMask::Titled)
 }
 
+/// Whether a dialog is open over `window`: a child window with a title bar.
+fn has_dialog(window: &NSWindow) -> bool {
+    window.childWindows().is_some_and(|children| {
+        children
+            .to_vec()
+            .iter()
+            .any(|child| child.styleMask().contains(NSWindowStyleMask::Titled))
+    })
+}
+
 /// Have winit's windows refuse to become key or main while they are popups
-/// [`attach_popup`]ed to the window they drop from, and answer as before
-/// otherwise. Done once; if winit's window class can't be found, a popup takes
-/// the keyboard as it would without.
-fn leave_keyboard_with_parent() {
+/// [`attach_popup`]ed to the window they drop from, or while a dialog is
+/// [`attach_dialog`]ed to them, and answer as before otherwise. Done once; if
+/// winit's window class can't be found, a popup takes the keyboard, and a window
+/// beneath a dialog can take it back, as they would without.
+fn take_over_key_answers() {
     ORIGINAL.get_or_init(|| {
         let Some(class) = AnyClass::get(c"WinitWindow") else {
             return [None, None];
@@ -191,14 +207,14 @@ unsafe extern "C-unwind" fn can_become_main_window(this: &NSWindow, cmd: Sel) ->
     unsafe { answer(this, cmd, 1) }
 }
 
-/// No for a popup, and the original answer — the one at `idx` in [`ORIGINAL`] —
-/// for any other window.
+/// No for a popup and for a window with a dialog open over it, and the original
+/// answer — the one at `idx` in [`ORIGINAL`] — for any other window.
 ///
 /// # Safety
 ///
 /// Called with the arguments the method being answered for was sent.
 unsafe fn answer(this: &NSWindow, cmd: Sel, idx: usize) -> Bool {
-    if is_popup(this) {
+    if is_popup(this) || has_dialog(this) {
         return Bool::NO;
     }
     match ORIGINAL.get().and_then(|original| original[idx]) {
