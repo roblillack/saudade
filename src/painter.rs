@@ -1976,6 +1976,28 @@ fn resampled(a: u32, r: u32, g: u32, b: u32, bits: u32) -> u32 {
         | ((b + half) >> bits).min(0xFF)
 }
 
+/// Premultiply, in place, the straight-alpha `0xAARRGGBB` pixels a painter
+/// writes, for a platform that composites a see-through window from
+/// premultiplied ones: a Wayland `Argb8888` buffer. An opaque pixel reads the
+/// same either way, so only a buffer with see-through pixels in it needs this.
+#[cfg(all(unix, not(target_os = "macos")))]
+pub(crate) fn premultiply(pixels: &mut [u32]) {
+    for px in pixels {
+        let a = *px >> 24;
+        match a {
+            255 => {}
+            // Whatever colour a fully transparent pixel carries, premultiplied
+            // it is nothing — and a compositor adds what is left.
+            0 => *px = 0,
+            _ => {
+                let v = *px;
+                let scaled = |shift: u32| (((v >> shift) & 0xFF) * a + 127) / 255;
+                *px = (a << 24) | (scaled(16) << 16) | (scaled(8) << 8) | scaled(0);
+            }
+        }
+    }
+}
+
 /// One axis of a resample, worked out once for every destination pixel: the
 /// source pixels it draws from, and how much of each it covers, in
 /// [`WEIGHT_ONE`]ths of a source pixel.
@@ -3293,5 +3315,16 @@ mod tests {
             p.blend_pixel_phys(1, 0, Color::BLACK, 0x80);
         }
         assert_eq!(px, [0x80FF_8000, 0xFF7F_7F7F]);
+    }
+
+    /// Premultiplying leaves an opaque pixel alone, turns a fully transparent
+    /// one into nothing whatever colour it carried, and scales a partial one's
+    /// colour by its coverage.
+    #[cfg(all(unix, not(target_os = "macos")))]
+    #[test]
+    fn premultiplying_scales_colour_by_coverage() {
+        let mut px = [0xFF12_3456, 0x00FF_FFFF, 0x80FF_8000, 0x0000_0000];
+        premultiply(&mut px);
+        assert_eq!(px, [0xFF12_3456, 0x0000_0000, 0x8080_4000, 0x0000_0000]);
     }
 }

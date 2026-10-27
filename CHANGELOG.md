@@ -74,6 +74,13 @@ While pre-1.0, the minor version is bumped for breaking changes.
   reproducing, so a transparent popup pass draws through `Widget::paint_overlay`
   alone instead of painting the whole application into every menu window: one
   full render of the app less per popup frame.
+- The same on Wayland, where a menu carried a hairline of the window
+  background down its right edge and along its bottom. Its buffer is rounded
+  twice — the menu's size to whole surface units, then those to device pixels —
+  so it can come out a pixel past the footprint the popup pass clipped to (140
+  logical pixels on a 200% display: 374 pixels against a 373-pixel footprint).
+  The `wl_shm` buffer always had an alpha channel; a menu's popup surface now
+  starts transparent and draws only the overlay pass.
 
 ## [0.7.0] - 2026-10-24
 
