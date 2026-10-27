@@ -58,6 +58,8 @@ mod win32_dpi;
 #[cfg(windows)]
 mod win32_fullscreen;
 #[cfg(windows)]
+mod win32_layered;
+#[cfg(windows)]
 mod win32_popup;
 
 pub use accel::{Accel, AccelMods, ModifierScheme};

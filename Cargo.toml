@@ -57,8 +57,9 @@ members = ["macros"]
 winit = { version = "0.30.12", default-features = false, features = ["rwh_06", "x11"] }
 # 0.4 has no alpha mode: every backend shows a pixel opaque, whatever its alpha
 # byte says. A popup window that wants see-through pixels is presented by
-# saudade itself where the platform allows — `macos_layer` on macOS
-# (softbuffer's `master` can do that too, but no release carries it yet).
+# saudade itself where the platform allows — `win32_layered` on Windows,
+# `macos_layer` on macOS (softbuffer's `master` can do the latter, but no
+# release carries it yet).
 softbuffer = "0.4"
 fontdue = "0.8"
 fontdb = "0.16"

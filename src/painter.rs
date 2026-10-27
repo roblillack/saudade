@@ -1978,9 +1978,10 @@ fn resampled(a: u32, r: u32, g: u32, b: u32, bits: u32) -> u32 {
 
 /// Premultiply, in place, the straight-alpha `0xAARRGGBB` pixels a painter
 /// writes, for a platform that composites a see-through window from
-/// premultiplied ones: a Wayland `Argb8888` buffer. An opaque pixel reads the
-/// same either way, so only a buffer with see-through pixels in it needs this.
-#[cfg(all(unix, not(target_os = "macos")))]
+/// premultiplied ones: a Wayland `Argb8888` buffer, a Windows layered window.
+/// An opaque pixel reads the same either way, so only a buffer with see-through
+/// pixels in it needs this.
+#[cfg(any(windows, all(unix, not(target_os = "macos"))))]
 pub(crate) fn premultiply(pixels: &mut [u32]) {
     for px in pixels {
         let a = *px >> 24;
@@ -3320,7 +3321,7 @@ mod tests {
     /// Premultiplying leaves an opaque pixel alone, turns a fully transparent
     /// one into nothing whatever colour it carried, and scales a partial one's
     /// colour by its coverage.
-    #[cfg(all(unix, not(target_os = "macos")))]
+    #[cfg(any(windows, all(unix, not(target_os = "macos"))))]
     #[test]
     fn premultiplying_scales_colour_by_coverage() {
         let mut px = [0xFF12_3456, 0x00FF_FFFF, 0x80FF_8000, 0x0000_0000];

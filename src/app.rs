@@ -2005,10 +2005,11 @@ impl AppHandler {
         // round the window up a pixel past the footprint we asked for. Ask for
         // a straight-alpha surface so those pixels can be genuinely
         // transparent. macOS gives us one through a Core Animation layer of
-        // our own (see `macos_layer`); Windows and X11 say no, and fall back
-        // to repainting the app underneath the panel, which is right for as
-        // long as the popup stays over the window. A dialog is a real, opaque
-        // window and wants none of this.
+        // our own (see `macos_layer`), Windows through a layered window (see
+        // `win32_layered`); X11 says no, and falls back to repainting the app
+        // underneath the panel, which is right for as long as the popup stays
+        // over the window. A dialog is a real, opaque window and wants none
+        // of this.
         let want = if request.kind == PopupKind::Popup {
             Alpha::Straight
         } else {
