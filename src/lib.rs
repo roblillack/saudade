@@ -45,6 +45,7 @@ mod icon;
 mod macos_layer;
 pub mod mock;
 mod painter;
+// EXPERIMENTAL, uncommitted: the presenter seam (softbuffer / pixels).
 mod present;
 mod svg;
 mod theme;
