@@ -1,5 +1,5 @@
 use std::path::PathBuf;
-use std::rc::Rc;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use winit::application::ApplicationHandler;
@@ -35,7 +35,7 @@ use crate::event::{
 use crate::font::{Font, FontSet};
 use crate::geometry::{Color, Point, Rect, Size};
 use crate::painter::Painter;
-use crate::present::{Alpha, Surface};
+use crate::present::{Alpha, Context, Surface};
 use crate::svg::SvgImage;
 use crate::theme::Theme;
 use crate::widget::{PopupKind, PopupRequest, Widget};
@@ -214,10 +214,13 @@ struct AppHandler {
     mono_font: Option<Font>,
 
     // Resources created in `resumed`:
-    main_win: Option<Rc<Window>>,
+    main_win: Option<Arc<Window>>,
     main_id: Option<WindowId>,
-    context: Option<softbuffer::Context<Rc<Window>>>,
+    context: Option<Context>,
     main_surface: Option<Surface>,
+    /// EXPERIMENTAL, uncommitted: per-frame timings, on when
+    /// `SAUDADE_FRAME_STATS` is set — see [`FrameStats`].
+    stats: Option<FrameStats>,
     physical: PhysicalSize<u32>,
     /// Logical→physical scale factor: [`Window::scale_factor`], which the OS
     /// owns, times [`Self::ui_scale`], which follows from it. Refreshed when
@@ -432,6 +435,7 @@ impl AppHandler {
             drag_dropped: Vec::new(),
             drag_active: false,
             swallow: KeySwallow::default(),
+            stats: FrameStats::from_env(),
         }
     }
 }
@@ -471,11 +475,10 @@ impl ApplicationHandler for AppHandler {
             crate::icon::set_window_icon(&win, image);
             crate::icon::set_app_icon(image);
         }
-        let win = Rc::new(win);
+        let win = Arc::new(win);
         let id = win.id();
 
-        let context = softbuffer::Context::new(win.clone())
-            .expect("saudade: failed to create softbuffer context");
+        let context = Context::new(&win).expect("saudade: failed to create a drawing context");
 
         // Now that there is a window there is a display to take a scale from,
         // rather than the guess above. Re-ask for the size the design wants only
@@ -490,7 +493,7 @@ impl ApplicationHandler for AppHandler {
             self.fit_window(&win, self.design_size)
         };
         let surface = Surface::new(&context, win.clone(), self.physical, Alpha::Opaque)
-            .expect("saudade: failed to create softbuffer surface");
+            .expect("saudade: failed to create a drawing surface");
         relayout(&mut self.root, self.physical, self.scale, self.design_size);
         // Give the first focusable widget in the tree keyboard focus by
         // default so apps with a clear "primary" target (a text editor, a
@@ -549,14 +552,14 @@ impl ApplicationHandler for AppHandler {
     }
 
     fn exiting(&mut self, _event_loop: &ActiveEventLoop) {
-        // Tear the windows (and the drawing surfaces holding `Rc<Window>`
+        // Tear the windows (and the drawing surfaces holding `Arc<Window>`
         // clones) down here, while the event loop is still alive. On macOS a
         // winit `Window` dropped *after* `run_app` returns calls into a
         // by-then-deconfigured `NSApplication` delegate and panics inside
         // `Window::drop` — and a panic in `drop` can't unwind, so the process
-        // aborts. Releasing every `Rc<Window>` now drops the windows while the
+        // aborts. Releasing every `Arc<Window>` now drops the windows while the
         // delegate is still configured. Order: surfaces/context before the
-        // window handles, since they hold the other `Rc` clones.
+        // window handles, since they hold the other `Arc` clones.
         self.close_popups_from(0);
         self.main_surface = None;
         self.context = None;
@@ -1307,9 +1310,12 @@ impl AppHandler {
         let Some(surface) = self.main_surface.as_mut() else {
             return;
         };
+        let presenter = surface.presenter();
         let Some(mut surface_buf) = surface.frame() else {
             return;
         };
+        let started = Instant::now();
+        let stride = surface_buf.stride();
         let mut painter = Painter::with_popup_anchor(
             surface_buf.pixels(),
             self.physical.width as i32,
@@ -1326,6 +1332,7 @@ impl AppHandler {
         )
         .with_screen(self.screen)
         .with_display_dpi(self.display_dpi);
+        painter.set_stride(stride);
         // `scale` above is saudade's logical→physical factor, which a UI scale
         // lifts above the display's own; widgets asking what the *display* is
         // set to want that one.
@@ -1343,7 +1350,18 @@ impl AppHandler {
             painter.fill_pattern(self.theme.background, self.bg.pattern, self.bg.color);
         }
         self.root.paint(&mut painter, &self.theme);
+        let painted = Instant::now();
         surface_buf.present();
+        let presented = Instant::now();
+        if let Some(stats) = self.stats.as_mut() {
+            stats.frame(
+                false,
+                presenter,
+                self.physical,
+                painted - started,
+                presented - painted,
+            );
+        }
     }
 
     fn paint_popup(&mut self, idx: usize) {
@@ -1373,9 +1391,13 @@ impl AppHandler {
         let system_scale = p.os_scale;
         let display_dpi = p.display_dpi;
         let transparent = p.transparent;
+        let popup_size = p.physical;
+        let presenter = p.surface.presenter();
         let Some(mut surface_buf) = p.surface.frame() else {
             return;
         };
+        let started = Instant::now();
+        let stride = surface_buf.stride();
         let mut painter = Painter::with_popup_anchor(
             surface_buf.pixels(),
             p.physical.width as i32,
@@ -1392,6 +1414,7 @@ impl AppHandler {
         )
         .with_screen(screen)
         .with_display_dpi(display_dpi);
+        painter.set_stride(stride);
         painter.set_system_scale(system_scale);
         painter.set_clip_phys(0, 0, popup_phys_w, popup_phys_h);
         if transparent {
@@ -1414,7 +1437,18 @@ impl AppHandler {
             self.root.paint(&mut painter, &self.theme);
         }
         painter.clear_clip();
+        let painted = Instant::now();
         surface_buf.present();
+        let presented = Instant::now();
+        if let Some(stats) = self.stats.as_mut() {
+            stats.frame(
+                true,
+                presenter,
+                popup_size,
+                painted - started,
+                presented - painted,
+            );
+        }
     }
 
     /// Recompute [`Self::screen`]: the usable area of the display the window is
@@ -1997,7 +2031,7 @@ impl AppHandler {
         if request.kind == PopupKind::Popup {
             suppress_show_animation(&win);
         }
-        let win = Rc::new(win);
+        let win = Arc::new(win);
         let id = win.id();
         let actual = requested.unwrap_or_else(|| win.inner_size());
         // A menu panel never fills its window: the L-shaped drop shadow leaves
@@ -2015,10 +2049,15 @@ impl AppHandler {
         } else {
             Alpha::Opaque
         };
+        let surface_started = Instant::now();
         let surface = Surface::new(context, win.clone(), actual, want)?;
+        let surface_built = surface_started.elapsed();
         let transparent = surface.honors_alpha();
         win.set_visible(true);
 
+        if let Some(stats) = self.stats.as_ref() {
+            stats.note_open(surface.presenter(), surface_built);
+        }
         Some(PopupWindow {
             win,
             win_id: id,
@@ -2043,7 +2082,7 @@ impl AppHandler {
 /// popup. Lives only while the requesting widget keeps reporting a
 /// `PopupRequest`.
 struct PopupWindow {
-    win: Rc<Window>,
+    win: Arc<Window>,
     win_id: WindowId,
     surface: Surface,
     anchor: Rect,
@@ -2375,6 +2414,111 @@ fn physical_at(logical: Size, scale: f32) -> PhysicalSize<u32> {
 fn pin_dialog_size(win: &Window, size: PhysicalSize<u32>) {
     win.set_min_inner_size(Some(size));
     win.set_max_inner_size(Some(size));
+}
+
+/// EXPERIMENTAL, uncommitted: how long a frame takes, split into the painting
+/// and the handing-over, so the presenters in [`crate::present`] can be
+/// compared on the same UI.
+///
+/// Off unless `SAUDADE_FRAME_STATS` is set; its value is how many frames go
+/// into a summary line (default 120). A line looks like:
+///
+/// ```text
+/// saudade [softbuffer] main 1350x540  n=120  paint 3.91/4.42  present 0.21/0.44  total 4.12 ms  (p50/p95)
+/// ```
+struct FrameStats {
+    every: usize,
+    main: Samples,
+    popup: Samples,
+    /// Time inside `Surface::new` for a popup window — where a per-window GPU
+    /// device, if the backend insists on one, shows up.
+    opens: std::cell::RefCell<Vec<f64>>,
+}
+
+#[derive(Default)]
+struct Samples {
+    size: PhysicalSize<u32>,
+    paint: Vec<f64>,
+    present: Vec<f64>,
+}
+
+impl FrameStats {
+    fn from_env() -> Option<Self> {
+        let raw = std::env::var("SAUDADE_FRAME_STATS").ok()?;
+        let every = raw.trim().parse::<usize>().unwrap_or(120).max(1);
+        Some(Self {
+            every,
+            main: Samples::default(),
+            popup: Samples::default(),
+            opens: std::cell::RefCell::new(Vec::new()),
+        })
+    }
+
+    fn frame(
+        &mut self,
+        popup: bool,
+        presenter: &str,
+        size: PhysicalSize<u32>,
+        paint: Duration,
+        present: Duration,
+    ) {
+        let every = self.every;
+        let (label, bucket) = if popup {
+            ("popup", &mut self.popup)
+        } else {
+            ("main", &mut self.main)
+        };
+        // A resize starts the sample over: the two sizes are not comparable.
+        if bucket.size != size {
+            bucket.size = size;
+            bucket.paint.clear();
+            bucket.present.clear();
+        }
+        bucket.paint.push(ms(paint));
+        bucket.present.push(ms(present));
+        if bucket.paint.len() < every {
+            return;
+        }
+        let (p_50, p_95) = pct(&bucket.paint);
+        let (s_50, s_95) = pct(&bucket.present);
+        println!(
+            "saudade [{}] {label} {}x{}  n={}  paint {p_50:.2}/{p_95:.2}  \
+             present {s_50:.2}/{s_95:.2}  total {:.2} ms  (p50/p95)",
+            presenter,
+            size.width,
+            size.height,
+            bucket.paint.len(),
+            p_50 + s_50,
+        );
+        bucket.paint.clear();
+        bucket.present.clear();
+    }
+
+    fn note_open(&self, presenter: &str, took: Duration) {
+        let mut opens = self.opens.borrow_mut();
+        opens.push(ms(took));
+        let (o_50, o_95) = pct(&opens);
+        println!(
+            "saudade [{}] popup surface  n={}  build {o_50:.1}/{o_95:.1} ms  (p50/p95)",
+            presenter,
+            opens.len(),
+        );
+    }
+}
+
+fn ms(d: Duration) -> f64 {
+    d.as_secs_f64() * 1000.0
+}
+
+/// Median and 95th percentile of `samples`, which this leaves untouched.
+fn pct(samples: &[f64]) -> (f64, f64) {
+    let mut sorted = samples.to_vec();
+    sorted.sort_by(|a, b| a.total_cmp(b));
+    let at = |q: f64| {
+        let i = ((sorted.len() as f64 - 1.0) * q).round() as usize;
+        sorted.get(i).copied().unwrap_or(0.0)
+    };
+    (at(0.5), at(0.95))
 }
 
 fn origin(logical: Size, scale: f32, physical: PhysicalSize<u32>) -> (i32, i32) {

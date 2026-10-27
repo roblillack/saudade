@@ -20,7 +20,7 @@
 //! `with_transparent`), so wherever the image is, so is the popup.
 
 use std::ptr;
-use std::rc::Rc;
+use std::sync::Arc;
 
 use objc2::rc::Retained;
 use objc2_app_kit::NSView;
@@ -37,7 +37,7 @@ use winit::window::Window;
 /// A layer over a popup window's view, and the frame painted for it.
 pub(crate) struct Surface {
     /// Kept alive for as long as `layer` sits in its view.
-    _win: Rc<Window>,
+    _win: Arc<Window>,
     /// The view's own layer, which ours is a sublayer of. Its contents belong
     /// to AppKit, so ours go on a layer of our own on top.
     root: Retained<CALayer>,
@@ -54,7 +54,7 @@ impl Surface {
     /// A layer of `size` device pixels over `win`'s view. `None` if the view
     /// can't be reached or won't take one, which leaves the window as it was
     /// for the caller to fall back on.
-    pub(crate) fn new(win: Rc<Window>, size: PhysicalSize<u32>) -> Option<Self> {
+    pub(crate) fn new(win: Arc<Window>, size: PhysicalSize<u32>) -> Option<Self> {
         let RawWindowHandle::AppKit(handle) = win.window_handle().ok()?.as_raw() else {
             return None;
         };
@@ -168,6 +168,11 @@ pub(crate) struct Frame<'a> {
 }
 
 impl Frame<'_> {
+    /// Rows are tightly packed.
+    pub(crate) fn stride(&self) -> i32 {
+        self.surface.size.width as i32
+    }
+
     pub(crate) fn pixels(&mut self) -> &mut [u32] {
         &mut self.surface.pixels
     }

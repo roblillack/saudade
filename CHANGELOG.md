@@ -67,9 +67,10 @@ While pre-1.0, the minor version is bumped for breaking changes.
   hairline down the right edge and along the bottom of a menu inside the window,
   a white margin out over the desktop for one that wasn't. A popup window is now
   shown through a Core Animation layer of saudade's own, from a `CGImage` that
-  keeps the alpha byte, and leaves those pixels transparent. X11, which has no
-  such way, keeps the redraw, which is why it is still there, and it no longer
-  clips a pixel short of the surface either.
+  keeps the alpha byte, and leaves those pixels transparent — whichever
+  presenter is built in. X11, which has no such way, keeps the redraw, which is
+  why it is still there, and it no longer clips a pixel short of the surface
+  either.
 - With a real alpha channel there is nothing behind the panel worth
   reproducing, so a transparent popup pass draws through `Widget::paint_overlay`
   alone instead of painting the whole application into every menu window: one
@@ -83,10 +84,11 @@ While pre-1.0, the minor version is bumped for breaking changes.
   starts transparent and draws only the overlay pass.
 - The same on Windows, where a menu hanging off its window showed a square of
   the theme's background in the bend of its shadow, out over the desktop.
-  softbuffer can't show a see-through pixel in a plain window there, so a popup
-  is now a layered window, shown from a premultiplied bitmap with
-  `UpdateLayeredWindow` the way Windows' own menus once carried their shadows.
-  As on macOS, a click on a see-through pixel goes to the window underneath.
+  Neither softbuffer nor a GPU swapchain can show a see-through pixel in a plain
+  window there, so a popup is now a layered window, shown from a premultiplied
+  bitmap with `UpdateLayeredWindow` the way Windows' own menus once carried
+  their shadows — whichever presenter is built in. As on macOS, a click on a
+  see-through pixel goes to the window underneath.
 
 ## [0.7.0] - 2026-10-24
 

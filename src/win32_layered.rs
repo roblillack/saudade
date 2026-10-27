@@ -1,11 +1,11 @@
 //! Windows: a popup window with real per-pixel alpha.
 //!
 //! A menu panel never fills its window: the two corners inside the bend of its
-//! L-shaped drop shadow are not part of it. softbuffer's Win32 backend can't
-//! show the pixels it leaves out as see-through, so those used to be filled in
-//! by redrawing the app underneath — which has nothing to redraw where a menu
-//! hangs off its window, and left a square of the theme's background out over
-//! the desktop.
+//! L-shaped drop shadow are not part of it. Neither softbuffer's Win32 backend
+//! nor a wgpu swapchain on a plain `HWND` can show the pixels it leaves out as
+//! see-through, so those used to be filled in by redrawing the app underneath —
+//! which has nothing to redraw where a menu hangs off its window, and left a
+//! square of the theme's background out over the desktop.
 //!
 //! A *layered* window can: it is shown from a premultiplied 32-bit bitmap
 //! handed over whole with `UpdateLayeredWindow`, which is how Windows' own menus
@@ -22,7 +22,7 @@
 //! answer puts the bit back.
 
 use std::ptr;
-use std::rc::Rc;
+use std::sync::Arc;
 
 use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, SIZE, WPARAM};
 use windows_sys::Win32::Graphics::Gdi::{
@@ -47,7 +47,7 @@ const SUBCLASS_ID: usize = 1;
 /// memory DC, which is what `UpdateLayeredWindow` reads from.
 pub(crate) struct Surface {
     /// Kept alive for as long as its contents are ours to update.
-    _win: Rc<Window>,
+    _win: Arc<Window>,
     hwnd: HWND,
     dc: HDC,
     /// The DIB section, or null before the first one is made.
@@ -65,7 +65,7 @@ pub(crate) struct Surface {
 impl Surface {
     /// Make `win` a layered window of `size` device pixels. `None` if Windows
     /// won't, which leaves the window as it was for the caller to fall back on.
-    pub(crate) fn new(win: Rc<Window>, size: PhysicalSize<u32>) -> Option<Self> {
+    pub(crate) fn new(win: Arc<Window>, size: PhysicalSize<u32>) -> Option<Self> {
         let hwnd = hwnd(&win)?;
         // SAFETY: a memory DC compatible with the screen, checked for null.
         let dc = unsafe { CreateCompatibleDC(ptr::null_mut()) };
@@ -237,6 +237,11 @@ pub(crate) struct Frame<'a> {
 }
 
 impl Frame<'_> {
+    /// Rows are tightly packed: a 32-bit DIB row is always whole `DWORD`s.
+    pub(crate) fn stride(&self) -> i32 {
+        self.surface.size.width as i32
+    }
+
     pub(crate) fn pixels(&mut self) -> &mut [u32] {
         self.surface.pixels()
     }
