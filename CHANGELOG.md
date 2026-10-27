@@ -73,6 +73,10 @@ While pre-1.0, the minor version is bumped for breaking changes.
   desktop when they hang off their window. Popup windows are now transparent
   where the menu doesn't cover them on macOS, Windows and Wayland. X11 still
   repaints the app underneath, now up to the popup's edge. (#52)
+- With a dialog open over another one, Escape or the close button of the one
+  on top closes just that one, rather than both. A `Modal` now consumes the
+  Escape it closes on, and a key still held as a window takes the keyboard is
+  no longer taken for a fresh press there (Windows, X11). (#83)
 
 ## [0.7.0] - 2026-10-24
 
