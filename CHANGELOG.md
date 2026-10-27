@@ -53,40 +53,11 @@ While pre-1.0, the minor version is bumped for breaking changes.
 - The `circle_drawer` example's right-click menu now takes the keyboard:
   Escape, the arrow keys and Enter did nothing. `ContextMenu`'s docs now say
   that a widget owning one forwards `accepts_accelerators` to it too. (#75)
-- A popup window — every `MenuBar` drop-down, `Dropdown` list and `ContextMenu`
-  panel — is genuinely transparent on macOS, so a menu no longer carries a white
-  margin around with it. A menu panel does not fill its window: the two corners
-  inside the bend of its L-shaped drop shadow are not part of it, and the
-  compositor may round the window up past the footprint it was asked for (macOS
-  sizes windows in *points*, so 139 logical pixels at the 2.667 scale a Retina
-  Mac draws at — 371 device pixels — comes back as 372). Those pixels used
-  to be faked by redrawing whatever the window covers, because softbuffer's
-  CoreGraphics backend builds its `CGImage` with the alpha byte ignored, and that
-  only works for as long as the popup stays over the main window: a menu hanging
-  off it had nothing to redraw there, and the bare fill showed instead — a white
-  hairline down the right edge and along the bottom of a menu inside the window,
-  a white margin out over the desktop for one that wasn't. A popup window is now
-  shown through a Core Animation layer of saudade's own, from a `CGImage` that
-  keeps the alpha byte, and leaves those pixels transparent. X11, which has no
-  such way, keeps the redraw, which is why it is still there, and it no longer
-  clips a pixel short of the surface either.
-- With a real alpha channel there is nothing behind the panel worth
-  reproducing, so a transparent popup pass draws through `Widget::paint_overlay`
-  alone instead of painting the whole application into every menu window: one
-  full render of the app less per popup frame.
-- The same on Wayland, where a menu carried a hairline of the window
-  background down its right edge and along its bottom. Its buffer is rounded
-  twice — the menu's size to whole surface units, then those to device pixels —
-  so it can come out a pixel past the footprint the popup pass clipped to (140
-  logical pixels on a 200% display: 374 pixels against a 373-pixel footprint).
-  The `wl_shm` buffer always had an alpha channel; a menu's popup surface now
-  starts transparent and draws only the overlay pass.
-- The same on Windows, where a menu hanging off its window showed a square of
-  the theme's background in the bend of its shadow, out over the desktop.
-  softbuffer can't show a see-through pixel in a plain window there, so a popup
-  is now a layered window, shown from a premultiplied bitmap with
-  `UpdateLayeredWindow` the way Windows' own menus once carried their shadows.
-  As on macOS, a click on a see-through pixel goes to the window underneath.
+- Menus, dropdown lists and context menus no longer show a strip of window
+  background along their right and bottom edges, or a square of it out over the
+  desktop when they hang off their window. Popup windows are now transparent
+  where the menu doesn't cover them on macOS, Windows and Wayland. X11 still
+  repaints the app underneath, now up to the popup's edge. (#52)
 
 ## [0.7.0] - 2026-10-24
 
