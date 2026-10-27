@@ -19,7 +19,7 @@ While pre-1.0, the minor version is bumped for breaking changes.
 - macOS: a dialog is now a child window of the window it opens over. It opens
   centered over that window rather than in the middle of the screen, stays
   above it when that window is clicked, moves and is minimized along with it,
-  and shows up when that window is shared in a video call.
+  and shows up when that window is shared in a video call. (#78)
 
 ### Fixed
 
