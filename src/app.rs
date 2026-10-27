@@ -581,7 +581,9 @@ impl AppHandler {
                 // The main window changed screen position. Override-redirect
                 // popups are unmanaged top-level windows that don't follow
                 // their "parent", so we have to reposition them manually
-                // each time the main window moves.
+                // each time the main window moves. (On macOS the window server
+                // has carried them along already — see `macos_popup` — and
+                // this finds them in place.)
                 self.reposition_popup();
                 // The screen rect is relative to the window, and the window may
                 // even have crossed onto another display.
@@ -594,8 +596,8 @@ impl AppHandler {
             // The main window took the keyboard back while a menu was up, so
             // something outside the menu was clicked — the title bar, most
             // often, on the way to dragging the window. Native menus don't
-            // survive that. (On Windows a menu never takes the keyboard in the
-            // first place: see the arm below.)
+            // survive that. (On Windows and macOS a menu never takes the
+            // keyboard in the first place: see the arm below.)
             WindowEvent::Focused(true) => {
                 self.dismiss_transient_popup(event_loop);
                 // A display's resolution or scaling changed in another app —
@@ -604,10 +606,11 @@ impl AppHandler {
                 // first seen.
                 self.refresh_screen();
             }
-            // Windows: a menu leaves the keyboard with the window it drops from
-            // (see `win32_popup`), so this losing it is the user going
-            // elsewhere — another app, or a dialog of this one.
-            #[cfg(windows)]
+            // Windows and macOS: a menu leaves the keyboard with the window it
+            // drops from (see `win32_popup`, `macos_popup`), so this losing it
+            // is the user going elsewhere — another app, or a dialog of this
+            // one.
+            #[cfg(any(windows, target_os = "macos"))]
             WindowEvent::Focused(false) => self.keyboard_left(None, event_loop),
             WindowEvent::Resized(new_size) => {
                 self.physical = new_size;
@@ -785,9 +788,9 @@ impl AppHandler {
             // app, or to another window of this one. Only the popup on top of
             // the stack speaks for the stack — a *parent* popup loses focus for
             // an innocent reason, namely a nested popup of its own opening
-            // above it (a dropdown inside a dialog). Except on Windows, where
-            // that nested popup leaves the keyboard with the dialog, and the
-            // dialog losing it is the user going elsewhere.
+            // above it (a dropdown inside a dialog). Except on Windows and
+            // macOS, where that nested popup leaves the keyboard with the
+            // dialog, and the dialog losing it is the user going elsewhere.
             WindowEvent::Focused(focused) => {
                 let Some(p) = self.popups.get_mut(idx) else {
                     return;
@@ -805,7 +808,7 @@ impl AppHandler {
                 if idx + 1 == self.popups.len() {
                     self.dismiss_transient_popup(event_loop);
                 }
-                #[cfg(windows)]
+                #[cfg(any(windows, target_os = "macos"))]
                 if self.popups[idx].kind == PopupKind::Dialog {
                     self.keyboard_left(Some(idx), event_loop);
                 }
@@ -1274,11 +1277,11 @@ impl AppHandler {
         }
     }
 
-    /// Windows: the window at `idx` in the popup stack — the main window for
-    /// `None` — lost the keyboard. If everything stacked above it is a transient
-    /// popup, it was holding the keyboard for them (see [`crate::win32_popup`]),
-    /// so they go too.
-    #[cfg(windows)]
+    /// Windows and macOS: the window at `idx` in the popup stack — the main
+    /// window for `None` — lost the keyboard. If everything stacked above it is
+    /// a transient popup, it was holding the keyboard for them (see
+    /// `win32_popup`, `macos_popup`), so they go too.
+    #[cfg(any(windows, target_os = "macos"))]
     fn keyboard_left(&mut self, idx: Option<usize>, event_loop: &ActiveEventLoop) {
         let above = idx.map_or(0, |idx| idx + 1);
         if self.popups[above..]
@@ -1674,7 +1677,9 @@ impl AppHandler {
     /// dialog above for a nested dropdown). Called when the main window —
     /// or a popup window — moves, since override-redirect popups are
     /// unmanaged top-levels that the WM doesn't drag along. Managed
-    /// dialogs (`PopupKind::Dialog`) keep their own screen position.
+    /// dialogs (`PopupKind::Dialog`) keep their own screen position. A
+    /// macOS popup is a child window that AppKit has moved already (see
+    /// `macos_popup`), so this leaves it where it is.
     fn reposition_popup(&mut self) {
         let Some(main_win) = self.main_win.as_ref() else {
             return;
@@ -2017,6 +2022,14 @@ impl AppHandler {
         };
         let surface = Surface::new(context, win.clone(), actual, want)?;
         let transparent = surface.honors_alpha();
+        // macOS: a child window of the one it drops from, which keeps the
+        // keyboard — see `macos_popup`. That shows it, as a window that won't
+        // take the keyboard, which `set_visible` would otherwise hand it.
+        #[cfg(target_os = "macos")]
+        if request.kind == PopupKind::Popup {
+            let parent_win = parent.map_or(main_win.as_ref(), |p| p.win.as_ref());
+            crate::macos_popup::attach(&win, parent_win);
+        }
         win.set_visible(true);
 
         Some(PopupWindow {
@@ -2152,7 +2165,7 @@ fn display_dpi(_monitor: &MonitorHandle) -> Option<f32> {
 /// The `NSWindow` behind a winit window, or `None` if its view can't be
 /// reached.
 #[cfg(target_os = "macos")]
-fn ns_window(win: &Window) -> Option<objc2::rc::Retained<objc2_app_kit::NSWindow>> {
+pub(crate) fn ns_window(win: &Window) -> Option<objc2::rc::Retained<objc2_app_kit::NSWindow>> {
     use objc2_app_kit::NSView;
     use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
 
