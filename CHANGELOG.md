@@ -48,7 +48,7 @@ While pre-1.0, the minor version is bumped for breaking changes.
   native menu, instead of a window of its own lying on top: the window server
   carries it along, and ScreenCaptureKit's single-window capture, which Chrome
   shares a window with, takes it in. A click on that window's title bar closes
-  it.
+  it. (#77)
 - Windows: a menu or dropdown opened from a window on a display of another
   scale than the primary one is no longer cut off at its right and bottom
   edges. (#73)
