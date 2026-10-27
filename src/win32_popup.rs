@@ -33,18 +33,33 @@
 //! when that window is shared. An owned window is a `WS_POPUP` one, though, and
 //! Windows puts those at the top left of the primary display unless told where
 //! to go — winit doesn't — so [`center_on_owner`] does.
+//!
+//! A native dialog is modal as well: its owner is disabled for as long as it is
+//! open, so a click on that window doesn't activate it, and the keyboard and
+//! the active title bar stay with the dialog. [`disable_owner`] does the same
+//! for ours, and [`enable_owner`] undoes it before the dialog goes: Windows
+//! picks the window to hand the activation to as the dialog is destroyed, and
+//! passes over a disabled one.
+//!
+//! A click on a disabled window reaches none of the handlers that close the
+//! popups open over the dialog, so the subclass of
+//! [`dismiss_popups_on_frame_click`] does that too. Without any open, the
+//! click is left to Windows, which beeps and flashes the dialog's title bar —
+//! kept from winit, which would take it for the dialog losing the keyboard.
 
 use std::cell::RefCell;
 
-use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM};
+use windows_sys::Win32::Foundation::{FALSE, HWND, LPARAM, LRESULT, RECT, TRUE, WPARAM};
 use windows_sys::Win32::Graphics::Gdi::{
     GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromWindow,
 };
+use windows_sys::Win32::UI::Input::KeyboardAndMouse::{EnableWindow, GetActiveWindow};
 use windows_sys::Win32::UI::Shell::{DefSubclassProc, RemoveWindowSubclass, SetWindowSubclass};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    GW_OWNER, GetWindow, GetWindowRect, MA_NOACTIVATE, SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER,
-    SendMessageW, SetWindowPos, WM_CLOSE, WM_MOUSEACTIVATE, WM_NCDESTROY, WM_NCLBUTTONDOWN,
-    WM_NCMBUTTONDOWN, WM_NCRBUTTONDOWN, WM_NCXBUTTONDOWN,
+    DefWindowProcW, GW_OWNER, GetWindow, GetWindowRect, HTERROR, MA_NOACTIVATE, SWP_NOACTIVATE,
+    SWP_NOSIZE, SWP_NOZORDER, SendMessageW, SetWindowPos, WM_CLOSE, WM_LBUTTONDOWN, WM_MBUTTONDOWN,
+    WM_MOUSEACTIVATE, WM_NCACTIVATE, WM_NCDESTROY, WM_NCLBUTTONDOWN, WM_NCMBUTTONDOWN,
+    WM_NCRBUTTONDOWN, WM_NCXBUTTONDOWN, WM_RBUTTONDOWN, WM_SETCURSOR, WM_XBUTTONDOWN,
 };
 use winit::platform::windows::WindowAttributesExtWindows;
 use winit::window::{Window, WindowAttributes};
@@ -58,6 +73,10 @@ thread_local! {
     /// Every popup window [`never_activate`] has been called on, until it is
     /// destroyed.
     static POPUPS: RefCell<Vec<HWND>> = const { RefCell::new(Vec::new()) };
+
+    /// Every dialog [`disable_owner`] has disabled the owner of, until
+    /// [`enable_owner`] enables it again.
+    static DIALOGS: RefCell<Vec<HWND>> = const { RefCell::new(Vec::new()) };
 }
 
 /// `attrs` for a popup hanging off `owner`: owned by it, and shown without
@@ -119,6 +138,41 @@ pub(crate) fn center_on_owner(win: &Window) {
     }
 }
 
+/// Disable the window that owns the dialog `win`, so it can't be activated
+/// while the dialog is open. Called once the dialog is shown, holding the
+/// activation. An owner that is disabled already is left to whatever disabled
+/// it, as `DialogBox` leaves it.
+pub(crate) fn disable_owner(win: &Window) {
+    let Some(hwnd) = hwnd(win) else {
+        return;
+    };
+    // SAFETY: plain calls on live windows of this thread.
+    unsafe {
+        let owner = GetWindow(hwnd, GW_OWNER);
+        // Zero for a window that was enabled until now.
+        if !owner.is_null() && EnableWindow(owner, FALSE) == 0 {
+            DIALOGS.with_borrow_mut(|dialogs| dialogs.push(hwnd));
+        }
+    }
+}
+
+/// Enable the window [`disable_owner`] disabled for the dialog `win` again.
+/// Called before the dialog is destroyed, so it is the window Windows hands the
+/// activation back to.
+pub(crate) fn enable_owner(win: &Window) {
+    let Some(hwnd) = hwnd(win) else {
+        return;
+    };
+    let disabled = DIALOGS.with_borrow_mut(|dialogs| {
+        let i = dialogs.iter().position(|&dialog| dialog == hwnd);
+        i.map(|i| dialogs.swap_remove(i)).is_some()
+    });
+    if disabled {
+        // SAFETY: plain calls on live windows of this thread.
+        unsafe { EnableWindow(GetWindow(hwnd, GW_OWNER), TRUE) };
+    }
+}
+
 /// Keep a click on the popup `win` from activating it. Called once, right after
 /// the window is created.
 pub(crate) fn never_activate(win: &Window) {
@@ -135,7 +189,9 @@ pub(crate) fn never_activate(win: &Window) {
 
 /// Have a click on `win`'s title bar or frame close the popups it owns. They are
 /// sent `WM_CLOSE`, which the runtime answers for a popup as it does Escape.
-/// Called once, right after the window is created.
+/// While a dialog has `win` disabled, a click anywhere on it closes the popups
+/// of the window holding the activation — that dialog — instead. Called once,
+/// right after the window is created.
 pub(crate) fn dismiss_popups_on_frame_click(win: &Window) {
     let Some(hwnd) = hwnd(win) else {
         return;
@@ -181,19 +237,40 @@ unsafe extern "system" fn owner_proc(
         // Before the press is handled: on the caption that is the start of a
         // window move, which the popup is not to come along on.
         WM_NCLBUTTONDOWN | WM_NCRBUTTONDOWN | WM_NCMBUTTONDOWN | WM_NCXBUTTONDOWN => {
-            // A copy, as closing a popup can destroy it, which updates the list.
-            let popups = POPUPS.with_borrow(|popups| popups.clone());
-            for popup in popups {
-                // SAFETY: plain calls on windows of this thread that are still
-                // alive — a destroyed one has taken itself off the list.
-                unsafe {
-                    if GetWindow(popup, GW_OWNER) == hwnd {
-                        SendMessageW(popup, WM_CLOSE, 0, 0);
-                    }
-                }
-            }
+            close_popups_owned_by(hwnd);
             // SAFETY: forwarding the message we were handed, unchanged.
             unsafe { DefSubclassProc(hwnd, msg, wparam, lparam) }
+        }
+        // A press on the window while a dialog has it disabled, which it gets
+        // no message of its own for: only this one, with `HTERROR` for where it
+        // landed. With popups open over the dialog, it is a press outside them,
+        // so they close, and it goes no further: `DefWindowProc` would hand the
+        // activation to the topmost enabled window this one owns, directly or
+        // not — one of those very popups. Without, `DefWindowProc` beeps and
+        // flashes the dialog's title bar, as for a native dialog.
+        // SAFETY: a plain call, about the calling thread.
+        WM_SETCURSOR
+            if is_press_on_disabled(lparam)
+                && close_popups_owned_by(unsafe { GetActiveWindow() }) =>
+        {
+            TRUE as LRESULT
+        }
+        // That flash toggles the dialog's title bar between active and
+        // inactive with `WM_NCACTIVATE`, the message a change of activation
+        // starts with, for a second or so. winit reports each toggle as the
+        // dialog losing or taking the keyboard, and a popup opened over it
+        // meanwhile closes on the next loss. So winit isn't told of the title
+        // bar going inactive while the dialog has its owner disabled. When the
+        // dialog really loses the activation, it loses the keyboard as well,
+        // and winit learns of that from the `WM_KILLFOCUS` that follows, which
+        // a flash doesn't send.
+        WM_NCACTIVATE
+            if wparam == FALSE as WPARAM
+                && DIALOGS.with_borrow(|dialogs| dialogs.contains(&hwnd)) =>
+        {
+            // SAFETY: handing the message we were handed, unchanged, to the
+            // default procedure, which draws the title bar, past winit's.
+            unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
         }
         WM_NCDESTROY => {
             // SAFETY: removing the subclass installed by
@@ -207,4 +284,35 @@ unsafe extern "system" fn owner_proc(
         // SAFETY: forwarding the message we were handed, unchanged.
         _ => unsafe { DefSubclassProc(hwnd, msg, wparam, lparam) },
     }
+}
+
+/// Send `WM_CLOSE` to the popups `owner` owns. Whether there were any.
+fn close_popups_owned_by(owner: HWND) -> bool {
+    // A copy, as closing a popup can destroy it, which updates the list.
+    let popups = POPUPS.with_borrow(|popups| popups.clone());
+    let mut closed = false;
+    for popup in popups {
+        // SAFETY: plain calls on windows of this thread that are still alive —
+        // a destroyed one has taken itself off the list.
+        unsafe {
+            if GetWindow(popup, GW_OWNER) == owner {
+                SendMessageW(popup, WM_CLOSE, 0, 0);
+                closed = true;
+            }
+        }
+    }
+    closed
+}
+
+/// Whether the `WM_SETCURSOR` with `lparam` is for a mouse button going down on
+/// a disabled window: the low word is the hit-test result, the high word the
+/// mouse message that prompted it.
+fn is_press_on_disabled(lparam: LPARAM) -> bool {
+    let hit = lparam as u16 as i16 as i32;
+    let msg = (lparam >> 16) as u16 as u32;
+    hit == HTERROR
+        && matches!(
+            msg,
+            WM_LBUTTONDOWN | WM_RBUTTONDOWN | WM_MBUTTONDOWN | WM_XBUTTONDOWN
+        )
 }
