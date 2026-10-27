@@ -768,8 +768,12 @@ impl AppHandler {
                     logo: s.super_key(),
                 };
             }
-            WindowEvent::KeyboardInput { event: key, .. } => {
-                self.dispatch_key(&key, event_loop);
+            WindowEvent::KeyboardInput {
+                event: key,
+                is_synthetic,
+                ..
+            } => {
+                self.dispatch_key(&key, is_synthetic, event_loop);
             }
             WindowEvent::RedrawRequested => {
                 self.paint_main();
@@ -938,8 +942,12 @@ impl AppHandler {
                     logo: s.super_key(),
                 };
             }
-            WindowEvent::KeyboardInput { event: key, .. } => {
-                self.dispatch_key(&key, event_loop);
+            WindowEvent::KeyboardInput {
+                event: key,
+                is_synthetic,
+                ..
+            } => {
+                self.dispatch_key(&key, is_synthetic, event_loop);
                 self.mark_popups_dirty();
             }
             WindowEvent::RedrawRequested => {
@@ -1179,9 +1187,20 @@ impl AppHandler {
         event_loop.set_control_flow(ControlFlow::WaitUntil(next));
     }
 
-    fn dispatch_key(&mut self, key: &winit::event::KeyEvent, event_loop: &ActiveEventLoop) {
+    fn dispatch_key(
+        &mut self,
+        key: &winit::event::KeyEvent,
+        is_synthetic: bool,
+        event_loop: &ActiveEventLoop,
+    ) {
         let mapped = map_base_key(key);
         match key.state {
+            // A key held down as a window takes the keyboard, which winit
+            // reports as pressed again (Windows, X11). It went down somewhere
+            // else, and was handled there: in the dialog it just closed, say,
+            // which hands the keyboard to the one beneath — where the same
+            // Escape would close that dialog too.
+            ElementState::Pressed if is_synthetic => {}
             ElementState::Pressed => {
                 // A key whose press a widget asked to swallow (e.g. the letter
                 // that fired a menu item) is dropped wholesale — including OS
