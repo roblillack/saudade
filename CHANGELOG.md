@@ -73,6 +73,11 @@ While pre-1.0, the minor version is bumped for breaking changes.
   desktop when they hang off their window. Popup windows are now transparent
   where the menu doesn't cover them on macOS, Windows and Wayland. X11 still
   repaints the app underneath, now up to the popup's edge. (#52)
+- Windows: the window beneath an open dialog can no longer be activated while
+  the keys typed into it went to the dialog. It is disabled for as long as the
+  dialog is open, as the owner of a native modal dialog is, so the keyboard and
+  the active title bar stay with the dialog, and a click on that window closes a
+  dropdown open in the dialog. (#82)
 
 ## [0.7.0] - 2026-10-24
 
