@@ -53,6 +53,27 @@ While pre-1.0, the minor version is bumped for breaking changes.
 - The `circle_drawer` example's right-click menu now takes the keyboard:
   Escape, the arrow keys and Enter did nothing. `ContextMenu`'s docs now say
   that a widget owning one forwards `accepts_accelerators` to it too. (#75)
+- A popup window — every `MenuBar` drop-down, `Dropdown` list and `ContextMenu`
+  panel — is genuinely transparent on macOS, so a menu no longer carries a white
+  margin around with it. A menu panel does not fill its window: the two corners
+  inside the bend of its L-shaped drop shadow are not part of it, and the
+  compositor may round the window up past the footprint it was asked for (macOS
+  sizes windows in *points*, so 139 logical pixels at the 2.667 scale a Retina
+  Mac draws at — 371 device pixels — comes back as 372). Those pixels used
+  to be faked by redrawing whatever the window covers, because softbuffer's
+  CoreGraphics backend builds its `CGImage` with the alpha byte ignored, and that
+  only works for as long as the popup stays over the main window: a menu hanging
+  off it had nothing to redraw there, and the bare fill showed instead — a white
+  hairline down the right edge and along the bottom of a menu inside the window,
+  a white margin out over the desktop for one that wasn't. A popup window is now
+  shown through a Core Animation layer of saudade's own, from a `CGImage` that
+  keeps the alpha byte, and leaves those pixels transparent. Windows and X11,
+  which have no such way, keep the redraw, which is why it is still there, and
+  it no longer clips a pixel short of the surface either.
+- With a real alpha channel there is nothing behind the panel worth
+  reproducing, so a transparent popup pass draws through `Widget::paint_overlay`
+  alone instead of painting the whole application into every menu window: one
+  full render of the app less per popup frame.
 
 ## [0.7.0] - 2026-10-24
 

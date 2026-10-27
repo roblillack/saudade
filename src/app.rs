@@ -1,4 +1,3 @@
-use std::num::NonZeroU32;
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
@@ -34,8 +33,9 @@ use crate::event::{
     SCROLL_PIXELS_PER_LINE, WHEEL_LINES_PER_DETENT,
 };
 use crate::font::{Font, FontSet};
-use crate::geometry::{Point, Rect, Size};
+use crate::geometry::{Color, Point, Rect, Size};
 use crate::painter::Painter;
+use crate::present::{Alpha, Surface};
 use crate::svg::SvgImage;
 use crate::theme::Theme;
 use crate::widget::{PopupKind, PopupRequest, Widget};
@@ -217,7 +217,7 @@ struct AppHandler {
     main_win: Option<Rc<Window>>,
     main_id: Option<WindowId>,
     context: Option<softbuffer::Context<Rc<Window>>>,
-    main_surface: Option<softbuffer::Surface<Rc<Window>, Rc<Window>>>,
+    main_surface: Option<Surface>,
     physical: PhysicalSize<u32>,
     /// Logical→physical scale factor: [`Window::scale_factor`], which the OS
     /// owns, times [`Self::ui_scale`], which follows from it. Refreshed when
@@ -476,8 +476,6 @@ impl ApplicationHandler for AppHandler {
 
         let context = softbuffer::Context::new(win.clone())
             .expect("saudade: failed to create softbuffer context");
-        let mut surface = softbuffer::Surface::new(&context, win.clone())
-            .expect("saudade: failed to create softbuffer surface");
 
         // Now that there is a window there is a display to take a scale from,
         // rather than the guess above. Re-ask for the size the design wants only
@@ -491,7 +489,8 @@ impl ApplicationHandler for AppHandler {
         } else {
             self.fit_window(&win, self.design_size)
         };
-        resize_surface(&mut surface, self.physical);
+        let surface = Surface::new(&context, win.clone(), self.physical, Alpha::Opaque)
+            .expect("saudade: failed to create softbuffer surface");
         relayout(&mut self.root, self.physical, self.scale, self.design_size);
         // Give the first focusable widget in the tree keyboard focus by
         // default so apps with a clear "primary" target (a text editor, a
@@ -550,7 +549,7 @@ impl ApplicationHandler for AppHandler {
     }
 
     fn exiting(&mut self, _event_loop: &ActiveEventLoop) {
-        // Tear the windows (and the softbuffer surfaces holding `Rc<Window>`
+        // Tear the windows (and the drawing surfaces holding `Rc<Window>`
         // clones) down here, while the event loop is still alive. On macOS a
         // winit `Window` dropped *after* `run_app` returns calls into a
         // by-then-deconfigured `NSApplication` delegate and panics inside
@@ -613,7 +612,7 @@ impl AppHandler {
             WindowEvent::Resized(new_size) => {
                 self.physical = new_size;
                 if let Some(s) = self.main_surface.as_mut() {
-                    resize_surface(s, self.physical);
+                    s.resize(self.physical);
                 }
                 relayout(&mut self.root, self.physical, self.scale, self.design_size);
                 // Dragging the top or left edge resizes *and* moves the window.
@@ -828,7 +827,7 @@ impl AppHandler {
             WindowEvent::Resized(new_size) => {
                 if let Some(p) = self.popups.get_mut(idx) {
                     p.physical = new_size;
-                    resize_surface(&mut p.surface, new_size);
+                    p.surface.resize(new_size);
                     p.needs_redraw = true;
                 }
             }
@@ -1138,7 +1137,7 @@ impl AppHandler {
         if let Some(new_phys) = win.request_inner_size(requested) {
             self.physical = new_phys;
             if let Some(s) = self.main_surface.as_mut() {
-                resize_surface(s, new_phys);
+                s.resize(new_phys);
             }
             relayout(&mut self.root, self.physical, self.scale, self.design_size);
             self.needs_redraw = true;
@@ -1308,11 +1307,11 @@ impl AppHandler {
         let Some(surface) = self.main_surface.as_mut() else {
             return;
         };
-        let mut surface_buf = surface
-            .buffer_mut()
-            .expect("saudade: failed to acquire surface buffer");
+        let Some(mut surface_buf) = surface.frame() else {
+            return;
+        };
         let mut painter = Painter::with_popup_anchor(
-            &mut surface_buf,
+            surface_buf.pixels(),
             self.physical.width as i32,
             self.physical.height as i32,
             self.scale,
@@ -1344,9 +1343,7 @@ impl AppHandler {
             painter.fill_pattern(self.theme.background, self.bg.pattern, self.bg.color);
         }
         self.root.paint(&mut painter, &self.theme);
-        surface_buf
-            .present()
-            .expect("saudade: failed to present buffer");
+        surface_buf.present();
     }
 
     fn paint_popup(&mut self, idx: usize) {
@@ -1355,18 +1352,32 @@ impl AppHandler {
         };
         let origin_x = -((p.anchor.x as f32 * p.scale).round() as i32);
         let origin_y = -((p.anchor.y as f32 * p.scale).round() as i32);
-        let popup_phys_w = (p.anchor.w as f32 * p.scale).round() as i32;
-        let popup_phys_h = (p.anchor.h as f32 * p.scale).round() as i32;
+        // How far the pass may paint. Nominally the popup's footprint in
+        // device pixels — but the window we got may be a shade larger than the
+        // one we asked for: macOS sizes windows in *points* and rounds a
+        // fractional content size up, so a popup requested at an odd number of
+        // device pixels (139 logical at the 2.667 a Retina Mac draws at → 371)
+        // comes back 372 wide.
+        // Clipping to the request alone would leave that last column and row
+        // untouched by everything below, showing whatever the buffer was
+        // cleared to — on a surface without an alpha channel, a white hairline
+        // down the right edge and along the bottom of every menu, just outside
+        // its black border. Take whichever is bigger so the pass owns the whole
+        // surface.
+        let popup_phys_w =
+            ((p.anchor.w as f32 * p.scale).round() as i32).max(p.physical.width as i32);
+        let popup_phys_h =
+            ((p.anchor.h as f32 * p.scale).round() as i32).max(p.physical.height as i32);
         let anchor = p.anchor;
         let screen = self.screen;
         let system_scale = p.os_scale;
         let display_dpi = p.display_dpi;
-        let mut surface_buf = p
-            .surface
-            .buffer_mut()
-            .expect("saudade: failed to acquire popup buffer");
+        let transparent = p.transparent;
+        let Some(mut surface_buf) = p.surface.frame() else {
+            return;
+        };
         let mut painter = Painter::with_popup_anchor(
-            &mut surface_buf,
+            surface_buf.pixels(),
             p.physical.width as i32,
             p.physical.height as i32,
             p.scale,
@@ -1382,13 +1393,28 @@ impl AppHandler {
         .with_screen(screen)
         .with_display_dpi(display_dpi);
         painter.set_system_scale(system_scale);
-        painter.fill(self.theme.background);
         painter.set_clip_phys(0, 0, popup_phys_w, popup_phys_h);
-        self.root.paint(&mut painter, &self.theme);
+        if transparent {
+            // The window has a real alpha channel, so everything the panel
+            // does not cover — the two corners inside the bend of its L-shaped
+            // drop shadow, and the sliver the compositor's own rounding leaves
+            // over — is simply see-through, and only the overlay pass has
+            // anything to draw. Nothing under the popup is repainted at all,
+            // which is both what makes a menu hanging off the window look
+            // right and one less full render of the app per frame.
+            painter.fill(Color::TRANSPARENT);
+            self.root.paint_overlay(&mut painter, &self.theme);
+        } else {
+            // No alpha to work with: fake it by redrawing the app underneath
+            // the panel, which is what the popup would be seeing through to.
+            // Only pixels the window itself covers are right — where the popup
+            // hangs off the main window there is nothing to redraw, and the
+            // fill shows instead.
+            painter.fill(self.theme.background);
+            self.root.paint(&mut painter, &self.theme);
+        }
         painter.clear_clip();
-        surface_buf
-            .present()
-            .expect("saudade: failed to present popup buffer");
+        surface_buf.present();
     }
 
     /// Recompute [`Self::screen`]: the usable area of the display the window is
@@ -1549,7 +1575,7 @@ impl AppHandler {
             let _ = writer.request_inner_size(self.physical);
         }
         if let Some(s) = self.main_surface.as_mut() {
-            resize_surface(s, self.physical);
+            s.resize(self.physical);
         }
         relayout(&mut self.root, self.physical, self.scale, self.design_size);
         // The screen rect is in logical units, so a new scale rescales it even
@@ -1590,7 +1616,7 @@ impl AppHandler {
         p.scale = scale;
         p.os_scale = os_scale;
         p.physical = size;
-        resize_surface(&mut p.surface, size);
+        p.surface.resize(size);
         p.needs_redraw = true;
         self.refresh_dialog_dpi(idx);
     }
@@ -1716,7 +1742,7 @@ impl AppHandler {
         // does, so this frame is painted at the right size.
         let actual = p.win.request_inner_size(size).unwrap_or(size);
         p.physical = actual;
-        resize_surface(&mut p.surface, actual);
+        p.surface.resize(actual);
         p.anchor = rect;
         // The cached pointer position pointed at a row of the menu we just
         // replaced, so it now means nothing. The platform sends a fresh motion
@@ -1973,9 +1999,23 @@ impl AppHandler {
         }
         let win = Rc::new(win);
         let id = win.id();
-        let mut surface = softbuffer::Surface::new(context, win.clone()).ok()?;
         let actual = requested.unwrap_or_else(|| win.inner_size());
-        resize_surface(&mut surface, actual);
+        // A menu panel never fills its window: the L-shaped drop shadow leaves
+        // the two corners inside its bend uncovered, and the compositor may
+        // round the window up a pixel past the footprint we asked for. Ask for
+        // a straight-alpha surface so those pixels can be genuinely
+        // transparent. macOS gives us one through a Core Animation layer of
+        // our own (see `macos_layer`); Windows and X11 say no, and fall back
+        // to repainting the app underneath the panel, which is right for as
+        // long as the popup stays over the window. A dialog is a real, opaque
+        // window and wants none of this.
+        let want = if request.kind == PopupKind::Popup {
+            Alpha::Straight
+        } else {
+            Alpha::Opaque
+        };
+        let surface = Surface::new(context, win.clone(), actual, want)?;
+        let transparent = surface.honors_alpha();
         win.set_visible(true);
 
         Some(PopupWindow {
@@ -1984,6 +2024,7 @@ impl AppHandler {
             surface,
             anchor: rect,
             kind: request.kind,
+            transparent,
             physical: actual,
             scale,
             os_scale,
@@ -2003,9 +2044,13 @@ impl AppHandler {
 struct PopupWindow {
     win: Rc<Window>,
     win_id: WindowId,
-    surface: softbuffer::Surface<Rc<Window>, Rc<Window>>,
+    surface: Surface,
     anchor: Rect,
     kind: PopupKind,
+    /// Whether this window's surface carries a real alpha channel, so the
+    /// parts of it the panel does not cover can be transparent rather than
+    /// painted over with a redraw of whatever is behind the window.
+    transparent: bool,
     physical: PhysicalSize<u32>,
     /// Logical→physical scale this window is drawn at — see the same field on
     /// [`AppHandler`]. A [`PopupKind::Popup`] takes it from the window it hangs
@@ -2306,17 +2351,6 @@ fn scroll_delta_lines(delta: MouseScrollDelta, scale: f32) -> (f32, f32) {
             (-(p.x as f32) / per_line, -(p.y as f32) / per_line)
         }
     }
-}
-
-fn resize_surface(
-    surface: &mut softbuffer::Surface<Rc<Window>, Rc<Window>>,
-    size: PhysicalSize<u32>,
-) {
-    let w = NonZeroU32::new(size.width.max(1)).unwrap();
-    let h = NonZeroU32::new(size.height.max(1)).unwrap();
-    surface
-        .resize(w, h)
-        .expect("saudade: failed to resize surface");
 }
 
 /// `logical` saudade pixels in physical ones, at `scale`.

@@ -41,8 +41,11 @@ mod event;
 mod font;
 mod geometry;
 mod icon;
+#[cfg(target_os = "macos")]
+mod macos_layer;
 pub mod mock;
 mod painter;
+mod present;
 mod svg;
 mod theme;
 mod ui_scale;
