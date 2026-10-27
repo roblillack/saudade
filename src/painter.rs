@@ -1421,17 +1421,29 @@ impl<'a> Painter<'a> {
         let idx = (y * self.width + x) as usize;
         let dst = self.pixels[idx];
         let a = alpha as u32;
-        let inv = 255 - a;
+        // Source-over, with the destination's own alpha in play: the weight it
+        // keeps is what the source lets through, of however much of it there
+        // was. An opaque destination — every pixel of a window that paints its
+        // own background — leaves `dw == 255 - a` and `out == 255`, which is a
+        // plain lerp between the two colours. A transparent one (the field a
+        // popup window with a real alpha channel is cleared to) leaves
+        // `dw == 0`, so the source keeps its own colour at its own coverage
+        // instead of blending toward the black behind the nothing.
+        let dw = ((dst >> 24) & 0xFF) * (255 - a) / 255;
+        let out = a + dw;
+        if out == 0 {
+            return;
+        }
         let sr = color.red() as u32;
         let sg = color.green() as u32;
         let sb = color.blue() as u32;
         let dr = (dst >> 16) & 0xFF;
         let dg = (dst >> 8) & 0xFF;
         let db = dst & 0xFF;
-        let r = (sr * a + dr * inv) / 255;
-        let g = (sg * a + dg * inv) / 255;
-        let b = (sb * a + db * inv) / 255;
-        self.pixels[idx] = 0xFF000000 | (r << 16) | (g << 8) | b;
+        let r = (sr * a + dr * dw) / out;
+        let g = (sg * a + dg * dw) / out;
+        let b = (sb * a + db * dw) / out;
+        self.pixels[idx] = (out << 24) | (r << 16) | (g << 8) | b;
     }
 
     /// Logical-coordinate single-pixel write — a 1×1 logical pixel becomes the
@@ -1962,6 +1974,29 @@ fn resampled(a: u32, r: u32, g: u32, b: u32, bits: u32) -> u32 {
         | (((r + half) >> bits).min(0xFF) << 16)
         | (((g + half) >> bits).min(0xFF) << 8)
         | ((b + half) >> bits).min(0xFF)
+}
+
+/// Premultiply, in place, the straight-alpha `0xAARRGGBB` pixels a painter
+/// writes, for a platform that composites a see-through window from
+/// premultiplied ones: a Wayland `Argb8888` buffer, a Windows layered window.
+/// An opaque pixel reads the same either way, so only a buffer with see-through
+/// pixels in it needs this.
+#[cfg(any(windows, all(unix, not(target_os = "macos"))))]
+pub(crate) fn premultiply(pixels: &mut [u32]) {
+    for px in pixels {
+        let a = *px >> 24;
+        match a {
+            255 => {}
+            // Whatever colour a fully transparent pixel carries, premultiplied
+            // it is nothing — and a compositor adds what is left.
+            0 => *px = 0,
+            _ => {
+                let v = *px;
+                let scaled = |shift: u32| (((v >> shift) & 0xFF) * a + 127) / 255;
+                *px = (a << 24) | (scaled(16) << 16) | (scaled(8) << 8) | scaled(0);
+            }
+        }
+    }
 }
 
 /// One axis of a resample, worked out once for every destination pixel: the
@@ -3266,5 +3301,31 @@ mod tests {
             vec![(Color::BLACK.0, h), (0, 4)],
             "the outline fills the rule and stops at its bottom edge"
         );
+    }
+
+    /// Anti-aliasing onto a see-through pixel — what a transparent popup window
+    /// is cleared to — keeps the colour drawn at the coverage it was drawn
+    /// with, rather than darkening it toward the black of `Color::TRANSPARENT`.
+    /// Onto an opaque pixel it is the plain blend it always was.
+    #[test]
+    fn blending_onto_a_transparent_pixel_keeps_the_colour() {
+        let mut px = [Color::TRANSPARENT.0, Color::WHITE.0];
+        {
+            let mut p = Painter::new(&mut px, 2, 1, 1.0, 0, 0, FontSet::default());
+            p.blend_pixel_phys(0, 0, Color::rgb(0xFF, 0x80, 0x00), 0x80);
+            p.blend_pixel_phys(1, 0, Color::BLACK, 0x80);
+        }
+        assert_eq!(px, [0x80FF_8000, 0xFF7F_7F7F]);
+    }
+
+    /// Premultiplying leaves an opaque pixel alone, turns a fully transparent
+    /// one into nothing whatever colour it carried, and scales a partial one's
+    /// colour by its coverage.
+    #[cfg(any(windows, all(unix, not(target_os = "macos"))))]
+    #[test]
+    fn premultiplying_scales_colour_by_coverage() {
+        let mut px = [0xFF12_3456, 0x00FF_FFFF, 0x80FF_8000, 0x0000_0000];
+        premultiply(&mut px);
+        assert_eq!(px, [0xFF12_3456, 0x0000_0000, 0x8080_4000, 0x0000_0000]);
     }
 }

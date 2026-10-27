@@ -53,6 +53,11 @@ While pre-1.0, the minor version is bumped for breaking changes.
 - The `circle_drawer` example's right-click menu now takes the keyboard:
   Escape, the arrow keys and Enter did nothing. `ContextMenu`'s docs now say
   that a widget owning one forwards `accepts_accelerators` to it too. (#75)
+- Menus, dropdown lists and context menus no longer show a strip of window
+  background along their right and bottom edges, or a square of it out over the
+  desktop when they hang off their window. Popup windows are now transparent
+  where the menu doesn't cover them on macOS, Windows and Wayland. X11 still
+  repaints the app underneath, now up to the popup's edge. (#52)
 
 ## [0.7.0] - 2026-10-24
 

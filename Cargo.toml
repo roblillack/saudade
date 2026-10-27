@@ -55,6 +55,11 @@ members = ["macros"]
 # tree as a side benefit. The `x11` feature is a harmless no-op off
 # free-unix (winit's X11 platform crates are themselves target-gated).
 winit = { version = "0.30.12", default-features = false, features = ["rwh_06", "x11"] }
+# 0.4 has no alpha mode: every backend shows a pixel opaque, whatever its alpha
+# byte says. A popup window that wants see-through pixels is presented by
+# saudade itself where the platform allows — `win32_layered` on Windows,
+# `macos_layer` on macOS (softbuffer's `master` can do the latter, but no
+# release carries it yet).
 softbuffer = "0.4"
 fontdue = "0.8"
 fontdb = "0.16"
@@ -96,11 +101,14 @@ windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Graphic
 # winit can't do — `applicationIconImage`, the dock tile (see `icon.rs`), which
 # on macOS is where an app's icon lives since its windows have none.
 # `CGDisplayScreenSize` is a fourth: a display's physical size, which
-# `Painter::display_dpi` works a density out of.
+# `Painter::display_dpi` works a density out of. And a popup window's own
+# Core Animation layer (see `macos_layer`), shown from a straight-alpha
+# `CGImage`, is the fifth: softbuffer 0.4's drops the alpha byte.
 objc2 ={ version = "0.6", default-features = false, features = ["std"] }
-objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSApplication", "NSImage", "NSWindow", "NSResponder", "NSScreen", "NSView", "objc2-core-graphics"] }
-objc2-core-foundation = { version = "0.3", default-features = false, features = ["CFBase", "CFString", "CFCGTypes", "std"] }
-objc2-core-graphics = { version = "0.3", default-features = false, features = ["CGContext", "CGBitmapContext", "CGColorSpace", "CGDirectDisplay", "CGDisplayConfiguration", "CGImage", "std"] }
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSApplication", "NSImage", "NSWindow", "NSResponder", "NSScreen", "NSView", "objc2-core-graphics", "objc2-quartz-core"] }
+objc2-core-foundation = { version = "0.3", default-features = false, features = ["CFBase", "CFData", "CFString", "CFCGTypes", "std"] }
+objc2-core-graphics = { version = "0.3", default-features = false, features = ["CGContext", "CGBitmapContext", "CGColorSpace", "CGDataProvider", "CGDirectDisplay", "CGDisplayConfiguration", "CGImage", "std"] }
+objc2-quartz-core = { version = "0.3", default-features = false, features = ["CALayer", "CATransaction", "objc2-core-foundation", "std"] }
 objc2-core-text = { version = "0.3", default-features = false, features = ["CTFont", "CTFontDescriptor", "CTFontTraits", "CTDefines", "std", "objc2-core-graphics"] }
 
 [dev-dependencies]

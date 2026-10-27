@@ -1379,6 +1379,18 @@ impl State {
         let origin_y = -((anchor.y as f32 * paint_scale).round() as i32);
         let clip_w = (anchor.w as f32 * paint_scale).round() as i32;
         let clip_h = (anchor.h as f32 * paint_scale).round() as i32;
+        // A menu panel never fills its buffer: the L-shaped drop shadow leaves
+        // the two corners inside its bend uncovered, and the buffer is rounded
+        // twice — the anchor to whole surface units, then those to device
+        // pixels — where the footprint above is rounded once, so it can come
+        // out a pixel wider or taller (140 logical at a 4/3 UI scale on a 200%
+        // display: 187 surface units, 374 pixels, a 373-pixel footprint). An
+        // `Argb8888` buffer carries alpha, so an `xdg_popup` leaves all of that
+        // transparent and only draws the overlay pass, instead of redrawing the
+        // app underneath and leaving the sliver past the footprint showing the
+        // background fill. A dialog is a real, opaque window and keeps the
+        // redraw.
+        let transparent = p.surface.kind() == PopupKind::Popup;
 
         let mut painter = Painter::with_popup_anchor(
             pixels,
@@ -1396,10 +1408,19 @@ impl State {
         )
         .with_display_dpi(display_dpi);
         painter.set_system_scale(system_scale);
-        painter.fill(self.theme.background);
-        painter.set_clip_phys(0, 0, clip_w, clip_h);
-        self.root.paint(&mut painter, &self.theme);
+        if transparent {
+            painter.fill(Color::TRANSPARENT);
+            painter.set_clip_phys(0, 0, clip_w.max(buf_w), clip_h.max(buf_h));
+            self.root.paint_overlay(&mut painter, &self.theme);
+        } else {
+            painter.fill(self.theme.background);
+            painter.set_clip_phys(0, 0, clip_w, clip_h);
+            self.root.paint(&mut painter, &self.theme);
+        }
         painter.clear_clip();
+        if transparent {
+            crate::painter::premultiply(pixels);
+        }
 
         let surface = p.surface.wl_surface();
         let _ = buf.attach_to(surface);
