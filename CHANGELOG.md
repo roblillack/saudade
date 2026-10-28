@@ -29,6 +29,9 @@ While pre-1.0, the minor version is bumped for breaking changes.
 
 ### Fixed
 
+- macOS: `TextInput` and `TextEditor` take ⌘C / ⌘X / ⌘V / ⌘A for Copy, Cut,
+  Paste and Select All, and ⌥←/→ to move by word, instead of the Ctrl chords.
+  Both now follow a `ModifierScheme`, which `with_scheme` pins. (#88)
 - `TextInput` and `TextEditor` no longer select the character just typed, for
   the next keystroke to replace, when the selection is empty: after
   `select_all()` on empty text, or after Shift+arrowing away from the caret and

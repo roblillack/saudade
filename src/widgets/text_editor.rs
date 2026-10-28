@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
+use crate::accel::ModifierScheme;
 use crate::event::{Cursor, Event, EventCtx, Key, MouseButton, NamedKey};
 use crate::font::{FontFamily, FontStyle};
 use crate::geometry::{Color, Point, Rect};
@@ -32,6 +33,7 @@ pub struct TextEditor {
     selection_anchor: Option<(usize, usize)>,
     focused: bool,
     enabled: bool,
+    scheme: ModifierScheme,
     /// Per-visible-row cumulative pixel widths, keyed by absolute row index.
     /// `widths[col]` is the x-offset (in logical px) where the caret sits
     /// at character index `col`. Rebuilt every paint; only visible rows are
@@ -60,6 +62,7 @@ impl TextEditor {
             selection_anchor: None,
             focused: false,
             enabled: true,
+            scheme: ModifierScheme::native(),
             cumulative_widths: HashMap::new(),
             drag_active: false,
             last_click: None,
@@ -78,6 +81,15 @@ impl TextEditor {
 
     pub fn with_font_size(mut self, size: f32) -> Self {
         self.font_size = size;
+        self
+    }
+
+    /// Pin the [`ModifierScheme`] the editing shortcuts (Copy, Cut, Paste,
+    /// Select All, word moves) are matched with, overriding the
+    /// [`ModifierScheme::native`] default. Mainly for tests that must behave
+    /// identically on every host.
+    pub fn with_scheme(mut self, scheme: ModifierScheme) -> Self {
+        self.scheme = scheme;
         self
     }
 
@@ -729,7 +741,7 @@ impl Widget for TextEditor {
                 }
             }
             Event::KeyDown { key, modifiers } if self.focused => {
-                if modifiers.control
+                if self.scheme.primary_held(*modifiers)
                     && let Key::Char(c) = key
                 {
                     let consumed = match c.to_ascii_lowercase() {
@@ -782,7 +794,7 @@ impl Widget for TextEditor {
                     }
                     Key::Named(NamedKey::Left) => {
                         self.before_move(modifiers.shift);
-                        if modifiers.control {
+                        if self.scheme.word_move_held(*modifiers) {
                             self.move_word_left();
                         } else {
                             self.move_left();
@@ -793,7 +805,7 @@ impl Widget for TextEditor {
                     }
                     Key::Named(NamedKey::Right) => {
                         self.before_move(modifiers.shift);
-                        if modifiers.control {
+                        if self.scheme.word_move_held(*modifiers) {
                             self.move_word_right();
                         } else {
                             self.move_right();
@@ -1114,6 +1126,38 @@ mod tests {
                 },
             },
         );
+    }
+
+    fn chord(editor: &mut TextEditor, key: Key, modifiers: Modifiers) {
+        dispatch(editor, &Event::KeyDown { key, modifiers });
+    }
+
+    #[test]
+    fn mac_shortcuts_take_command_and_option() {
+        let ctrl = Modifiers {
+            control: true,
+            ..Modifiers::default()
+        };
+        let cmd = Modifiers {
+            logo: true,
+            ..Modifiers::default()
+        };
+        let option = Modifiers {
+            alt: true,
+            ..Modifiers::default()
+        };
+        let mut editor = focused("foo bar").with_scheme(ModifierScheme::Mac);
+        press(&mut editor, NamedKey::End, false);
+        chord(&mut editor, Key::Named(NamedKey::Left), option);
+        type_text(&mut editor, "x");
+        assert_eq!(editor.text(), "foo xbar");
+
+        chord(&mut editor, Key::Char('a'), ctrl);
+        type_text(&mut editor, "y");
+        assert_eq!(editor.text(), "foo xybar");
+        chord(&mut editor, Key::Char('a'), cmd);
+        type_text(&mut editor, "z");
+        assert_eq!(editor.text(), "z");
     }
 
     /// An empty selection — anchor and caret at the same spot — must not
