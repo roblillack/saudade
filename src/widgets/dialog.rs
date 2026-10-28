@@ -96,8 +96,9 @@ pub enum DialogIcon {
 /// A modal message / alert box.
 ///
 /// `Dialog` is the ready-made message box built on the general-purpose
-/// [`Modal`] facility: it hosts a body that draws an icon, a wrapped message,
-/// and a single OK button. The application owns it (e.g., via
+/// [`Modal`] facility: it hosts a body that draws an icon, the message (broken
+/// into lines at `\n` only — it is not word-wrapped), and a single OK button.
+/// The application owns it (e.g., via
 /// `Rc<RefCell<Dialog>>`) as an overlay and calls `show_warning` / `show_info`
 /// / `show_error` to display it; OK, Enter, Space, Escape, or the window's
 /// close button all dismiss it.
@@ -238,7 +239,7 @@ impl Widget for Dialog {
     }
 }
 
-/// The message box's body: the icon, the wrapped message, and the OK button.
+/// The message box's body: the icon, the message lines, and the OK button.
 /// Hosted as a [`Modal`]'s content and laid out into the dialog's client rect,
 /// so all positions are taken relative to that rect. The OK button is a real
 /// [`Button`] — it owns the press-then-release behaviour for pointer and
@@ -286,7 +287,7 @@ impl Widget for MessageBody {
     fn paint(&mut self, painter: &mut Painter, theme: &Theme) {
         let body = self.rect;
 
-        // Icon on the left, wrapped message lines on the right.
+        // Icon on the left, message lines on the right.
         let body_y = body.y + PADDING;
         let icon_x = body.x + PADDING;
         if self.icon != DialogIcon::None {

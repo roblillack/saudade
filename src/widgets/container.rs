@@ -7,8 +7,10 @@ use crate::widgets::{TabAction, tab_action};
 
 /// A flat collection of widgets at absolute positions inside a fixed-size area.
 ///
-/// The container is the only thing saudade ships with right now — enough for
-/// WINGs-style dialog layouts. It is responsible for three runtime concerns:
+/// The container suits fixed-size layouts that shouldn't reflow, such as
+/// dialogs and about boxes; for children that flex with the window, use a
+/// [`Column`](crate::Column) or [`Row`](crate::Row). It is responsible for
+/// three runtime concerns:
 ///
 /// * **hit testing**: pointer events are routed to the top-most child whose
 ///   bounds contain the cursor;

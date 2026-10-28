@@ -1,9 +1,10 @@
-//! Saudade — a minimal, retained-mode GUI library for small Win 3.1-styled
-//! programs and utilities. Targets Wayland, X11, Windows, macOS.
+//! Saudade — a small, retained-mode, cross-platform GUI toolkit for fast,
+//! self-contained native programs styled after Windows 3.1. Runs equally well
+//! on Windows, macOS, and UNIX (Wayland and X11).
 //!
 //! The library stays intentionally small:
 //!
-//! * the runtime drives winit + softbuffer
+//! * the runtime drives winit (smithay-client-toolkit on Wayland) + softbuffer
 //! * widgets are ordinary Rust values implementing [`Widget`]
 //! * events are typed (no integer message IDs)
 //! * widgets request repaint / window close via [`EventCtx`]
