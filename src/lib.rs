@@ -63,6 +63,8 @@ mod win32_fullscreen;
 mod win32_layered;
 #[cfg(windows)]
 mod win32_popup;
+#[cfg(all(unix, not(target_os = "macos")))]
+mod x11;
 
 pub use accel::{Accel, AccelMods, ModifierScheme};
 pub use app::{App, WindowConfig};
