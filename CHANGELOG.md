@@ -23,9 +23,14 @@ While pre-1.0, the minor version is bumped for breaking changes.
   keyboard for as long as it is open, as a modal one does: clicking the window
   beneath no longer makes that window active while its keystrokes went to the
   dialog. (#78)
+- X11: a dialog is now transient for the window it opens over and opens
+  centered over it. Its frame only moves and closes it (WSLg still lets its
+  edges resize it). (#84)
 
 ### Fixed
 
+- `Painter::display_dpi` answers on X11, off RandR, so `examples/credit_card`
+  draws a card at its real 85.60 mm there. (#84)
 - The Wayland backend draws the UI at the size the other backends do. It laid
   its widgets out in raw surface coordinates, so the 96→72 dpi alignment (see
   "How big a logical pixel is") was missing there and a window came out a third
