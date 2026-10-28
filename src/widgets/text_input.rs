@@ -149,12 +149,6 @@ impl TextInput {
         self.cursor = self.chars.len();
     }
 
-    fn has_selection(&self) -> bool {
-        self.selection_anchor
-            .map(|a| a != self.cursor)
-            .unwrap_or(false)
-    }
-
     fn selection_range(&self) -> Option<(usize, usize)> {
         let a = self.selection_anchor?;
         if a == self.cursor {
@@ -168,13 +162,18 @@ impl TextInput {
         Some(self.chars[s..e].iter().collect())
     }
 
+    /// Delete the selected text, if any, and drop the selection anchor. Every
+    /// edit starts here: an empty selection (anchor on the caret) has nothing
+    /// to delete, but leaving its anchor behind would select whatever the edit
+    /// inserts — or point past the end of the text after a Backspace.
     fn delete_selection(&mut self) -> bool {
-        let Some((s, e)) = self.selection_range() else {
+        let range = self.selection_range();
+        self.selection_anchor = None;
+        let Some((s, e)) = range else {
             return false;
         };
         self.chars.drain(s..e);
         self.cursor = s;
-        self.selection_anchor = None;
         true
     }
 
@@ -210,9 +209,7 @@ impl TextInput {
         let Some(text) = self.clipboard_get() else {
             return false;
         };
-        if self.has_selection() {
-            self.delete_selection();
-        }
+        self.delete_selection();
         let cleaned: String = text.chars().filter(|&c| c != '\n' && c != '\r').collect();
         if cleaned.is_empty() {
             return false;
@@ -615,9 +612,7 @@ impl Widget for TextInput {
                     return;
                 }
                 if *ch >= ' ' {
-                    if self.has_selection() {
-                        self.delete_selection();
-                    }
+                    self.delete_selection();
                     self.insert_char(*ch);
                     self.fire_change(ctx);
                     self.reset_blink();
@@ -769,7 +764,7 @@ fn draw_unfocused_caret(painter: &mut Painter, cx: i32, top_y: i32, color: Color
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::event::Cursor;
+    use crate::event::{Cursor, Modifiers};
 
     fn move_to(input: &mut TextInput, x: i32, y: i32) -> EventCtx {
         let mut ctx = EventCtx::new();
@@ -794,5 +789,69 @@ mod tests {
         let mut input = TextInput::new(Rect::new(0, 0, 120, 24)).with_enabled(false);
         let ctx = move_to(&mut input, 10, 12);
         assert_eq!(ctx.cursor_request, None);
+    }
+
+    fn focused(text: &str) -> TextInput {
+        let mut input = TextInput::new(Rect::new(0, 0, 120, 24)).with_text(text);
+        input.set_focused(true);
+        input
+    }
+
+    fn type_text(input: &mut TextInput, text: &str) {
+        for ch in text.chars() {
+            let mut ctx = EventCtx::new();
+            input.event(
+                &Event::Char {
+                    ch,
+                    modifiers: Modifiers::default(),
+                },
+                &mut ctx,
+            );
+        }
+    }
+
+    fn press(input: &mut TextInput, key: NamedKey, shift: bool) {
+        let mut ctx = EventCtx::new();
+        input.event(
+            &Event::KeyDown {
+                key: Key::Named(key),
+                modifiers: Modifiers {
+                    shift,
+                    ..Modifiers::default()
+                },
+            },
+            &mut ctx,
+        );
+    }
+
+    /// An empty selection — anchor and caret at the same spot — must not
+    /// outlive the next edit. Otherwise the caret moves on past the inserted
+    /// character, the anchor stays behind, and the character just typed ends
+    /// up selected and replaced by the next keystroke.
+    #[test]
+    fn typing_after_select_all_on_empty_text_keeps_every_character() {
+        let mut input = focused("");
+        input.select_all();
+        type_text(&mut input, "rename");
+        assert_eq!(input.text(), "rename");
+    }
+
+    #[test]
+    fn typing_after_extending_the_selection_out_and_back_keeps_every_character() {
+        let mut input = focused("x");
+        press(&mut input, NamedKey::Left, true);
+        press(&mut input, NamedKey::Right, true);
+        type_text(&mut input, "yz");
+        assert_eq!(input.text(), "xyz");
+    }
+
+    #[test]
+    fn backspace_drops_an_empty_selection() {
+        let mut input = focused("ab");
+        press(&mut input, NamedKey::Left, true);
+        press(&mut input, NamedKey::Right, true);
+        press(&mut input, NamedKey::Backspace, false);
+        type_text(&mut input, "c");
+        assert_eq!(input.text(), "ac");
     }
 }

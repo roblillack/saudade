@@ -29,6 +29,10 @@ While pre-1.0, the minor version is bumped for breaking changes.
 
 ### Fixed
 
+- `TextInput` and `TextEditor` no longer select the character just typed, for
+  the next keystroke to replace, when the selection is empty: after
+  `select_all()` on empty text, or after Shift+arrowing away from the caret and
+  back. Backspace in that state no longer panics either. (#86)
 - Wayland: a dialog opened over another one is now transient for that one, not
   for the main window, so it opens over it. (#85)
 - Wayland: keys typed into the window beneath an open dialog no longer reach
