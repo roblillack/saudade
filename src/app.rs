@@ -1863,6 +1863,12 @@ impl AppHandler {
         };
         let rect = request.rect;
         let size = physical_at(rect.into(), parent_scale);
+        // X11: the window a dialog belongs to — the dialog beneath it, or the
+        // main window — as on Windows and macOS.
+        #[cfg(all(unix, not(target_os = "macos")))]
+        let owner = parent
+            .filter(|p| p.kind == PopupKind::Dialog)
+            .map_or(main_win.as_ref(), |p| p.win.as_ref());
 
         let mut attrs = WindowAttributes::default()
             .with_resizable(false)
@@ -1935,24 +1941,28 @@ impl AppHandler {
                 // A real managed top-level dialog: server-side
                 // decorations (title bar + close button only), fixed
                 // size (already set via `with_resizable(false)`), no
-                // minimize / maximize controls. The WM places the
-                // window — we don't pass a position — and the Dialog
-                // window-type hint keeps it visually grouped with the
-                // main window. The dialog's caption rides along on the
-                // PopupRequest so it ends up as the OS window title.
+                // minimize / maximize controls, centered over the window
+                // it belongs to. The Dialog window-type hint keeps it
+                // visually grouped with the main window. The dialog's
+                // caption rides along on the PopupRequest so it ends up as
+                // the OS window title.
                 attrs = attrs
                     .with_title(request.title.as_deref().unwrap_or("Dialog"))
                     .with_decorations(true)
                     .with_enabled_buttons(WindowButtons::CLOSE);
 
                 // Pin min == max so the WM advertises a fixed size — see
-                // `pin_dialog_size`.
+                // `pin_dialog_size` — and create it where it goes rather
+                // than wherever the WM would put a new window: see `x11`.
                 #[cfg(all(unix, not(target_os = "macos")))]
                 {
                     attrs = attrs
                         .with_x11_window_type(vec![XWindowType::Dialog])
                         .with_min_inner_size(size)
                         .with_max_inner_size(size);
+                    if let Some(at) = crate::x11::centered_over(owner, size) {
+                        attrs = attrs.with_position(at);
+                    }
                 }
 
                 // Windows: owned by the window it belongs to — the dialog
@@ -1989,6 +1999,12 @@ impl AppHandler {
                 crate::win32_popup::center_on_owner(&win);
             }
             PopupKind::Popup => crate::win32_popup::never_activate(&win),
+        }
+        // X11: transient for the window it belongs to, in a frame that only
+        // moves and closes it — see `x11`.
+        #[cfg(all(unix, not(target_os = "macos")))]
+        if request.kind == PopupKind::Dialog {
+            crate::x11::make_dialog(&win, owner);
         }
         // macOS: a child window of the window it belongs to — see
         // `macos_popup`. That is the one a popup drops from, and for a dialog
@@ -2039,6 +2055,12 @@ impl AppHandler {
             crate::win32_popup::center_on_owner(&win);
             #[cfg(target_os = "macos")]
             crate::macos_popup::center_over(&win, owner);
+            #[cfg(all(unix, not(target_os = "macos")))]
+            if requested.is_some()
+                && let Some(at) = crate::x11::centered_over(owner, size)
+            {
+                win.set_outer_position(at);
+            }
         }
         // Before the first `set_visible` below, while the window is still
         // off-screen: the behavior applies to the animation that showing it
@@ -2208,8 +2230,14 @@ fn display_dpi(monitor: &MonitorHandle) -> Option<f32> {
     (hr == 0 && x > 0).then_some(x as f32)
 }
 
-/// X11 has the sizes in RandR, which winit does not surface.
-#[cfg(not(any(target_os = "macos", windows)))]
+/// X11 has the sizes in RandR, which winit reads a scale factor off and keeps
+/// to itself — see `x11::display_dpi`.
+#[cfg(all(unix, not(target_os = "macos")))]
+fn display_dpi(monitor: &MonitorHandle) -> Option<f32> {
+    crate::x11::display_dpi(monitor)
+}
+
+#[cfg(not(any(unix, windows)))]
 fn display_dpi(_monitor: &MonitorHandle) -> Option<f32> {
     None
 }
