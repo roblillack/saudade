@@ -773,7 +773,7 @@ impl AppHandler {
                 is_synthetic,
                 ..
             } => {
-                self.dispatch_key(&key, is_synthetic, event_loop);
+                self.dispatch_key(&key, None, is_synthetic, event_loop);
             }
             WindowEvent::RedrawRequested => {
                 self.paint_main();
@@ -947,7 +947,7 @@ impl AppHandler {
                 is_synthetic,
                 ..
             } => {
-                self.dispatch_key(&key, is_synthetic, event_loop);
+                self.dispatch_key(&key, Some(idx), is_synthetic, event_loop);
                 self.mark_popups_dirty();
             }
             WindowEvent::RedrawRequested => {
@@ -1187,9 +1187,12 @@ impl AppHandler {
         event_loop.set_control_flow(ControlFlow::WaitUntil(next));
     }
 
+    /// Hand a key to the widget tree. `from` is the window it arrived at: its
+    /// index in the popup stack, or `None` for the main window.
     fn dispatch_key(
         &mut self,
         key: &winit::event::KeyEvent,
+        from: Option<usize>,
         is_synthetic: bool,
         event_loop: &ActiveEventLoop,
     ) {
@@ -1201,6 +1204,14 @@ impl AppHandler {
             // which hands the keyboard to the one beneath — where the same
             // Escape would close that dialog too.
             ElementState::Pressed if is_synthetic => {}
+            // A key pressed in a window with a dialog open over it, which would
+            // reach that dialog through the widget tree. Windows and macOS
+            // never give that window the keyboard, nor does an X11 window
+            // manager that heeds `_NET_WM_STATE_MODAL`, but WSLg's lets it take
+            // it (see `x11`). The release still goes through: nothing arms on a
+            // press it hasn't seen, and one that went down in the dialog ends
+            // there.
+            ElementState::Pressed if self.under_dialog(from) => {}
             ElementState::Pressed => {
                 // A key whose press a widget asked to swallow (e.g. the letter
                 // that fired a menu item) is dropped wholesale — including OS
@@ -1309,6 +1320,15 @@ impl AppHandler {
         {
             self.dismiss_transient_popup(event_loop);
         }
+    }
+
+    /// Whether a dialog is open over the window at `idx` in the popup stack —
+    /// the main window for `None`.
+    fn under_dialog(&self, idx: Option<usize>) -> bool {
+        let above = idx.map_or(0, |idx| idx + 1);
+        self.popups[above..]
+            .iter()
+            .any(|p| p.kind == PopupKind::Dialog)
     }
 
     fn dismiss_via_escape(&mut self, event_loop: &ActiveEventLoop) {
@@ -1863,6 +1883,12 @@ impl AppHandler {
         };
         let rect = request.rect;
         let size = physical_at(rect.into(), parent_scale);
+        // X11: the window a dialog belongs to — the dialog beneath it, or the
+        // main window — as on Windows and macOS.
+        #[cfg(all(unix, not(target_os = "macos")))]
+        let owner = parent
+            .filter(|p| p.kind == PopupKind::Dialog)
+            .map_or(main_win.as_ref(), |p| p.win.as_ref());
 
         let mut attrs = WindowAttributes::default()
             .with_resizable(false)
@@ -1935,24 +1961,28 @@ impl AppHandler {
                 // A real managed top-level dialog: server-side
                 // decorations (title bar + close button only), fixed
                 // size (already set via `with_resizable(false)`), no
-                // minimize / maximize controls. The WM places the
-                // window — we don't pass a position — and the Dialog
-                // window-type hint keeps it visually grouped with the
-                // main window. The dialog's caption rides along on the
-                // PopupRequest so it ends up as the OS window title.
+                // minimize / maximize controls, centered over the window
+                // it belongs to. The Dialog window-type hint keeps it
+                // visually grouped with the main window. The dialog's
+                // caption rides along on the PopupRequest so it ends up as
+                // the OS window title.
                 attrs = attrs
                     .with_title(request.title.as_deref().unwrap_or("Dialog"))
                     .with_decorations(true)
                     .with_enabled_buttons(WindowButtons::CLOSE);
 
                 // Pin min == max so the WM advertises a fixed size — see
-                // `pin_dialog_size`.
+                // `pin_dialog_size` — and create it where it goes rather
+                // than wherever the WM would put a new window: see `x11`.
                 #[cfg(all(unix, not(target_os = "macos")))]
                 {
                     attrs = attrs
                         .with_x11_window_type(vec![XWindowType::Dialog])
                         .with_min_inner_size(size)
                         .with_max_inner_size(size);
+                    if let Some(at) = crate::x11::centered_over(owner, size) {
+                        attrs = attrs.with_position(at);
+                    }
                 }
 
                 // Windows: owned by the window it belongs to — the dialog
@@ -1989,6 +2019,12 @@ impl AppHandler {
                 crate::win32_popup::center_on_owner(&win);
             }
             PopupKind::Popup => crate::win32_popup::never_activate(&win),
+        }
+        // X11: transient for the window it belongs to, in a frame that only
+        // moves and closes it — see `x11`.
+        #[cfg(all(unix, not(target_os = "macos")))]
+        if request.kind == PopupKind::Dialog {
+            crate::x11::make_dialog(&win, owner);
         }
         // macOS: a child window of the window it belongs to — see
         // `macos_popup`. That is the one a popup drops from, and for a dialog
@@ -2039,6 +2075,12 @@ impl AppHandler {
             crate::win32_popup::center_on_owner(&win);
             #[cfg(target_os = "macos")]
             crate::macos_popup::center_over(&win, owner);
+            #[cfg(all(unix, not(target_os = "macos")))]
+            if requested.is_some()
+                && let Some(at) = crate::x11::centered_over(owner, size)
+            {
+                win.set_outer_position(at);
+            }
         }
         // Before the first `set_visible` below, while the window is still
         // off-screen: the behavior applies to the animation that showing it
@@ -2208,8 +2250,14 @@ fn display_dpi(monitor: &MonitorHandle) -> Option<f32> {
     (hr == 0 && x > 0).then_some(x as f32)
 }
 
-/// X11 has the sizes in RandR, which winit does not surface.
-#[cfg(not(any(target_os = "macos", windows)))]
+/// X11 has the sizes in RandR, which winit reads a scale factor off and keeps
+/// to itself — see `x11::display_dpi`.
+#[cfg(all(unix, not(target_os = "macos")))]
+fn display_dpi(monitor: &MonitorHandle) -> Option<f32> {
+    crate::x11::display_dpi(monitor)
+}
+
+#[cfg(not(any(unix, windows)))]
 fn display_dpi(_monitor: &MonitorHandle) -> Option<f32> {
     None
 }

@@ -565,8 +565,8 @@ impl<'a> Painter<'a> {
     ///
     /// `None` when there is no answer: an offscreen
     /// [`MockBackend`](crate::mock::MockBackend) render, unless it fakes one;
-    /// X11, which saudade does not ask; and a display that reports no size of
-    /// its own, as a projector may not.
+    /// and a display that reports no size of its own, as a projector may not,
+    /// nor a virtual output such as the one WSLg gives an external display.
     pub fn display_dpi(&self) -> Option<f32> {
         self.display_dpi
     }
