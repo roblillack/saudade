@@ -17,6 +17,13 @@
 //! those hints, only the decorations: a dialog there loses the two buttons but
 //! can still be resized by its edges.
 //!
+//! [`make_dialog`] also says the dialog is modal (`_NET_WM_STATE_MODAL`), which
+//! has the window manager hand the keyboard to the dialog whenever the window
+//! beneath it is clicked. Weston's doesn't read that either, and lets that
+//! window take the keyboard: the runtime then drops the keys pressed there (see
+//! `AppHandler::dispatch_key`), which would otherwise reach the dialog through
+//! the widget tree.
+//!
 //! Not every window manager places a transient window over its owner, though,
 //! and none has to, so [`centered_over`] works out where the dialog goes for it
 //! to be created there — as `win32_popup` and `macos_popup` do.
@@ -36,7 +43,7 @@ use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use winit::window::Window;
 use x11rb::errors::ReplyError;
 use x11rb::protocol::randr::{ConnectionExt as _, Rotation};
-use x11rb::protocol::xproto::{AtomEnum, ConnectionExt as _, PropMode};
+use x11rb::protocol::xproto::{AtomEnum, PropMode};
 use x11rb::rust_connection::RustConnection;
 use x11rb::wrapper::ConnectionExt as _;
 
@@ -50,9 +57,17 @@ const MWM_DECOR_BORDER: u32 = 1 << 1;
 const MWM_DECOR_TITLE: u32 = 1 << 3;
 const MWM_DECOR_MENU: u32 = 1 << 4;
 
-/// Make `win` a dialog of `owner`'s: transient for it, in a frame that moves
-/// and closes it and nothing else. Called before `win` is first shown, which is
-/// when the window manager reads both.
+x11rb::atom_manager! {
+    Atoms: AtomsCookie {
+        _MOTIF_WM_HINTS,
+        _NET_WM_STATE,
+        _NET_WM_STATE_MODAL,
+    }
+}
+
+/// Make `win` a modal dialog of `owner`'s: transient for it, in a frame that
+/// moves and closes it and nothing else. Called before `win` is first shown,
+/// which is when the window manager reads all three.
 pub(crate) fn make_dialog(win: &Window, owner: &Window) {
     let (Some(conn), Some(win), Some(owner)) = (connection(), xid(win), xid(owner)) else {
         return;
@@ -71,12 +86,22 @@ fn set_dialog_hints(conn: &RustConnection, win: u32, owner: u32) -> Result<(), R
         &[owner],
     )?
     .ignore_error();
-    let motif = conn.intern_atom(false, b"_MOTIF_WM_HINTS")?.reply()?.atom;
+    let atoms = Atoms::new(conn)?.reply()?;
+    // Before the window is mapped the state is the client's to write; winit
+    // only ever asks for changes to it, once the window manager owns it.
     conn.change_property32(
         PropMode::REPLACE,
         win,
-        motif,
-        motif,
+        atoms._NET_WM_STATE,
+        AtomEnum::ATOM,
+        &[atoms._NET_WM_STATE_MODAL],
+    )?
+    .ignore_error();
+    conn.change_property32(
+        PropMode::REPLACE,
+        win,
+        atoms._MOTIF_WM_HINTS,
+        atoms._MOTIF_WM_HINTS,
         &[
             MWM_HINTS_FUNCTIONS | MWM_HINTS_DECORATIONS,
             MWM_FUNC_MOVE | MWM_FUNC_CLOSE,
@@ -86,8 +111,8 @@ fn set_dialog_hints(conn: &RustConnection, win: u32, owner: u32) -> Result<(), R
         ],
     )?
     .ignore_error();
-    // winit shows the window over its own connection, so both have to have
-    // reached the server before this returns.
+    // winit shows the window over its own connection, so all three have to
+    // have reached the server before this returns.
     conn.sync()
 }
 

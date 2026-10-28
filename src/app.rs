@@ -773,7 +773,7 @@ impl AppHandler {
                 is_synthetic,
                 ..
             } => {
-                self.dispatch_key(&key, is_synthetic, event_loop);
+                self.dispatch_key(&key, None, is_synthetic, event_loop);
             }
             WindowEvent::RedrawRequested => {
                 self.paint_main();
@@ -947,7 +947,7 @@ impl AppHandler {
                 is_synthetic,
                 ..
             } => {
-                self.dispatch_key(&key, is_synthetic, event_loop);
+                self.dispatch_key(&key, Some(idx), is_synthetic, event_loop);
                 self.mark_popups_dirty();
             }
             WindowEvent::RedrawRequested => {
@@ -1187,9 +1187,12 @@ impl AppHandler {
         event_loop.set_control_flow(ControlFlow::WaitUntil(next));
     }
 
+    /// Hand a key to the widget tree. `from` is the window it arrived at: its
+    /// index in the popup stack, or `None` for the main window.
     fn dispatch_key(
         &mut self,
         key: &winit::event::KeyEvent,
+        from: Option<usize>,
         is_synthetic: bool,
         event_loop: &ActiveEventLoop,
     ) {
@@ -1201,6 +1204,14 @@ impl AppHandler {
             // which hands the keyboard to the one beneath — where the same
             // Escape would close that dialog too.
             ElementState::Pressed if is_synthetic => {}
+            // A key pressed in a window with a dialog open over it, which would
+            // reach that dialog through the widget tree. Windows and macOS
+            // never give that window the keyboard, nor does an X11 window
+            // manager that heeds `_NET_WM_STATE_MODAL`, but WSLg's lets it take
+            // it (see `x11`). The release still goes through: nothing arms on a
+            // press it hasn't seen, and one that went down in the dialog ends
+            // there.
+            ElementState::Pressed if self.under_dialog(from) => {}
             ElementState::Pressed => {
                 // A key whose press a widget asked to swallow (e.g. the letter
                 // that fired a menu item) is dropped wholesale — including OS
@@ -1309,6 +1320,15 @@ impl AppHandler {
         {
             self.dismiss_transient_popup(event_loop);
         }
+    }
+
+    /// Whether a dialog is open over the window at `idx` in the popup stack —
+    /// the main window for `None`.
+    fn under_dialog(&self, idx: Option<usize>) -> bool {
+        let above = idx.map_or(0, |idx| idx + 1);
+        self.popups[above..]
+            .iter()
+            .any(|p| p.kind == PopupKind::Dialog)
     }
 
     fn dismiss_via_escape(&mut self, event_loop: &ActiveEventLoop) {
