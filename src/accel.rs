@@ -23,6 +23,29 @@ impl ModifierScheme {
             ModifierScheme::Pc
         }
     }
+
+    /// Whether `modifiers` hold the `primary` role — ⌘ on macOS, Ctrl
+    /// elsewhere — alone or together with others. Text fields use it for their
+    /// built-in Copy / Cut / Paste / Select All. As with [`Accel::matches`],
+    /// AltGr never counts.
+    pub fn primary_held(self, modifiers: Modifiers) -> bool {
+        if modifiers.alt_graph {
+            return false;
+        }
+        match self {
+            ModifierScheme::Mac => modifiers.logo,
+            ModifierScheme::Pc => modifiers.control,
+        }
+    }
+
+    /// Whether `modifiers` make ← / → move by word: ⌥ Option on macOS, Ctrl
+    /// elsewhere.
+    pub fn word_move_held(self, modifiers: Modifiers) -> bool {
+        match self {
+            ModifierScheme::Mac => modifiers.alt,
+            ModifierScheme::Pc => modifiers.control,
+        }
+    }
 }
 
 /// The platform-independent modifier roles of an accelerator chord. Resolved
@@ -342,6 +365,28 @@ mod tests {
         assert!(!accel.matches(Key::Char('r'), cmd_r, ModifierScheme::Pc));
         assert!(accel.matches(Key::Char('r'), cmd_r, ModifierScheme::Mac));
         assert!(!accel.matches(Key::Char('r'), ctrl_r, ModifierScheme::Mac));
+    }
+
+    #[test]
+    fn text_editing_modifiers_follow_the_scheme() {
+        let ctrl = mods(true, false, false, false);
+        let cmd = mods(false, true, false, false);
+        let alt = mods(false, false, true, false);
+        assert!(ModifierScheme::Pc.primary_held(ctrl));
+        assert!(!ModifierScheme::Pc.primary_held(cmd));
+        assert!(ModifierScheme::Mac.primary_held(cmd));
+        assert!(!ModifierScheme::Mac.primary_held(ctrl));
+        assert!(ModifierScheme::Pc.word_move_held(ctrl));
+        assert!(!ModifierScheme::Pc.word_move_held(alt));
+        assert!(ModifierScheme::Mac.word_move_held(alt));
+        assert!(!ModifierScheme::Mac.word_move_held(ctrl));
+
+        // Windows reports AltGr as Ctrl+Alt.
+        let altgr = Modifiers {
+            alt_graph: true,
+            ..mods(true, false, true, false)
+        };
+        assert!(!ModifierScheme::Pc.primary_held(altgr));
     }
 
     #[test]

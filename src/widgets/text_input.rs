@@ -1,5 +1,6 @@
 use std::time::{Duration, Instant};
 
+use crate::accel::ModifierScheme;
 use crate::event::{Cursor, Event, EventCtx, Key, MouseButton, NamedKey};
 use crate::geometry::{Color, Point, Rect};
 use crate::painter::Painter;
@@ -27,6 +28,7 @@ pub struct TextInput {
     selection_anchor: Option<usize>,
     focused: bool,
     enabled: bool,
+    scheme: ModifierScheme,
     /// Cumulative pixel widths for the current text: `widths[i]` is the caret
     /// x-offset (in logical px) at character index `i`. Rebuilt every paint
     /// and reused by event handlers to map pointer x ↔ char index.
@@ -55,6 +57,7 @@ impl TextInput {
             selection_anchor: None,
             focused: false,
             enabled: true,
+            scheme: ModifierScheme::native(),
             cumulative_widths: vec![0],
             scroll_x: 0,
             drag_active: false,
@@ -74,6 +77,15 @@ impl TextInput {
 
     pub fn with_font_size(mut self, size: f32) -> Self {
         self.font_size = Some(size);
+        self
+    }
+
+    /// Pin the [`ModifierScheme`] the editing shortcuts (Copy, Cut, Paste,
+    /// Select All, word moves) are matched with, overriding the
+    /// [`ModifierScheme::native`] default. Mainly for tests that must behave
+    /// identically on every host.
+    pub fn with_scheme(mut self, scheme: ModifierScheme) -> Self {
+        self.scheme = scheme;
         self
     }
 
@@ -620,7 +632,7 @@ impl Widget for TextInput {
                 }
             }
             Event::KeyDown { key, modifiers } if self.focused => {
-                if modifiers.control
+                if self.scheme.primary_held(*modifiers)
                     && let Key::Char(c) = key
                 {
                     let consumed = match c.to_ascii_lowercase() {
@@ -670,7 +682,7 @@ impl Widget for TextInput {
                     }
                     Key::Named(NamedKey::Left) => {
                         self.before_move(modifiers.shift);
-                        if modifiers.control {
+                        if self.scheme.word_move_held(*modifiers) {
                             self.move_word_left();
                         } else {
                             self.move_left();
@@ -680,7 +692,7 @@ impl Widget for TextInput {
                     }
                     Key::Named(NamedKey::Right) => {
                         self.before_move(modifiers.shift);
-                        if modifiers.control {
+                        if self.scheme.word_move_held(*modifiers) {
                             self.move_word_right();
                         } else {
                             self.move_right();
@@ -843,6 +855,55 @@ mod tests {
         press(&mut input, NamedKey::Right, true);
         type_text(&mut input, "yz");
         assert_eq!(input.text(), "xyz");
+    }
+
+    fn chord(input: &mut TextInput, key: Key, modifiers: Modifiers) {
+        let mut ctx = EventCtx::new();
+        input.event(&Event::KeyDown { key, modifiers }, &mut ctx);
+    }
+
+    fn ctrl() -> Modifiers {
+        Modifiers {
+            control: true,
+            ..Modifiers::default()
+        }
+    }
+
+    #[test]
+    fn select_all_takes_the_primary_modifier() {
+        let cmd = Modifiers {
+            logo: true,
+            ..Modifiers::default()
+        };
+        let mut input = focused("ab").with_scheme(ModifierScheme::Mac);
+        chord(&mut input, Key::Char('a'), ctrl());
+        type_text(&mut input, "c");
+        assert_eq!(input.text(), "abc");
+        chord(&mut input, Key::Char('a'), cmd);
+        type_text(&mut input, "d");
+        assert_eq!(input.text(), "d");
+
+        let mut input = focused("ab").with_scheme(ModifierScheme::Pc);
+        chord(&mut input, Key::Char('a'), ctrl());
+        type_text(&mut input, "c");
+        assert_eq!(input.text(), "c");
+    }
+
+    #[test]
+    fn option_arrow_moves_by_word_on_a_mac() {
+        let option = Modifiers {
+            alt: true,
+            ..Modifiers::default()
+        };
+        let mut input = focused("foo bar").with_scheme(ModifierScheme::Mac);
+        chord(&mut input, Key::Named(NamedKey::Left), option);
+        type_text(&mut input, "x");
+        assert_eq!(input.text(), "foo xbar");
+
+        let mut input = focused("foo bar").with_scheme(ModifierScheme::Pc);
+        chord(&mut input, Key::Named(NamedKey::Left), ctrl());
+        type_text(&mut input, "x");
+        assert_eq!(input.text(), "foo xbar");
     }
 
     #[test]
