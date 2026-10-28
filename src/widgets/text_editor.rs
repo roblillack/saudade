@@ -162,12 +162,6 @@ impl TextEditor {
         self.cursor = (last_row, last_col);
     }
 
-    fn has_selection(&self) -> bool {
-        self.selection_anchor
-            .map(|a| a != self.cursor)
-            .unwrap_or(false)
-    }
-
     fn selection_range(&self) -> Option<((usize, usize), (usize, usize))> {
         let anchor = self.selection_anchor?;
         if anchor == self.cursor {
@@ -198,9 +192,15 @@ impl TextEditor {
         Some(out)
     }
 
-    fn delete_selection(&mut self) {
-        let Some((start, end)) = self.selection_range() else {
-            return;
+    /// Delete the selected text, if any, and drop the selection anchor. Every
+    /// edit starts here: an empty selection (anchor on the caret) has nothing
+    /// to delete, but leaving its anchor behind would select whatever the edit
+    /// inserts — or point at a row that a Backspace joining two lines removed.
+    fn delete_selection(&mut self) -> bool {
+        let range = self.selection_range();
+        self.selection_anchor = None;
+        let Some((start, end)) = range else {
+            return false;
         };
         if start.0 == end.0 {
             let line = &mut self.lines[start.0];
@@ -214,7 +214,7 @@ impl TextEditor {
             self.lines.drain((start.0 + 1)..=end.0);
         }
         self.cursor = start;
-        self.selection_anchor = None;
+        true
     }
 
     fn before_move(&mut self, extend: bool) {
@@ -246,9 +246,7 @@ impl TextEditor {
         let Some(text) = self.clipboard_get() else {
             return;
         };
-        if self.has_selection() {
-            self.delete_selection();
-        }
+        self.delete_selection();
         self.insert_text(&text);
     }
 
@@ -329,8 +327,7 @@ impl TextEditor {
     }
 
     fn backspace(&mut self) {
-        if self.has_selection() {
-            self.delete_selection();
+        if self.delete_selection() {
             return;
         }
         let (row, col) = self.cursor;
@@ -350,8 +347,7 @@ impl TextEditor {
     }
 
     fn delete_forward(&mut self) {
-        if self.has_selection() {
-            self.delete_selection();
+        if self.delete_selection() {
             return;
         }
         let (row, col) = self.cursor;
@@ -725,9 +721,7 @@ impl Widget for TextEditor {
                     return;
                 }
                 if *ch == '\t' || *ch >= ' ' {
-                    if self.has_selection() {
-                        self.delete_selection();
-                    }
+                    self.delete_selection();
                     self.insert_char(*ch);
                     self.ensure_cursor_visible();
                     self.reset_blink();
@@ -768,9 +762,7 @@ impl Widget for TextEditor {
 
                 match key {
                     Key::Named(NamedKey::Enter) => {
-                        if self.has_selection() {
-                            self.delete_selection();
-                        }
+                        self.delete_selection();
                         self.insert_newline();
                         self.ensure_cursor_visible();
                         self.reset_blink();
@@ -1042,6 +1034,7 @@ fn draw_unfocused_caret(painter: &mut Painter, cx: i32, top_y: i32, color: Color
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::event::Modifiers;
 
     fn dispatch(editor: &mut TextEditor, event: &Event) {
         let mut ctx = EventCtx::new();
@@ -1090,5 +1083,69 @@ mod tests {
             scrolled,
             "a relayout (e.g. on window focus change) must not jump to the caret"
         );
+    }
+
+    fn focused(text: &str) -> TextEditor {
+        let mut editor = TextEditor::new(Rect::new(0, 0, 200, 120)).with_text(text);
+        editor.set_focused(true);
+        editor
+    }
+
+    fn type_text(editor: &mut TextEditor, text: &str) {
+        for ch in text.chars() {
+            dispatch(
+                editor,
+                &Event::Char {
+                    ch,
+                    modifiers: Modifiers::default(),
+                },
+            );
+        }
+    }
+
+    fn press(editor: &mut TextEditor, key: NamedKey, shift: bool) {
+        dispatch(
+            editor,
+            &Event::KeyDown {
+                key: Key::Named(key),
+                modifiers: Modifiers {
+                    shift,
+                    ..Modifiers::default()
+                },
+            },
+        );
+    }
+
+    /// An empty selection — anchor and caret at the same spot — must not
+    /// outlive the next edit. Otherwise the caret moves on past the inserted
+    /// text, the anchor stays behind, and what was just typed ends up selected
+    /// and replaced by the next keystroke.
+    #[test]
+    fn typing_after_select_all_on_empty_text_keeps_every_character() {
+        let mut editor = focused("");
+        editor.select_all();
+        type_text(&mut editor, "rename");
+        assert_eq!(editor.text(), "rename");
+    }
+
+    #[test]
+    fn enter_after_select_all_on_empty_text_keeps_the_newline() {
+        let mut editor = focused("");
+        editor.select_all();
+        press(&mut editor, NamedKey::Enter, false);
+        type_text(&mut editor, "x");
+        assert_eq!(editor.text(), "\nx");
+    }
+
+    #[test]
+    fn backspace_drops_an_empty_selection() {
+        let mut editor = focused("ab\ncd");
+        press(&mut editor, NamedKey::Down, false);
+        press(&mut editor, NamedKey::Left, true);
+        press(&mut editor, NamedKey::Right, true);
+        // Joins the lines, which would leave the anchor on a row that's gone.
+        press(&mut editor, NamedKey::Backspace, false);
+        type_text(&mut editor, "x");
+        assert_eq!(editor.text(), "abxcd");
     }
 }
