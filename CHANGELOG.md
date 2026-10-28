@@ -26,6 +26,10 @@ While pre-1.0, the minor version is bumped for breaking changes.
 
 ### Fixed
 
+- Wayland: a dialog opened over another one is now transient for that one, not
+  for the main window, so it opens over it. (#85)
+- Wayland: keys typed into the window beneath an open dialog no longer reach
+  the dialog, where the compositor lets that window take the keyboard. (#85)
 - The Wayland backend draws the UI at the size the other backends do. It laid
   its widgets out in raw surface coordinates, so the 96→72 dpi alignment (see
   "How big a logical pixel is") was missing there and a window came out a third
