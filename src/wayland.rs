@@ -265,6 +265,7 @@ pub(crate) fn run(app: App) {
         tick_requested: false,
 
         keyboard: None,
+        keyboard_surface: None,
         pointer: None,
         data_device_manager,
         data_device: None,
@@ -399,6 +400,11 @@ struct State {
     tick_requested: bool,
 
     keyboard: Option<wl_keyboard::WlKeyboard>,
+    /// The surface holding the keyboard, as `wl_keyboard.enter` named it: the
+    /// main window's or a popup's. A key arrives without saying where it was
+    /// typed, so this is what tells one typed into the window beneath a dialog
+    /// — see [`Self::keyboard_under_dialog`].
+    keyboard_surface: Option<wl_surface::WlSurface>,
     pointer: Option<wl_pointer::WlPointer>,
     /// Drag-and-drop plumbing. `data_device_manager` is the bound global;
     /// `data_device` is the per-seat device we read drag offers from, created
@@ -502,6 +508,15 @@ impl ChildSurface {
         match self {
             ChildSurface::Popup(p) => p.xdg_surface(),
             ChildSurface::Dialog { window, .. } => window.xdg_surface(),
+        }
+    }
+
+    /// The toplevel to parent a dialog opened over this one to — `None` for a
+    /// menu or dropdown, which a dialog doesn't belong to.
+    fn dialog_window(&self) -> Option<&XdgWindow> {
+        match self {
+            ChildSurface::Popup(_) => None,
+            ChildSurface::Dialog { window, .. } => Some(window),
         }
     }
 }
@@ -1457,15 +1472,7 @@ impl State {
         for req in requests.into_iter().skip(keep) {
             // Parent a nested popup to the current top of the stack (the dialog
             // it lives in); the first popup parents to the main window.
-            let made = match self.popups.last() {
-                Some(parent) => {
-                    let parent_anchor = parent.anchor;
-                    let parent_xdg = parent.surface.xdg_surface();
-                    self.create_popup(&req, parent_anchor, Some(parent_xdg))
-                }
-                None => self.create_popup(&req, Rect::new(0, 0, 0, 0), None),
-            };
-            match made {
+            match self.create_popup(&req, self.popups.last()) {
                 Some(p) => self.popups.push(p),
                 // A child popup must not outlive a parent we couldn't create.
                 None => break,
@@ -1473,16 +1480,16 @@ impl State {
         }
     }
 
-    /// Create one popup window for `request`. `parent_anchor` / `parent_xdg`
-    /// describe the surface it nests into — `None` means the main window. Popup
-    /// anchors are in root-widget coordinates, so the positioner is offset by
-    /// the parent's anchor to land in the parent surface's local space.
+    /// Create one popup window for `request`. `parent` is the popup it nests
+    /// into — `None` means the main window. Popup anchors are in root-widget
+    /// coordinates, so the positioner is offset by the parent's anchor to land
+    /// in the parent surface's local space.
     fn create_popup(
         &self,
         request: &PopupRequest,
-        parent_anchor: Rect,
-        parent_xdg: Option<&XdgSurfaceObj>,
+        parent: Option<&PopupState>,
     ) -> Option<PopupState> {
+        let parent_anchor = parent.map_or(Rect::new(0, 0, 0, 0), |p| p.anchor);
         let anchor = request.rect;
         // The anchor is in the root widget's saudade pixels; every size and
         // offset the compositor is handed below — the positioner's rects, the
@@ -1505,7 +1512,8 @@ impl State {
                 positioner.set_anchor(Anchor::BottomLeft);
                 positioner.set_gravity(Gravity::BottomRight);
 
-                let parent = parent_xdg.unwrap_or_else(|| self.window.xdg_surface());
+                let parent =
+                    parent.map_or_else(|| self.window.xdg_surface(), |p| p.surface.xdg_surface());
                 let popup = match Popup::new(
                     parent,
                     &positioner,
@@ -1525,9 +1533,12 @@ impl State {
                 // close button, and we ask it to enforce a fixed size
                 // (set_min_size == set_max_size disables the resize
                 // affordances). `set_parent` makes the dialog transient
-                // to the main window. If the compositor advertises
-                // `xdg_wm_dialog_v1` we additionally register the
-                // toplevel as a dialog and ask for modal semantics —
+                // to the window it belongs to — the dialog beneath it, or
+                // the main window, as on the other platforms. WSLg's
+                // compositor, for one, centers it over that window and
+                // activates it in that window's place. If the compositor
+                // advertises `xdg_wm_dialog_v1` we additionally register
+                // the toplevel as a dialog and ask for modal semantics —
                 // that's what tells wlroots-based compositors (river,
                 // labwc, …) to drop the minimize / maximize controls
                 // from the SSD chrome.
@@ -1539,7 +1550,10 @@ impl State {
                 );
                 let title = request.title.as_deref().unwrap_or("Dialog");
                 dialog.set_title(title);
-                dialog.set_parent(Some(&self.window));
+                let owner = parent
+                    .and_then(|p| p.surface.dialog_window())
+                    .unwrap_or(&self.window);
+                dialog.set_parent(Some(owner));
                 dialog.set_min_size(Some((surf_w, surf_h)));
                 dialog.set_max_size(Some((surf_w, surf_h)));
 
@@ -1969,20 +1983,24 @@ impl KeyboardHandler for State {
         _: &Connection,
         _: &QueueHandle<Self>,
         _keyboard: &wl_keyboard::WlKeyboard,
-        _surface: &wl_surface::WlSurface,
+        surface: &wl_surface::WlSurface,
         _serial: u32,
         _raw: &[u32],
         _keysyms: &[Keysym],
     ) {
+        self.keyboard_surface = Some(surface.clone());
     }
     fn leave(
         &mut self,
         _: &Connection,
         _: &QueueHandle<Self>,
         _: &wl_keyboard::WlKeyboard,
-        _: &wl_surface::WlSurface,
+        surface: &wl_surface::WlSurface,
         _: u32,
     ) {
+        if self.keyboard_surface.as_ref() == Some(surface) {
+            self.keyboard_surface = None;
+        }
     }
     fn press_key(
         &mut self,
@@ -2031,6 +2049,15 @@ impl State {
         let modifiers = self.modifiers;
         let mapped = map_keysym(event.keysym);
         if pressed {
+            // A key pressed in a window with a dialog open over it, which would
+            // reach that dialog through the widget tree: a compositor that
+            // heeds neither the dialog's parent nor its modality lets that
+            // window take the keyboard. The release still goes through:
+            // nothing arms on a press it hasn't seen, and one that went down in
+            // the dialog ends there.
+            if self.keyboard_under_dialog() {
+                return;
+            }
             // A key whose press a widget asked to swallow (e.g. the letter that
             // fired a menu item) is dropped wholesale — including the repeat
             // timer's re-presses — until release, so neither the `KeyDown` nor
@@ -2065,6 +2092,29 @@ impl State {
         } else if let Some(m) = mapped {
             self.dispatch(Event::KeyUp { key: m, modifiers });
         }
+    }
+
+    /// Whether a dialog is open over the surface holding the keyboard: the
+    /// main window, or one of the popups. `false` for a surface we no longer
+    /// know, such as a dialog just closed whose `leave` hasn't come yet.
+    fn keyboard_under_dialog(&self) -> bool {
+        let Some(surface) = &self.keyboard_surface else {
+            return false;
+        };
+        let above = if surface == self.window.wl_surface() {
+            0
+        } else if let Some(idx) = self
+            .popups
+            .iter()
+            .position(|p| p.surface.wl_surface() == surface)
+        {
+            idx + 1
+        } else {
+            return false;
+        };
+        self.popups[above..]
+            .iter()
+            .any(|p| p.surface.kind() == PopupKind::Dialog)
     }
 }
 

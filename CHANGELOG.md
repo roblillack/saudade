@@ -29,6 +29,10 @@ While pre-1.0, the minor version is bumped for breaking changes.
 
 ### Fixed
 
+- Wayland: a dialog opened over another one is now transient for that one, not
+  for the main window, so it opens over it. (#85)
+- Wayland: keys typed into the window beneath an open dialog no longer reach
+  the dialog, where the compositor lets that window take the keyboard. (#85)
 - `Painter::display_dpi` answers on X11, off RandR, so `examples/credit_card`
   draws a card at its real 85.60 mm there. (#84)
 - X11: keys typed into the window beneath an open dialog no longer reach the
