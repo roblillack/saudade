@@ -126,16 +126,18 @@ fn build_app() -> (SharedDoc, SharedAdjust, SharedModalHandle, Column) {
         },
     );
 
-    let content = Container::new(W, H).add(undo).add(redo).add(Canvas::new(
-        doc.clone(),
-        adjust.clone(),
-        modal.clone(),
-    ));
+    let toolbar = Container::new(W, CANVAS_RECT.y).add(undo).add(redo);
+    let canvas = Canvas::new(doc.clone(), adjust.clone(), modal.clone());
 
-    // The modal floats as an overlay so the runtime can host it in its own
-    // top-level window via PopupRequest.
+    // The canvas sits in the root column itself, not in a container beside the
+    // buttons: its context menu reads the keyboard as an accelerator, and a
+    // container only passes keys on to its children while it holds the focus —
+    // which, with both buttons disabled until there is something to undo,
+    // nothing here does. The modal floats as an overlay so the runtime can host
+    // it in its own top-level window via PopupRequest.
     let root = Column::new()
-        .add_fill(content)
+        .add_fixed(toolbar, CANVAS_RECT.y)
+        .add_fill(canvas)
         .add_overlay(SharedModal(modal.clone()));
 
     (doc, adjust, modal, root)
@@ -477,6 +479,12 @@ impl Widget for Canvas {
         self.menu.is_open()
     }
 
+    // The canvas never holds the focus, so this is how the open menu gets the
+    // keyboard: Escape, the arrows, Enter and its mnemonics.
+    fn accepts_accelerators(&self) -> bool {
+        self.menu.accepts_accelerators()
+    }
+
     fn collect_popups(&self, out: &mut Vec<PopupRequest>) {
         self.menu.collect_popups(out);
     }
@@ -624,7 +632,7 @@ impl Widget for SharedModal {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use saudade::{Key, NamedKey};
+    use saudade::{Key, NamedKey, PopupKind};
 
     fn circle(x: i32, y: i32, d: i32) -> Circle {
         Circle { x, y, d }
@@ -687,6 +695,54 @@ mod tests {
         assert_eq!(pick(&circles, Some(Point::new(300, 300))), None);
         // No pointer at all.
         assert_eq!(pick(&circles, None), None);
+    }
+
+    // The context menu reads the keyboard though the canvas never holds the
+    // focus: Escape closes it, and Down + Enter picks its item.
+    #[test]
+    fn the_context_menu_takes_the_keyboard() {
+        use saudade::mock::MockBackend;
+
+        fn key(root: &mut Column, backend: &MockBackend, named: NamedKey) {
+            let event = Event::KeyDown {
+                key: Key::Named(named),
+                modifiers: Default::default(),
+            };
+            backend.dispatch(root, &event);
+            backend.render(root);
+        }
+        fn open_menu(root: &mut Column, backend: &MockBackend) {
+            let event = Event::PointerDown {
+                pos: Point::new(200, 200),
+                button: MouseButton::Right,
+                modifiers: Default::default(),
+            };
+            backend.dispatch(root, &event);
+            backend.render(root);
+        }
+        fn menu_open(root: &Column) -> bool {
+            let mut popups = Vec::new();
+            root.collect_popups(&mut popups);
+            popups.iter().any(|p| p.kind == PopupKind::Popup)
+        }
+
+        let (doc, _adjust, modal, mut root) = build_app();
+        let backend = MockBackend::new(W, H);
+        // As the runtime does on startup.
+        root.focus_first();
+        backend.render(&mut root);
+        doc.borrow_mut().add_circle(200, 200);
+
+        open_menu(&mut root, &backend);
+        assert!(menu_open(&root));
+        key(&mut root, &backend, NamedKey::Escape);
+        assert!(!menu_open(&root), "Escape closes the menu");
+
+        open_menu(&mut root, &backend);
+        key(&mut root, &backend, NamedKey::Down);
+        key(&mut root, &backend, NamedKey::Enter);
+        assert!(!menu_open(&root));
+        assert!(modal.borrow().is_open(), "Enter fires 'Adjust diameter..'");
     }
 
     // Drive the whole create → hover → right-click menu → modal dialog →

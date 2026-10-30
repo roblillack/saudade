@@ -21,12 +21,22 @@
 //! first written to make, and still the one way to see how far the nominal
 //! scale misses a given display.
 //!
-//! Where the display reports no size — X11 and Wayland, which saudade does not
-//! ask, or a projector with none to report — the card falls back to the nominal
-//! 72 logical pixels to the inch, and the readout says so. That is the one case
-//! where `SAUDADE_UI_SCALE` sizes the card, and the readout suggests the scales
-//! either side to try. A display that misreports its size is taken at its word:
-//! the card is exactly as right as the display's EDID.
+//! Where the display reports no size — a projector or virtual output with none
+//! to report — the card falls back to the nominal 72 logical pixels to the
+//! inch, and the readout says so. That is the one case where `SAUDADE_UI_SCALE`
+//! sizes the card, and the readout suggests the scales either side to try. A
+//! display that misreports its size is taken at its word: the card is exactly
+//! as right as the display's EDID.
+//!
+//! The macOS and Windows runtimes read that EDID figure off the platform, X11
+//! off RandR, and Wayland off `wl_output`'s physical size and mode. Note what a
+//! device pixel is: the one the painter draws in, which is the panel's wherever
+//! `wp_viewporter` lets the buffer be the fractional size the compositor
+//! presents. Where it doesn't, the buffer is oversampled at the integer scale
+//! above and resampled down, so the density is the buffer's — 252 dpi for a
+//! 157-dpi panel presented at 125% — and the card is counted in that instead.
+//! Either way it comes out 85.60 mm on the glass; only the number of pixels
+//! that takes changes.
 //!
 //! The window opens at the nominal size, there being nothing to know about a
 //! display before the window is on one, and fits itself to the card on its

@@ -35,10 +35,12 @@ type DismissHandler = Box<dyn FnMut(&mut EventCtx)>;
 ///
 /// The content is laid out into the dialog's client rectangle (in the root
 /// widget's coordinate space), so it must be a layout-aware widget that honors
-/// the bounds passed to [`Widget::layout`] — a `Column`/`Row`, or a custom
-/// widget that positions itself relative to that rect. A plain
-/// [`Container`](crate::Container) (which ignores `layout` and keeps absolute
-/// positions) is **not** suitable as modal content.
+/// the bounds passed to [`Widget::layout`] — a `Column`/`Row`, a custom widget
+/// that positions itself relative to that rect, or a
+/// [`Container`](crate::Container) built at `(0, 0)`, which shifts its children
+/// to the origin it is laid out at. Children that ignore `layout` themselves
+/// ([`Bevel`](crate::Bevel), [`Image`](crate::Image)) stay where they were
+/// put, so they don't belong in one.
 pub struct Modal {
     open: bool,
     title: String,
@@ -233,6 +235,9 @@ impl Widget for Modal {
                 content.on_cancel(ctx);
             }
             self.fire_dismiss(ctx);
+            // Handled: a modal this one is the content of — the dialog it was
+            // opened over — must not take the same Escape as its own.
+            ctx.consume_event();
         }
     }
 

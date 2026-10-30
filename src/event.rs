@@ -292,8 +292,8 @@ pub enum Cursor {
     #[default]
     Default,
     /// Pointing hand / "finger": the thing under the pointer can be clicked or
-    /// activated. [`Button`](crate::widgets::Button) and
-    /// [`Checkbox`](crate::widgets::Checkbox) use it (CSS `pointer`).
+    /// activated, like a link (CSS `pointer`). The built-in buttons and
+    /// checkboxes keep the arrow, as Windows 3.1's did.
     Hand,
     /// I-beam / vertical text bar: text here can be placed-into, selected, or
     /// edited. [`TextInput`](crate::widgets::TextInput) and
@@ -668,8 +668,8 @@ impl EventCtx {
     /// or off this one, re-runs the reconciliation. Because only moves drive
     /// it, a request made while handling a press, key, or tick is ignored.
     ///
-    /// Buttons request [`Cursor::Hand`] and text fields [`Cursor::Text`] this
-    /// way; a widget that never calls this keeps the normal arrow.
+    /// The text fields request [`Cursor::Text`] this way; a widget that never
+    /// calls this — a button, say — keeps the normal arrow.
     pub fn set_cursor(&mut self, cursor: Cursor) {
         self.cursor_request = Some(cursor);
     }

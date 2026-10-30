@@ -44,10 +44,16 @@ const MIN_HEIGHT: i32 = POPUP_PADDING_Y * 2 + ITEM_HEIGHT;
 ///
 /// **Owning one.** A `ContextMenu` takes no space and is not placed by layout:
 /// hold it in the widget whose rows it acts on, forward `paint`,
-/// `paint_overlay`, `event` and `collect_popups` to it, and report
+/// `paint_overlay`, `event` and `collect_popups` to it, report
 /// [`captures_pointer`] while it is open so the pointer keeps reaching it once
-/// it leaves those rows. Added to a [`Container`](crate::widgets::Container)
-/// instead, the container's own routing does all of that.
+/// it leaves those rows, and forward [`accepts_accelerators`] so the keyboard
+/// reaches it too, without the owning widget holding the focus. Added to a
+/// [`Container`](crate::widgets::Container) instead, the container's own
+/// routing does all of that. Either way the keys come through the accelerator
+/// routing of the container it sits in, which a container nested in another
+/// only gets while it holds the focus: put the owner in the window's root
+/// [`Column`](crate::widgets::Column) or container, or in one that takes the
+/// focus.
 ///
 /// **Building items per opening.** A context menu usually acts on whatever was
 /// right-clicked, so its items are built fresh each time: call
@@ -91,6 +97,7 @@ const MIN_HEIGHT: i32 = POPUP_PADDING_Y * 2 + ITEM_HEIGHT;
 /// choosing instead.
 ///
 /// [`captures_pointer`]: Widget::captures_pointer
+/// [`accepts_accelerators`]: Widget::accepts_accelerators
 pub struct ContextMenu {
     items: Vec<MenuItem>,
     scheme: ModifierScheme,

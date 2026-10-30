@@ -1,5 +1,6 @@
 use std::time::{Duration, Instant};
 
+use crate::accel::ModifierScheme;
 use crate::event::{Cursor, Event, EventCtx, Key, MouseButton, NamedKey};
 use crate::geometry::{Color, Point, Rect};
 use crate::painter::Painter;
@@ -14,6 +15,17 @@ const BLINK_HALF_MS: u64 = 500;
 
 type ChangeHandler = Box<dyn FnMut(&mut EventCtx, &str)>;
 
+/// Everything an edit can change about a [`TextInput`]: its text, caret,
+/// selection, and how far it is scrolled. A field that only takes some texts —
+/// a [`NumberInput`](crate::widgets::NumberInput)'s — takes one of these before
+/// handing an edit on, and puts it back if the edit left text it doesn't take.
+pub(crate) struct EditState {
+    chars: Vec<char>,
+    cursor: usize,
+    selection_anchor: Option<usize>,
+    scroll_x: i32,
+}
+
 /// Single-line text input — sunken white field with proportional text, caret,
 /// range selection, clipboard, double-click word select / triple-click
 /// select-all and horizontal scrolling when the text doesn't fit. Companion
@@ -27,6 +39,7 @@ pub struct TextInput {
     selection_anchor: Option<usize>,
     focused: bool,
     enabled: bool,
+    scheme: ModifierScheme,
     /// Cumulative pixel widths for the current text: `widths[i]` is the caret
     /// x-offset (in logical px) at character index `i`. Rebuilt every paint
     /// and reused by event handlers to map pointer x ↔ char index.
@@ -43,6 +56,12 @@ pub struct TextInput {
     blink_since: Instant,
     /// Cached on/off state of the focused caret. Updated by `Event::Tick`.
     blink_on: bool,
+    /// Whether the caret's place and the selection show without the focus:
+    /// the wedge under the text, and the selection band in its inactive grey.
+    unfocused_marks: bool,
+    /// Logical pixels at the right end of the field the text stays out of,
+    /// for a host that draws something there — a `NumberInput`'s unit.
+    reserved_right: i32,
 }
 
 impl TextInput {
@@ -55,6 +74,7 @@ impl TextInput {
             selection_anchor: None,
             focused: false,
             enabled: true,
+            scheme: ModifierScheme::native(),
             cumulative_widths: vec![0],
             scroll_x: 0,
             drag_active: false,
@@ -64,7 +84,28 @@ impl TextInput {
             on_change: None,
             blink_since: Instant::now(),
             blink_on: true,
+            unfocused_marks: true,
+            reserved_right: 0,
         }
+    }
+
+    /// Show neither the caret's place nor the selection while the field has
+    /// no focus — for a field that sets both afresh whenever it takes the
+    /// focus, as a `NumberInput` selects its whole number.
+    pub(crate) fn without_unfocused_marks(mut self) -> Self {
+        self.unfocused_marks = false;
+        self
+    }
+
+    /// Keep the text out of the last `width` logical pixels of the field.
+    pub(crate) fn set_reserved_right(&mut self, width: i32) {
+        self.reserved_right = width.max(0);
+    }
+
+    /// Abandon a selection drag, so the pointer's moves and release leave the
+    /// selection be.
+    pub(crate) fn end_drag(&mut self) {
+        self.drag_active = false;
     }
 
     pub fn with_text(mut self, text: impl AsRef<str>) -> Self {
@@ -74,6 +115,15 @@ impl TextInput {
 
     pub fn with_font_size(mut self, size: f32) -> Self {
         self.font_size = Some(size);
+        self
+    }
+
+    /// Pin the [`ModifierScheme`] the editing shortcuts (Copy, Cut, Paste,
+    /// Select All, word moves) are matched with, overriding the
+    /// [`ModifierScheme::native`] default. Mainly for tests that must behave
+    /// identically on every host.
+    pub fn with_scheme(mut self, scheme: ModifierScheme) -> Self {
+        self.scheme = scheme;
         self
     }
 
@@ -138,6 +188,23 @@ impl TextInput {
         }
     }
 
+    pub(crate) fn edit_state(&self) -> EditState {
+        EditState {
+            chars: self.chars.clone(),
+            cursor: self.cursor,
+            selection_anchor: self.selection_anchor,
+            scroll_x: self.scroll_x,
+        }
+    }
+
+    /// Undo whatever happened since `state` was taken. Fires no `on_change`.
+    pub(crate) fn restore_edit_state(&mut self, state: EditState) {
+        self.chars = state.chars;
+        self.cursor = state.cursor;
+        self.selection_anchor = state.selection_anchor;
+        self.scroll_x = state.scroll_x;
+    }
+
     fn font_size_for(&self, theme: &Theme) -> f32 {
         self.font_size.unwrap_or(theme.font_size)
     }
@@ -147,12 +214,6 @@ impl TextInput {
     pub fn select_all(&mut self) {
         self.selection_anchor = Some(0);
         self.cursor = self.chars.len();
-    }
-
-    fn has_selection(&self) -> bool {
-        self.selection_anchor
-            .map(|a| a != self.cursor)
-            .unwrap_or(false)
     }
 
     fn selection_range(&self) -> Option<(usize, usize)> {
@@ -168,13 +229,18 @@ impl TextInput {
         Some(self.chars[s..e].iter().collect())
     }
 
+    /// Delete the selected text, if any, and drop the selection anchor. Every
+    /// edit starts here: an empty selection (anchor on the caret) has nothing
+    /// to delete, but leaving its anchor behind would select whatever the edit
+    /// inserts — or point past the end of the text after a Backspace.
     fn delete_selection(&mut self) -> bool {
-        let Some((s, e)) = self.selection_range() else {
+        let range = self.selection_range();
+        self.selection_anchor = None;
+        let Some((s, e)) = range else {
             return false;
         };
         self.chars.drain(s..e);
         self.cursor = s;
-        self.selection_anchor = None;
         true
     }
 
@@ -210,9 +276,7 @@ impl TextInput {
         let Some(text) = self.clipboard_get() else {
             return false;
         };
-        if self.has_selection() {
-            self.delete_selection();
-        }
+        self.delete_selection();
         let cleaned: String = text.chars().filter(|&c| c != '\n' && c != '\r').collect();
         if cleaned.is_empty() {
             return false;
@@ -475,15 +539,18 @@ impl Widget for TextInput {
         painter.stroke_rect(self.rect, theme.border);
 
         self.rebuild_widths(painter, font_size);
-        let visible_w = (self.rect.w - PADDING_X * 2).max(0);
+        let visible_w = (self.rect.w - PADDING_X * 2 - self.reserved_right).max(0);
         self.adjust_scroll(visible_w);
 
         let text_x0 = self.rect.x + PADDING_X - self.scroll_x;
         let text_h = painter.measure_text("Ag", font_size).h;
         let text_y = self.rect.y + ((self.rect.h - text_h) / 2).max(0);
 
-        let inner = self.rect.inset(2);
-        let selection = self.selection_range();
+        let mut inner = self.rect.inset(2);
+        inner.w = (inner.w - self.reserved_right).max(0);
+        let selection = self
+            .selection_range()
+            .filter(|_| self.focused || self.unfocused_marks);
 
         // Clip text, selection band, and caret to the inner area so glyphs
         // don't leak past the field's chrome when the content is wider than
@@ -505,7 +572,8 @@ impl Widget for TextInput {
         // An unfocused field still draws its selection so the user can see
         // what's selected when keyboard focus is elsewhere — but in the
         // muted "inactive" palette (black-on-gray) rather than the active
-        // navy-on-white, matching CUA convention.
+        // navy-on-white, matching CUA convention. (Unless it was told to show
+        // no unfocused marks, in which case `selection` is already `None`.)
         let (sel_bg, sel_text) = if self.focused {
             (theme.highlight_bg, theme.highlight_text)
         } else {
@@ -543,7 +611,7 @@ impl Widget for TextInput {
             if self.blink_on {
                 painter.v_line(cx, inner.y, inner.h, theme.text);
             }
-        } else {
+        } else if self.unfocused_marks {
             // Unfocused: a small wedge at the bottom of the line marks
             // where the caret would land if the user clicked back in.
             draw_unfocused_caret(painter, cx, inner.bottom() - 2, theme.text);
@@ -615,9 +683,7 @@ impl Widget for TextInput {
                     return;
                 }
                 if *ch >= ' ' {
-                    if self.has_selection() {
-                        self.delete_selection();
-                    }
+                    self.delete_selection();
                     self.insert_char(*ch);
                     self.fire_change(ctx);
                     self.reset_blink();
@@ -625,7 +691,7 @@ impl Widget for TextInput {
                 }
             }
             Event::KeyDown { key, modifiers } if self.focused => {
-                if modifiers.control
+                if self.scheme.primary_held(*modifiers)
                     && let Key::Char(c) = key
                 {
                     let consumed = match c.to_ascii_lowercase() {
@@ -675,7 +741,7 @@ impl Widget for TextInput {
                     }
                     Key::Named(NamedKey::Left) => {
                         self.before_move(modifiers.shift);
-                        if modifiers.control {
+                        if self.scheme.word_move_held(*modifiers) {
                             self.move_word_left();
                         } else {
                             self.move_left();
@@ -685,7 +751,7 @@ impl Widget for TextInput {
                     }
                     Key::Named(NamedKey::Right) => {
                         self.before_move(modifiers.shift);
-                        if modifiers.control {
+                        if self.scheme.word_move_held(*modifiers) {
                             self.move_word_right();
                         } else {
                             self.move_right();
@@ -769,7 +835,7 @@ fn draw_unfocused_caret(painter: &mut Painter, cx: i32, top_y: i32, color: Color
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::event::Cursor;
+    use crate::event::{Cursor, Modifiers};
 
     fn move_to(input: &mut TextInput, x: i32, y: i32) -> EventCtx {
         let mut ctx = EventCtx::new();
@@ -794,5 +860,118 @@ mod tests {
         let mut input = TextInput::new(Rect::new(0, 0, 120, 24)).with_enabled(false);
         let ctx = move_to(&mut input, 10, 12);
         assert_eq!(ctx.cursor_request, None);
+    }
+
+    fn focused(text: &str) -> TextInput {
+        let mut input = TextInput::new(Rect::new(0, 0, 120, 24)).with_text(text);
+        input.set_focused(true);
+        input
+    }
+
+    fn type_text(input: &mut TextInput, text: &str) {
+        for ch in text.chars() {
+            let mut ctx = EventCtx::new();
+            input.event(
+                &Event::Char {
+                    ch,
+                    modifiers: Modifiers::default(),
+                },
+                &mut ctx,
+            );
+        }
+    }
+
+    fn press(input: &mut TextInput, key: NamedKey, shift: bool) {
+        let mut ctx = EventCtx::new();
+        input.event(
+            &Event::KeyDown {
+                key: Key::Named(key),
+                modifiers: Modifiers {
+                    shift,
+                    ..Modifiers::default()
+                },
+            },
+            &mut ctx,
+        );
+    }
+
+    /// An empty selection — anchor and caret at the same spot — must not
+    /// outlive the next edit. Otherwise the caret moves on past the inserted
+    /// character, the anchor stays behind, and the character just typed ends
+    /// up selected and replaced by the next keystroke.
+    #[test]
+    fn typing_after_select_all_on_empty_text_keeps_every_character() {
+        let mut input = focused("");
+        input.select_all();
+        type_text(&mut input, "rename");
+        assert_eq!(input.text(), "rename");
+    }
+
+    #[test]
+    fn typing_after_extending_the_selection_out_and_back_keeps_every_character() {
+        let mut input = focused("x");
+        press(&mut input, NamedKey::Left, true);
+        press(&mut input, NamedKey::Right, true);
+        type_text(&mut input, "yz");
+        assert_eq!(input.text(), "xyz");
+    }
+
+    fn chord(input: &mut TextInput, key: Key, modifiers: Modifiers) {
+        let mut ctx = EventCtx::new();
+        input.event(&Event::KeyDown { key, modifiers }, &mut ctx);
+    }
+
+    fn ctrl() -> Modifiers {
+        Modifiers {
+            control: true,
+            ..Modifiers::default()
+        }
+    }
+
+    #[test]
+    fn select_all_takes_the_primary_modifier() {
+        let cmd = Modifiers {
+            logo: true,
+            ..Modifiers::default()
+        };
+        let mut input = focused("ab").with_scheme(ModifierScheme::Mac);
+        chord(&mut input, Key::Char('a'), ctrl());
+        type_text(&mut input, "c");
+        assert_eq!(input.text(), "abc");
+        chord(&mut input, Key::Char('a'), cmd);
+        type_text(&mut input, "d");
+        assert_eq!(input.text(), "d");
+
+        let mut input = focused("ab").with_scheme(ModifierScheme::Pc);
+        chord(&mut input, Key::Char('a'), ctrl());
+        type_text(&mut input, "c");
+        assert_eq!(input.text(), "c");
+    }
+
+    #[test]
+    fn option_arrow_moves_by_word_on_a_mac() {
+        let option = Modifiers {
+            alt: true,
+            ..Modifiers::default()
+        };
+        let mut input = focused("foo bar").with_scheme(ModifierScheme::Mac);
+        chord(&mut input, Key::Named(NamedKey::Left), option);
+        type_text(&mut input, "x");
+        assert_eq!(input.text(), "foo xbar");
+
+        let mut input = focused("foo bar").with_scheme(ModifierScheme::Pc);
+        chord(&mut input, Key::Named(NamedKey::Left), ctrl());
+        type_text(&mut input, "x");
+        assert_eq!(input.text(), "foo xbar");
+    }
+
+    #[test]
+    fn backspace_drops_an_empty_selection() {
+        let mut input = focused("ab");
+        press(&mut input, NamedKey::Left, true);
+        press(&mut input, NamedKey::Right, true);
+        press(&mut input, NamedKey::Backspace, false);
+        type_text(&mut input, "c");
+        assert_eq!(input.text(), "ac");
     }
 }

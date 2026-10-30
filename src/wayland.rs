@@ -59,6 +59,8 @@ use wayland_protocols::wp::fractional_scale::v1::client::wp_fractional_scale_man
 use wayland_protocols::wp::fractional_scale::v1::client::wp_fractional_scale_v1::{
     self, WpFractionalScaleV1,
 };
+use wayland_protocols::wp::viewporter::client::wp_viewport::{self, WpViewport};
+use wayland_protocols::wp::viewporter::client::wp_viewporter::{self, WpViewporter};
 use wayland_protocols::xdg::dialog::v1::client::xdg_dialog_v1::XdgDialogV1;
 use wayland_protocols::xdg::dialog::v1::client::xdg_wm_dialog_v1::XdgWmDialogV1;
 use wayland_protocols::xdg::shell::client::xdg_positioner::{Anchor, Gravity, XdgPositioner};
@@ -89,8 +91,14 @@ use crate::widget::{PopupKind, PopupRequest, Widget};
 /// pick from here.
 const DEFAULT_ICON_SIZES: &[u32] = &[16, 24, 32, 48, 64, 128];
 
+/// How far apart two [`ui_for`] results have to be to count as a different
+/// scale: far enough to clear the rounding of the division that produces them,
+/// near enough that no scale a compositor can report is swallowed — the
+/// smallest step the fractional-scale protocol can express is a 120th.
+const UI_EPSILON: f32 = 1e-4;
+
 pub(crate) fn run(app: App) {
-    let (window_cfg, mut themes, root) = app.into_parts();
+    let (window_cfg, mut themes, root, app_scale) = app.into_parts();
 
     let conn = Connection::connect_to_env().expect("saudade: Wayland connect failed");
     let (globals, event_queue) =
@@ -134,13 +142,29 @@ pub(crate) fn run(app: App) {
         globals.bind::<XdgWmDialogV1, _, _>(&qh, 1..=1, ()).ok();
     // Optional: wp_fractional_scale_manager_v1 (a staging extension) lets the
     // compositor tell us the surface's *true* fractional scale (e.g. 1.5),
-    // distinct from the integer buffer scale we render at. Purely
-    // informational here — we keep rendering at the integer scale and let the
-    // compositor resample. Compositors that don't advertise it leave us with
-    // only the integer scale, which is the right fallback.
+    // distinct from the integer buffer scale we render at. That fractional
+    // figure is the one the display is really presented at, so it is what the
+    // scale to draw at is derived from (see `ui_for`); we go on rasterizing at
+    // the integer scale and let the compositor resample. Compositors that
+    // don't advertise it leave us with only the integer scale, which is the
+    // right fallback.
     let fractional_mgr: Option<WpFractionalScaleManagerV1> = globals
         .bind::<WpFractionalScaleManagerV1, _, _>(&qh, 1..=1, ())
         .ok();
+    // Optional: wp_viewporter is what lets us rasterize at the *fractional*
+    // scale instead of the integer one. `wl_surface.set_buffer_scale` takes
+    // only an integer, so without this a display presented at 125% means
+    // drawing at 200% and handing the compositor a buffer it has to rescale by
+    // 0.625 every frame — which undoes the painter's whole business of putting
+    // each edge on a device pixel, since the grid it snapped to is no longer
+    // the panel's: blurred by a compositor that filters as it scales, and
+    // dropped or doubled a row at a time by one that doesn't. A viewport
+    // states the surface size outright (`wp_viewport.set_destination`), so the
+    // buffer can be exactly as many device pixels as the display will present
+    // — 1:1 with the panel, the way a window on Windows or X11 at 125%
+    // already is, and the same 1.667x scale there. Compositors without it keep
+    // the oversampled path.
+    let viewporter: Option<WpViewporter> = globals.bind::<WpViewporter, _, _>(&qh, 1..=1, ()).ok();
     // The data-device manager is what carries drag-and-drop (we get file drops
     // through its drag offers). Compositors universally advertise it; if one
     // doesn't, we simply never receive drops and everything else still works.
@@ -170,9 +194,23 @@ pub(crate) fn run(app: App) {
     let fractional_scale_obj = fractional_mgr
         .as_ref()
         .map(|mgr| mgr.get_fractional_scale(window.wl_surface(), &qh, ()));
+    let viewport = viewporter
+        .as_ref()
+        .map(|vp| vp.get_viewport(window.wl_surface(), &qh, ()));
 
-    let initial_w = window_cfg.size.w.max(1) as u32;
-    let initial_h = window_cfg.size.h.max(1) as u32;
+    // How big a saudade logical pixel is, as far as it can be known before the
+    // compositor has said anything about the display: the pin, else the ladder
+    // at a factor of 1. Both knobs are read once, the way the winit runtime
+    // reads them, and the first `preferred_scale` / buffer-scale event the
+    // compositor sends re-derives it (see `State::adopt_scale`) — which, the
+    // ladder being a ratio against the platform's own unit, usually lands on
+    // the same number.
+    let scale_pin = crate::ui_scale::pinned(app_scale);
+    let reference_dpi = crate::ui_scale::reference_dpi();
+    let ui = ui_for(1.0, scale_pin, reference_dpi);
+
+    let initial_w = surface_units(window_cfg.size.w, ui);
+    let initial_h = surface_units(window_cfg.size.h, ui);
 
     if window_cfg.resizable {
         // Honor the configured minimum (relayed to the WM as the surface's
@@ -180,7 +218,7 @@ pub(crate) fn run(app: App) {
         // window can't be collapsed to nothing.
         let min = window_cfg
             .min_size
-            .map(|m| (m.w.max(1) as u32, m.h.max(1) as u32))
+            .map(|m| (surface_units(m.w, ui), surface_units(m.h, ui)))
             .unwrap_or((100, 60));
         window.set_min_size(Some(min));
     } else {
@@ -229,6 +267,13 @@ pub(crate) fn run(app: App) {
         scale: 1,
         fractional_scale_obj,
         fractional_scale: None,
+        viewporter,
+        viewport,
+        ui,
+        scale_pin,
+        reference_dpi,
+        output_dpi: None,
+        output: None,
         resizable: window_cfg.resizable,
         fullscreen: window_cfg.fullscreen,
         windowed_size: window_cfg.fullscreen.then_some((initial_w, initial_h)),
@@ -238,6 +283,7 @@ pub(crate) fn run(app: App) {
         tick_requested: false,
 
         keyboard: None,
+        keyboard_surface: None,
         pointer: None,
         data_device_manager,
         data_device: None,
@@ -302,9 +348,10 @@ struct State {
     mono_font: Option<Font>,
 
     pool: SlotPool,
-    /// Surface (logical) dimensions reported by the compositor. The buffer
-    /// we attach is `surface_w * scale` × `surface_h * scale` physical
-    /// pixels, and the widget tree lays out into `surface_w × surface_h`.
+    /// Surface (logical) dimensions reported by the compositor. The buffer we
+    /// attach is `surface_w * scale` × `surface_h * scale` physical pixels, and
+    /// the widget tree lays out into [`Self::logical_size`] — these over
+    /// [`Self::ui`], a surface unit not being a saudade pixel.
     surface_w: u32,
     surface_h: u32,
     scale: i32,
@@ -318,6 +365,37 @@ struct State {
     /// rasterize at. `None` until reported / when unsupported, in which case
     /// callers fall back to the integer `scale`.
     fractional_scale: Option<f32>,
+    /// `wp_viewporter`, kept to make a viewport for each surface we create —
+    /// the popups and the drag icon as well as the main window. `None` when the
+    /// compositor doesn't advertise it, which is what puts every surface on the
+    /// oversampled integer-scale path: see [`Self::raster_scale`].
+    viewporter: Option<WpViewporter>,
+    /// The main surface's viewport, through which its size in surface units is
+    /// stated outright, leaving the buffer free to be exactly as many device
+    /// pixels as the display presents.
+    viewport: Option<WpViewport>,
+    /// Surface-local units one saudade logical pixel spans: the scale to draw
+    /// at over the factor the display is presented at. The widget tree is laid
+    /// out in saudade pixels, and every size and position the compositor is
+    /// told about is this many times one — see [`ui_for`].
+    ui: f32,
+    /// A scale the app or the environment pinned, drawn at verbatim in place of
+    /// the ladder. Read once at startup.
+    scale_pin: Option<f32>,
+    /// The density a logical pixel is aimed at — `REFERENCE_DPI` unless
+    /// `SAUDADE_UI_DPI` says otherwise. Read once at startup.
+    ///
+    /// [`REFERENCE_DPI`]: crate::ui_scale
+    reference_dpi: f32,
+    /// Panel pixels the display fits to the inch, from the physical size and
+    /// current mode `wl_output` reports for it. A property of the glass, so it
+    /// moves only when the window changes display or that display changes
+    /// mode; what the painter is told is [`Self::device_dpi`], which counts the
+    /// pixels we actually draw. `None` for a display that reports no size.
+    output_dpi: Option<f32>,
+    /// The output the main surface is on, as `wl_surface.enter` named it: what
+    /// [`Self::output_dpi`] is read from.
+    output: Option<wl_output::WlOutput>,
     /// Whether the window was configured resizable. A fixed window pins
     /// min == max size, so a programmatic resize ([`Self::apply_resize`])
     /// must move both hints to the new size; a resizable one leaves them be.
@@ -342,6 +420,11 @@ struct State {
     tick_requested: bool,
 
     keyboard: Option<wl_keyboard::WlKeyboard>,
+    /// The surface holding the keyboard, as `wl_keyboard.enter` named it: the
+    /// main window's or a popup's. A key arrives without saying where it was
+    /// typed, so this is what tells one typed into the window beneath a dialog
+    /// — see [`Self::keyboard_under_dialog`].
+    keyboard_surface: Option<wl_surface::WlSurface>,
     pointer: Option<wl_pointer::WlPointer>,
     /// Drag-and-drop plumbing. `data_device_manager` is the bound global;
     /// `data_device` is the per-seat device we read drag offers from, created
@@ -447,6 +530,36 @@ impl ChildSurface {
             ChildSurface::Dialog { window, .. } => window.xdg_surface(),
         }
     }
+
+    /// The toplevel to parent a dialog opened over this one to — `None` for a
+    /// menu or dropdown, which a dialog doesn't belong to.
+    fn dialog_window(&self) -> Option<&XdgWindow> {
+        match self {
+            ChildSurface::Popup(_) => None,
+            ChildSurface::Dialog { window, .. } => Some(window),
+        }
+    }
+}
+
+/// A popup's viewport outlives nothing: the stack is rebuilt every time a menu
+/// opens, so one left behind would leak a compositor object per open. `destroy`
+/// is the one viewport request still allowed once the surface is gone, so the
+/// order these fields drop in doesn't matter.
+impl Drop for PopupState {
+    fn drop(&mut self) {
+        if let Some(vp) = &self.viewport {
+            vp.destroy();
+        }
+    }
+}
+
+/// Likewise for the chip that follows the cursor through a drag.
+impl Drop for DragIcon {
+    fn drop(&mut self) {
+        if let Some(vp) = &self.viewport {
+            vp.destroy();
+        }
+    }
 }
 
 impl Drop for ChildSurface {
@@ -462,10 +575,15 @@ impl Drop for ChildSurface {
 
 struct PopupState {
     surface: ChildSurface,
+    /// The popup's viewport, where the compositor has `wp_viewporter`: what
+    /// lets its buffer be the fractional size the display presents rather than
+    /// an integer multiple of it. See [`State::raster_scale`].
+    viewport: Option<WpViewport>,
     pool: SlotPool,
     anchor: Rect,
-    /// Popup surface (logical) dimensions. Buffer is `surface_w * scale`
-    /// × `surface_h * scale` physical pixels.
+    /// Popup surface dimensions, in the compositor's units — the popup's
+    /// `anchor` is the same rectangle in saudade pixels. Buffer is
+    /// `surface_w * scale` × `surface_h * scale` physical pixels.
     surface_w: u32,
     surface_h: u32,
     configured: bool,
@@ -515,13 +633,28 @@ struct DragIcon {
     pool: SlotPool,
     /// File name shown on the chip.
     label: String,
-    /// Chip size in logical pixels (the buffer is this times `scale`).
+    /// Chip size in saudade logical pixels — what the painter draws it in.
     logical_w: i32,
     logical_h: i32,
+    /// The same chip in surface-local units — what the compositor is told the
+    /// chip measures, through its viewport or its buffer scale.
+    surface_w: i32,
+    surface_h: i32,
+    /// And in the device pixels it is rasterized in. Rounded *up* from the
+    /// surface size so the buffer can never come out short of what the painter
+    /// draws into it; without a viewport it is the surface size times `scale`,
+    /// the integer multiple `wl_surface.set_buffer_scale` demands.
+    buf_w: i32,
+    buf_h: i32,
+    /// The chip's viewport, where the compositor has `wp_viewporter`.
+    viewport: Option<WpViewport>,
     /// Side length of the square badge at the chip's left edge.
     badge: i32,
     /// Integer buffer scale the chip is rendered at.
     scale: i32,
+    /// Buffer pixels to a logical one: the surface units a logical pixel spans,
+    /// times `scale`.
+    paint_scale: f32,
     /// Currently painted feedback, so re-renders are skipped when unchanged.
     feedback: DragFeedback,
 }
@@ -663,16 +796,186 @@ impl State {
         }
     }
 
+    /// The scale the display is presented at, as the compositor describes it:
+    /// the fractional scale where the protocol is there to report it, else the
+    /// integer buffer scale. The counterpart of the factor winit reports, and
+    /// what [`Painter::system_scale`] hands to widgets.
+    fn os_scale(&self) -> f32 {
+        self.fractional_scale
+            .unwrap_or(self.scale.max(1) as f32)
+            .max(0.01)
+    }
+
+    /// Device pixels one surface unit is rasterized at.
+    ///
+    /// With a viewport that is the scale the display is presented at, fraction
+    /// and all: the buffer comes out exactly the size the compositor will put
+    /// on the glass, so a device pixel *is* a panel pixel and nothing is
+    /// resampled. Without one the buffer size can only be stated as an integer
+    /// multiple of the surface (`wl_surface.set_buffer_scale`), so a fractional
+    /// display means rasterizing at the integer scale above it and letting the
+    /// compositor scale the result down.
+    fn raster_scale(&self) -> f32 {
+        if self.viewport.is_some() {
+            self.os_scale()
+        } else {
+            self.scale.max(1) as f32
+        }
+    }
+
+    /// Buffer pixels one saudade logical pixel spans: the surface units it is
+    /// worth, times the device pixels one of those is rasterized at. What the
+    /// painter multiplies the widget tree's coordinates by.
+    fn paint_scale(&self) -> f32 {
+        self.ui * self.raster_scale()
+    }
+
+    /// The buffer that covers `(w, h)` surface units, in device pixels.
+    fn buffer_size(&self, w: u32, h: u32) -> (i32, i32) {
+        let raster = self.raster_scale();
+        let px = |n: u32| ((n.max(1) as f32 * raster).round() as i32).max(1);
+        (px(w), px(h))
+    }
+
+    /// State the size of `surface` in surface units and the scale its buffer is
+    /// to be read at, then hand back nothing — the caller commits.
+    ///
+    /// Two ways to say it, and they are exclusive: a viewport states the
+    /// surface size outright, so the buffer is whatever it is and
+    /// `set_buffer_scale` stays at its default 1; without one the buffer scale
+    /// is the only thing that can say it, and the buffer must be that integer
+    /// multiple of the surface size.
+    fn apply_surface_scale(
+        surface: &wl_surface::WlSurface,
+        viewport: Option<&WpViewport>,
+        surface_w: u32,
+        surface_h: u32,
+        integer_scale: i32,
+    ) {
+        match viewport {
+            Some(vp) => {
+                vp.set_destination(surface_w.max(1) as i32, surface_h.max(1) as i32);
+                surface.set_buffer_scale(1);
+            }
+            None => surface.set_buffer_scale(integer_scale.max(1)),
+        }
+    }
+
+    /// The main surface in saudade logical pixels — what the widget tree is
+    /// laid out into, the compositor's own units over [`Self::ui`].
+    fn logical_size(&self) -> Size {
+        Size::new(
+            (self.surface_w.max(1) as f32 / self.ui).round().max(1.0) as i32,
+            (self.surface_h.max(1) as f32 / self.ui).round().max(1.0) as i32,
+        )
+    }
+
+    /// Re-derive [`Self::ui`] from the scale the compositor now reports, and
+    /// carry the window's logical size across the change: a window holding 320
+    /// saudade pixels goes on holding 320 of them, over however many surface
+    /// units those now come to. The winit runtime's `adopt_scale`, in the one
+    /// unit Wayland gives us to say it in.
+    ///
+    /// Called from both halves of the scale, the integer buffer one and the
+    /// fractional one, since either can move on its own — and ends in a
+    /// relayout either way, which is what the buffer scale moving on its own
+    /// needs.
+    fn adopt_scale(&mut self) {
+        let ui = ui_for(self.os_scale(), self.scale_pin, self.reference_dpi);
+        // Compared with a hair of slack: the ladder divides out to the same
+        // ratio at every factor, but not to the same *bits* — 20/12 over 1.25
+        // lands a binary step off 16/12 over 1 — and re-deriving a number the
+        // window is already laid out in would drop the popup stack for nothing.
+        if (ui - self.ui).abs() > UI_EPSILON {
+            let was = self.ui;
+            self.ui = ui;
+            // Every open popup was sized in the unit that just changed.
+            // Dropping the stack lets `sync_popup` rebuild it in the new one,
+            // from the same requests the widget tree is still making.
+            self.popups.clear();
+            // The size a fullscreen window comes back to is in surface units
+            // as well, so it is re-counted whether or not we are fullscreen
+            // now — the window that holds it may not leave fullscreen until
+            // long after the scale moved.
+            self.windowed_size = self.windowed_size.map(|size| requantize(size, was, ui));
+            // Fullscreen itself has no size of ours to preserve: the display
+            // decides it until the configure that releases the window.
+            if !self.fullscreen {
+                let (w, h) = requantize((self.surface_w, self.surface_h), was, ui);
+                if (w, h) != (self.surface_w, self.surface_h) {
+                    self.surface_w = w;
+                    self.surface_h = h;
+                    if !self.resizable {
+                        self.window.set_min_size(Some((w, h)));
+                        self.window.set_max_size(Some((w, h)));
+                    }
+                    self.window.commit();
+                }
+            }
+        }
+        self.relayout();
+        self.needs_redraw = true;
+        self.mark_popups_dirty();
+    }
+
+    /// Panel pixels the display the window is on fits to the inch, worked out
+    /// from the physical size and current mode `wl_output` reports for it: the
+    /// Wayland counterpart of the EDID figure the Windows and macOS runtimes
+    /// ask the platform for. `None` where the output reports no size — a
+    /// projector, a virtual output — or has no current mode.
+    ///
+    /// Both figures are in the output's own, untransformed orientation, so a
+    /// rotated display needs no special case: the widths divide out the same.
+    fn compute_output_dpi(&self) -> Option<f32> {
+        let output = self.output.clone().or_else(|| {
+            // Before any `wl_surface.enter`, and on a compositor that sends
+            // none, the one output there is will do; with several there is
+            // nothing to choose between them yet.
+            let mut outputs = self.output_state.outputs();
+            let only = outputs.next()?;
+            outputs.next().is_none().then_some(only)
+        })?;
+        let info = self.output_state.info(&output)?;
+        let px = info.modes.iter().find(|m| m.current)?.dimensions.0;
+        let mm = info.physical_size.0;
+        (px > 0 && mm > 0).then(|| px as f32 * 25.4 / mm as f32)
+    }
+
+    /// Re-read [`Self::output_dpi`], repainting if it moved: a window that has
+    /// landed on a display of another density has to draw anything sized in
+    /// millimetres again, scale factor or no scale factor.
+    fn refresh_output_dpi(&mut self) {
+        let dpi = self.compute_output_dpi();
+        if dpi != self.output_dpi {
+            self.output_dpi = dpi;
+            self.needs_redraw = true;
+            self.mark_popups_dirty();
+        }
+    }
+
+    /// The density to hand the painter — [`Painter::display_dpi`], which counts
+    /// the device pixels the painter *draws* in, and those are the buffer's,
+    /// not the panel's.
+    ///
+    /// They are the same figure wherever we rasterize at the scale the display
+    /// is presented at — which, with a viewport, is everywhere. Without one a
+    /// fractional display is oversampled at the integer scale above it and
+    /// resampled on the way to the glass, so an inch of buffer holds
+    /// `raster_scale / os_scale` more pixels than an inch of panel: exactly the
+    /// oversampling a Mac's framebuffer has over its panel in a scaled mode,
+    /// which [`Painter::display_dpi`] already answers for there.
+    fn device_dpi(&self) -> Option<f32> {
+        Some(self.output_dpi? * self.raster_scale() / self.os_scale())
+    }
+
     fn relayout(&mut self) {
-        // Widget tree's logical coordinates equal Wayland's surface
-        // coordinates — both are DPI-independent. Buffer scaling is
-        // applied later, when we hand the painter to the widget tree.
-        self.root.layout(Rect::new(
-            0,
-            0,
-            self.surface_w.max(1) as i32,
-            self.surface_h.max(1) as i32,
-        ));
+        // The widget tree is laid out in saudade logical pixels, of which a
+        // Wayland surface unit is `ui` (see `ui_for`) — the surface coordinates
+        // the compositor configures us in are the platform's own unit, not
+        // ours. The buffer scale on top of that is the painter's business,
+        // applied when the tree is handed one.
+        let size = self.logical_size();
+        self.root.layout(Rect::new(0, 0, size.w, size.h));
     }
 
     /// Dispatch `event` into the widget tree and apply the requests it left on
@@ -774,11 +1077,24 @@ impl State {
             DRAG_ICON_PAD + badge + DRAG_ICON_GAP + text_w.ceil() as i32 + DRAG_ICON_PAD;
         let logical_h = DRAG_ICON_PAD + badge.max(text_h) + DRAG_ICON_PAD;
         let scale = self.scale.max(1);
+        // The chip's own size in the compositor's units, rounded *up* so the
+        // buffer can never come out a pixel short of what the painter draws
+        // into it.
+        let surface_w = (logical_w as f32 * self.ui).ceil().max(1.0) as i32;
+        let surface_h = (logical_h as f32 * self.ui).ceil().max(1.0) as i32;
+        // The chip's buffer, in the device pixels it is really rasterized in.
+        let raster = self.raster_scale();
+        let buf_w = ((surface_w as f32 * raster).ceil() as i32).max(1);
+        let buf_h = ((surface_h as f32 * raster).ceil() as i32).max(1);
         // Room for two buffers so a re-render (on a feedback change) can grab a
         // fresh slot while the compositor still holds the previous one.
-        let pool_bytes = (logical_w * scale * logical_h * scale * 4) as usize * 2;
+        let pool_bytes = (buf_w * buf_h * 4) as usize * 2;
         let pool = SlotPool::new(pool_bytes, &self.shm).ok()?;
         let surface = self.compositor.create_surface(&self.qh);
+        let viewport = self
+            .viewporter
+            .as_ref()
+            .map(|vp| vp.get_viewport(&surface, &self.qh, ()));
 
         Some(DragIcon {
             surface,
@@ -786,8 +1102,14 @@ impl State {
             label,
             logical_w,
             logical_h,
+            surface_w,
+            surface_h,
+            buf_w,
+            buf_h,
+            viewport,
             badge,
             scale,
+            paint_scale: self.paint_scale(),
             feedback: DragFeedback::NoDrop,
         })
     }
@@ -797,8 +1119,7 @@ impl State {
     /// commit just swaps what follows the cursor. A no-op if the pool's buffer
     /// is momentarily busy (the previous frame stays up until the next change).
     fn paint_drag_icon(&self, icon: &mut DragIcon) {
-        let buf_w = icon.logical_w * icon.scale;
-        let buf_h = icon.logical_h * icon.scale;
+        let (buf_w, buf_h) = (icon.buf_w, icon.buf_h);
         let stride = buf_w * 4;
         let Ok((buffer, _)) =
             icon.pool
@@ -815,7 +1136,7 @@ impl State {
                 pixels,
                 buf_w,
                 buf_h,
-                icon.scale as f32,
+                icon.paint_scale,
                 0,
                 0,
                 FontSet {
@@ -825,7 +1146,7 @@ impl State {
                 },
                 None,
             );
-            painter.set_system_scale(self.fractional_scale.unwrap_or(icon.scale as f32));
+            painter.set_system_scale(self.os_scale());
             let theme = self.themes.current();
             let area = Rect::new(0, 0, icon.logical_w, icon.logical_h);
             painter.fill_rect(area, theme.background);
@@ -841,7 +1162,13 @@ impl State {
             );
         }
         let _ = buffer.attach_to(&icon.surface);
-        icon.surface.set_buffer_scale(icon.scale);
+        Self::apply_surface_scale(
+            &icon.surface,
+            icon.viewport.as_ref(),
+            icon.surface_w.max(1) as u32,
+            icon.surface_h.max(1) as u32,
+            icon.scale,
+        );
         icon.surface.damage_buffer(0, 0, buf_w, buf_h);
         icon.surface.commit();
     }
@@ -932,14 +1259,15 @@ impl State {
         self.set_cursor_shape(wayland_shape(want));
     }
 
-    /// Resize the window to `size` logical (surface) pixels, at the widget's
-    /// request. For a fixed window we move the min == max hints to the new size
-    /// so the compositor lets it change; then we adopt the size, relayout, and
-    /// repaint. The compositor echoes a configure with the same size, which the
-    /// configure handler treats as a no-op transition.
+    /// Resize the window to `size` saudade logical pixels, at the widget's
+    /// request — carried to the compositor in its own units. For a fixed window
+    /// we move the min == max hints to the new size so the compositor lets it
+    /// change; then we adopt the size, relayout, and repaint. The compositor
+    /// echoes a configure with the same size, which the configure handler
+    /// treats as a no-op transition.
     fn apply_resize(&mut self, size: Size) {
-        let w = size.w.max(1) as u32;
-        let h = size.h.max(1) as u32;
+        let w = surface_units(size.w, self.ui);
+        let h = surface_units(size.h, self.ui);
         if self.fullscreen {
             // The display decides the size for now; this is the size to take
             // once the window leaves fullscreen.
@@ -1000,8 +1328,12 @@ impl State {
 
     fn draw_main(&mut self) {
         let scale = self.scale.max(1);
-        let buf_w = (self.surface_w.max(1) * scale as u32) as i32;
-        let buf_h = (self.surface_h.max(1) * scale as u32) as i32;
+        // Read off `self` before the pool hands out the canvas, which borrows
+        // it for as long as the painter lives.
+        let paint_scale = self.paint_scale();
+        let system_scale = self.os_scale();
+        let display_dpi = self.device_dpi();
+        let (buf_w, buf_h) = self.buffer_size(self.surface_w, self.surface_h);
         let stride = buf_w * 4;
         let buffer = match self
             .pool
@@ -1016,13 +1348,14 @@ impl State {
         };
         let pixels = bytes_as_u32_mut(canvas);
 
-        // Buffer holds physical pixels; the painter multiplies the
-        // widget tree's logical coords by `scale` to land on them.
+        // Buffer holds physical pixels; the painter multiplies the widget
+        // tree's logical coords by `paint_scale` to land on them — the surface
+        // units a saudade pixel is worth, times the integer buffer scale.
         let mut painter = Painter::with_popup_anchor(
             pixels,
             buf_w,
             buf_h,
-            scale as f32,
+            paint_scale,
             0,
             0,
             FontSet {
@@ -1031,11 +1364,13 @@ impl State {
                 mono: self.mono_font.as_ref(),
             },
             None,
-        );
-        // Report the true display scale (e.g. 1.5) when the compositor gives it
-        // to us; the buffer itself is still the integer `scale` and gets
-        // resampled down. Falls back to the integer scale when unsupported.
-        painter.set_system_scale(self.fractional_scale.unwrap_or(scale as f32));
+        )
+        .with_display_dpi(display_dpi);
+        // Report the scale the display is presented at (e.g. 1.25), which is
+        // neither the integer scale the buffer is rasterized at nor the scale
+        // the UI is drawn at: widgets asking what the *display* is set to want
+        // this one.
+        painter.set_system_scale(system_scale);
         let theme = self.themes.current();
         painter.fill_pattern(theme.background, self.bg.pattern, self.bg.ink(theme));
         self.root.paint(&mut painter, theme);
@@ -1044,10 +1379,15 @@ impl State {
         let _ = buffer.attach_to(surface);
         // damage_buffer takes buffer-pixel coordinates.
         surface.damage_buffer(0, 0, buf_w, buf_h);
-        // Tell the compositor our buffer is `scale`× the surface size,
-        // so it doesn't upscale on HiDPI — we already drew at native
-        // resolution.
-        surface.set_buffer_scale(scale);
+        // Say how big the surface is, so the compositor doesn't scale what we
+        // drew — it is already at the display's own resolution.
+        Self::apply_surface_scale(
+            surface,
+            self.viewport.as_ref(),
+            self.surface_w,
+            self.surface_h,
+            scale,
+        );
         surface.frame(&self.qh, surface.clone());
         surface.commit();
     }
@@ -1055,36 +1395,55 @@ impl State {
     /// Draw the popup window at `idx`. Returns true if anything was drawn.
     fn draw_popup(&mut self, idx: usize) -> bool {
         let scale = self.scale.max(1);
+        let paint_scale = self.paint_scale();
+        let system_scale = self.os_scale();
+        let display_dpi = self.device_dpi();
+        let buffer = match self.popups.get(idx) {
+            Some(p) => self.buffer_size(p.surface_w, p.surface_h),
+            None => return false,
+        };
         let Some(p) = self.popups.get_mut(idx) else {
             return false;
         };
-        let buf_w = (p.surface_w.max(1) * scale as u32) as i32;
-        let buf_h = (p.surface_h.max(1) * scale as u32) as i32;
+        let (buf_w, buf_h) = buffer;
         let stride = buf_w * 4;
-        let buffer = match p
+        let buf = match p
             .pool
             .create_buffer(buf_w, buf_h, stride, wl_shm::Format::Argb8888)
         {
             Ok((b, _)) => b,
             Err(_) => return false,
         };
-        let canvas = match p.pool.canvas(&buffer) {
+        let canvas = match p.pool.canvas(&buf) {
             Some(c) => c,
             None => return false,
         };
         let pixels = bytes_as_u32_mut(canvas);
-        let scale_f = scale as f32;
+        // The anchor is in the root widget's saudade pixels, so it reaches
+        // buffer pixels through the same `paint_scale` the painter draws with.
         let anchor = p.anchor;
-        let origin_x = -((anchor.x as f32 * scale_f).round() as i32);
-        let origin_y = -((anchor.y as f32 * scale_f).round() as i32);
-        let clip_w = (anchor.w as f32 * scale_f).round() as i32;
-        let clip_h = (anchor.h as f32 * scale_f).round() as i32;
+        let origin_x = -((anchor.x as f32 * paint_scale).round() as i32);
+        let origin_y = -((anchor.y as f32 * paint_scale).round() as i32);
+        let clip_w = (anchor.w as f32 * paint_scale).round() as i32;
+        let clip_h = (anchor.h as f32 * paint_scale).round() as i32;
+        // A menu panel never fills its buffer: the L-shaped drop shadow leaves
+        // the two corners inside its bend uncovered, and the buffer is rounded
+        // twice — the anchor to whole surface units, then those to device
+        // pixels — where the footprint above is rounded once, so it can come
+        // out a pixel wider or taller (140 logical at a 4/3 UI scale on a 200%
+        // display: 187 surface units, 374 pixels, a 373-pixel footprint). An
+        // `Argb8888` buffer carries alpha, so an `xdg_popup` leaves all of that
+        // transparent and only draws the overlay pass, instead of redrawing the
+        // app underneath and leaving the sliver past the footprint showing the
+        // background fill. A dialog is a real, opaque window and keeps the
+        // redraw.
+        let transparent = p.surface.kind() == PopupKind::Popup;
 
         let mut painter = Painter::with_popup_anchor(
             pixels,
             buf_w,
             buf_h,
-            scale_f,
+            paint_scale,
             origin_x,
             origin_y,
             FontSet {
@@ -1093,18 +1452,34 @@ impl State {
                 mono: self.mono_font.as_ref(),
             },
             Some(anchor),
-        );
-        painter.set_system_scale(self.fractional_scale.unwrap_or(scale_f));
+        )
+        .with_display_dpi(display_dpi);
+        painter.set_system_scale(system_scale);
         let theme = self.themes.current();
-        painter.fill(theme.background);
-        painter.set_clip_phys(0, 0, clip_w, clip_h);
-        self.root.paint(&mut painter, theme);
+        if transparent {
+            painter.fill(Color::TRANSPARENT);
+            painter.set_clip_phys(0, 0, clip_w.max(buf_w), clip_h.max(buf_h));
+            self.root.paint_overlay(&mut painter, theme);
+        } else {
+            painter.fill(theme.background);
+            painter.set_clip_phys(0, 0, clip_w, clip_h);
+            self.root.paint(&mut painter, theme);
+        }
         painter.clear_clip();
+        if transparent {
+            crate::painter::premultiply(pixels);
+        }
 
         let surface = p.surface.wl_surface();
-        let _ = buffer.attach_to(surface);
+        let _ = buf.attach_to(surface);
         surface.damage_buffer(0, 0, buf_w, buf_h);
-        surface.set_buffer_scale(scale);
+        Self::apply_surface_scale(
+            surface,
+            p.viewport.as_ref(),
+            p.surface_w,
+            p.surface_h,
+            scale,
+        );
         surface.frame(&self.qh, surface.clone());
         surface.commit();
         true
@@ -1130,15 +1505,7 @@ impl State {
         for req in requests.into_iter().skip(keep) {
             // Parent a nested popup to the current top of the stack (the dialog
             // it lives in); the first popup parents to the main window.
-            let made = match self.popups.last() {
-                Some(parent) => {
-                    let parent_anchor = parent.anchor;
-                    let parent_xdg = parent.surface.xdg_surface();
-                    self.create_popup(&req, parent_anchor, Some(parent_xdg))
-                }
-                None => self.create_popup(&req, Rect::new(0, 0, 0, 0), None),
-            };
-            match made {
+            match self.create_popup(&req, self.popups.last()) {
                 Some(p) => self.popups.push(p),
                 // A child popup must not outlive a parent we couldn't create.
                 None => break,
@@ -1146,21 +1513,22 @@ impl State {
         }
     }
 
-    /// Create one popup window for `request`. `parent_anchor` / `parent_xdg`
-    /// describe the surface it nests into — `None` means the main window. Popup
-    /// anchors are in root-widget coordinates, so the positioner is offset by
-    /// the parent's anchor to land in the parent surface's local space.
+    /// Create one popup window for `request`. `parent` is the popup it nests
+    /// into — `None` means the main window. Popup anchors are in root-widget
+    /// coordinates, so the positioner is offset by the parent's anchor to land
+    /// in the parent surface's local space.
     fn create_popup(
         &self,
         request: &PopupRequest,
-        parent_anchor: Rect,
-        parent_xdg: Option<&XdgSurfaceObj>,
+        parent: Option<&PopupState>,
     ) -> Option<PopupState> {
+        let parent_anchor = parent.map_or(Rect::new(0, 0, 0, 0), |p| p.anchor);
         let anchor = request.rect;
-        // Buffer dimensions == surface dimensions (we don't set
-        // buffer_scale). Anchor is already in surface coords.
-        let phys_w = anchor.w.max(1) as u32;
-        let phys_h = anchor.h.max(1) as u32;
+        // The anchor is in the root widget's saudade pixels; every size and
+        // offset the compositor is handed below — the positioner's rects, the
+        // surface size, a dialog's hints — is in its own surface units.
+        let surf_w = surface_units(anchor.w, self.ui);
+        let surf_h = surface_units(anchor.h, self.ui);
 
         let surface = match request.kind {
             PopupKind::Popup => {
@@ -1168,16 +1536,17 @@ impl State {
                 // top-left *in the parent surface*. Gravity goes BottomRight so
                 // the popup extends down/right from the anchor — same shape as a
                 // classic dropdown menu.
-                let rel_x = anchor.x - parent_anchor.x;
-                let rel_y = anchor.y - parent_anchor.y;
+                let rel_x = surface_offset(anchor.x - parent_anchor.x, self.ui);
+                let rel_y = surface_offset(anchor.y - parent_anchor.y, self.ui);
                 let positioner: XdgPositioner =
                     self.xdg_shell.xdg_wm_base().create_positioner(&self.qh, ());
-                positioner.set_size(anchor.w.max(1), anchor.h.max(1));
+                positioner.set_size(surf_w as i32, surf_h as i32);
                 positioner.set_anchor_rect(rel_x, rel_y, 1, 1);
                 positioner.set_anchor(Anchor::BottomLeft);
                 positioner.set_gravity(Gravity::BottomRight);
 
-                let parent = parent_xdg.unwrap_or_else(|| self.window.xdg_surface());
+                let parent =
+                    parent.map_or_else(|| self.window.xdg_surface(), |p| p.surface.xdg_surface());
                 let popup = match Popup::new(
                     parent,
                     &positioner,
@@ -1197,9 +1566,12 @@ impl State {
                 // close button, and we ask it to enforce a fixed size
                 // (set_min_size == set_max_size disables the resize
                 // affordances). `set_parent` makes the dialog transient
-                // to the main window. If the compositor advertises
-                // `xdg_wm_dialog_v1` we additionally register the
-                // toplevel as a dialog and ask for modal semantics —
+                // to the window it belongs to — the dialog beneath it, or
+                // the main window, as on the other platforms. WSLg's
+                // compositor, for one, centers it over that window and
+                // activates it in that window's place. If the compositor
+                // advertises `xdg_wm_dialog_v1` we additionally register
+                // the toplevel as a dialog and ask for modal semantics —
                 // that's what tells wlroots-based compositors (river,
                 // labwc, …) to drop the minimize / maximize controls
                 // from the SSD chrome.
@@ -1211,9 +1583,12 @@ impl State {
                 );
                 let title = request.title.as_deref().unwrap_or("Dialog");
                 dialog.set_title(title);
-                dialog.set_parent(Some(&self.window));
-                dialog.set_min_size(Some((phys_w, phys_h)));
-                dialog.set_max_size(Some((phys_w, phys_h)));
+                let owner = parent
+                    .and_then(|p| p.surface.dialog_window())
+                    .unwrap_or(&self.window);
+                dialog.set_parent(Some(owner));
+                dialog.set_min_size(Some((surf_w, surf_h)));
+                dialog.set_max_size(Some((surf_w, surf_h)));
 
                 let dialog_v1 = self.xdg_dialog_mgr.as_ref().map(|mgr| {
                     let d = mgr.get_xdg_dialog(dialog.xdg_toplevel(), &self.qh, ());
@@ -1233,34 +1608,42 @@ impl State {
         // (popup might be rendered at scale 1 or 2). Doubling avoids
         // exhausting the pool when SCTK is double-buffering and the
         // previous buffer isn't yet released.
-        let max_scale = self.scale.max(1) as u32;
-        let pool_bytes = (phys_w * phys_h * max_scale * max_scale * 4) as usize * 2;
+        let max_scale = self.raster_scale().ceil().max(1.0) as u32;
+        let pool_bytes = (surf_w * surf_h * max_scale * max_scale * 4) as usize * 2;
         let pool = match SlotPool::new(pool_bytes, &self.shm) {
             Ok(p) => p,
             Err(_) => return None,
         };
 
+        let viewport = self
+            .viewporter
+            .as_ref()
+            .map(|vp| vp.get_viewport(surface.wl_surface(), &self.qh, ()));
+
         Some(PopupState {
             surface,
+            viewport,
             pool,
             anchor,
-            surface_w: phys_w,
-            surface_h: phys_h,
+            surface_w: surf_w,
+            surface_h: surf_h,
             configured: false,
             needs_redraw: true,
             cursor: None,
         })
     }
 
-    fn physical_to_logical(&self, surface_x: f64, surface_y: f64) -> Point {
-        let s = self.scale.max(1) as f64;
-        // Surface coords are already in logical pixels when wl_pointer
-        // reports them (they're "in surface coordinates"). The conversion
-        // to scaled pixels happens when we render. So no scale factor
-        // applied here — surface coordinates already match the widget
-        // tree's logical units.
-        let _ = s;
-        Point::new(surface_x.floor() as i32, surface_y.floor() as i32)
+    /// Surface-local coordinates in the widget tree's saudade pixels. The
+    /// pointer and the data device both report positions "in surface
+    /// coordinates" — the compositor's own unit, `ui` of them to a saudade
+    /// pixel — and `anchor` carries the offset of the surface they are on in
+    /// the root widget's space: a popup's anchor, or zero for the main window.
+    fn surface_to_logical(&self, surface_x: f64, surface_y: f64, anchor: Point) -> Point {
+        let ui = self.ui.max(0.01) as f64;
+        Point::new(
+            (surface_x / ui).floor() as i32 + anchor.x,
+            (surface_y / ui).floor() as i32 + anchor.y,
+        )
     }
 
     /// Offset to add to surface-local coordinates on `surface` to reach the
@@ -1332,9 +1715,10 @@ impl CompositorHandler for State {
             return;
         }
         self.scale = new;
-        self.needs_redraw = true;
-        self.mark_popups_dirty();
-        self.relayout();
+        // Where the compositor reports no fractional scale this is also the
+        // factor the display is presented at, so the scale to draw at moves
+        // with it; `adopt_scale` relayouts and repaints either way.
+        self.adopt_scale();
     }
 
     fn transform_changed(
@@ -1361,18 +1745,32 @@ impl CompositorHandler for State {
         &mut self,
         _conn: &Connection,
         _qh: &QueueHandle<Self>,
-        _surface: &wl_surface::WlSurface,
-        _output: &wl_output::WlOutput,
+        surface: &wl_surface::WlSurface,
+        output: &wl_output::WlOutput,
     ) {
+        // Only the main surface says which display the window is on; a popup or
+        // a drag icon rides along with it.
+        if surface.id() == self.window.wl_surface().id() {
+            self.output = Some(output.clone());
+            self.refresh_output_dpi();
+        }
     }
 
     fn surface_leave(
         &mut self,
         _conn: &Connection,
         _qh: &QueueHandle<Self>,
-        _surface: &wl_surface::WlSurface,
-        _output: &wl_output::WlOutput,
+        surface: &wl_surface::WlSurface,
+        output: &wl_output::WlOutput,
     ) {
+        // Dragged off the display we had recorded: wait for the enter that
+        // names the next one rather than keeping a figure for the old one.
+        if surface.id() == self.window.wl_surface().id()
+            && self.output.as_ref().is_some_and(|o| o.id() == output.id())
+        {
+            self.output = None;
+            self.refresh_output_dpi();
+        }
     }
 }
 
@@ -1380,9 +1778,28 @@ impl OutputHandler for State {
     fn output_state(&mut self) -> &mut OutputState {
         &mut self.output_state
     }
-    fn new_output(&mut self, _: &Connection, _: &QueueHandle<Self>, _: wl_output::WlOutput) {}
-    fn update_output(&mut self, _: &Connection, _: &QueueHandle<Self>, _: wl_output::WlOutput) {}
-    fn output_destroyed(&mut self, _: &Connection, _: &QueueHandle<Self>, _: wl_output::WlOutput) {}
+    fn new_output(&mut self, _: &Connection, _: &QueueHandle<Self>, _: wl_output::WlOutput) {
+        // The first output's figures are what a window with no `enter` yet goes
+        // on, so a display appearing can be the one that answers the density.
+        self.refresh_output_dpi();
+    }
+
+    fn update_output(&mut self, _: &Connection, _: &QueueHandle<Self>, _: wl_output::WlOutput) {
+        // A mode change moves the density even though the window never moved.
+        self.refresh_output_dpi();
+    }
+
+    fn output_destroyed(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        output: wl_output::WlOutput,
+    ) {
+        if self.output.as_ref().is_some_and(|o| o.id() == output.id()) {
+            self.output = None;
+        }
+        self.refresh_output_dpi();
+    }
 }
 
 impl WindowHandler for State {
@@ -1599,20 +2016,24 @@ impl KeyboardHandler for State {
         _: &Connection,
         _: &QueueHandle<Self>,
         _keyboard: &wl_keyboard::WlKeyboard,
-        _surface: &wl_surface::WlSurface,
+        surface: &wl_surface::WlSurface,
         _serial: u32,
         _raw: &[u32],
         _keysyms: &[Keysym],
     ) {
+        self.keyboard_surface = Some(surface.clone());
     }
     fn leave(
         &mut self,
         _: &Connection,
         _: &QueueHandle<Self>,
         _: &wl_keyboard::WlKeyboard,
-        _: &wl_surface::WlSurface,
+        surface: &wl_surface::WlSurface,
         _: u32,
     ) {
+        if self.keyboard_surface.as_ref() == Some(surface) {
+            self.keyboard_surface = None;
+        }
     }
     fn press_key(
         &mut self,
@@ -1661,6 +2082,15 @@ impl State {
         let modifiers = self.modifiers;
         let mapped = map_keysym(event.keysym);
         if pressed {
+            // A key pressed in a window with a dialog open over it, which would
+            // reach that dialog through the widget tree: a compositor that
+            // heeds neither the dialog's parent nor its modality lets that
+            // window take the keyboard. The release still goes through:
+            // nothing arms on a press it hasn't seen, and one that went down in
+            // the dialog ends there.
+            if self.keyboard_under_dialog() {
+                return;
+            }
             // A key whose press a widget asked to swallow (e.g. the letter that
             // fired a menu item) is dropped wholesale — including the repeat
             // timer's re-presses — until release, so neither the `KeyDown` nor
@@ -1696,6 +2126,29 @@ impl State {
             self.dispatch(Event::KeyUp { key: m, modifiers });
         }
     }
+
+    /// Whether a dialog is open over the surface holding the keyboard: the
+    /// main window, or one of the popups. `false` for a surface we no longer
+    /// know, such as a dialog just closed whose `leave` hasn't come yet.
+    fn keyboard_under_dialog(&self) -> bool {
+        let Some(surface) = &self.keyboard_surface else {
+            return false;
+        };
+        let above = if surface == self.window.wl_surface() {
+            0
+        } else if let Some(idx) = self
+            .popups
+            .iter()
+            .position(|p| p.surface.wl_surface() == surface)
+        {
+            idx + 1
+        } else {
+            return false;
+        };
+        self.popups[above..]
+            .iter()
+            .any(|p| p.surface.kind() == PopupKind::Dialog)
+    }
 }
 
 impl PointerHandler for State {
@@ -1714,16 +2167,11 @@ impl PointerHandler for State {
                 .popups
                 .iter()
                 .position(|p| p.surface.wl_surface().id() == event.surface.id());
-            let pos = match popup_idx {
-                Some(i) => {
-                    let anchor = self.popups[i].anchor;
-                    Point::new(
-                        event.position.0.floor() as i32 + anchor.x,
-                        event.position.1.floor() as i32 + anchor.y,
-                    )
-                }
-                None => self.physical_to_logical(event.position.0, event.position.1),
+            let anchor = match popup_idx {
+                Some(i) => Point::new(self.popups[i].anchor.x, self.popups[i].anchor.y),
+                None => Point::new(0, 0),
             };
+            let pos = self.surface_to_logical(event.position.0, event.position.1, anchor);
 
             match event.kind {
                 PointerEventKind::Enter { .. } | PointerEventKind::Motion { .. } => {
@@ -1786,13 +2234,15 @@ impl PointerHandler for State {
                 } => {
                     // Wayland already follows our sign convention: a positive
                     // axis value scrolls down / right, toward the content's
-                    // end. Surface coordinates are logical, so the continuous
-                    // (`absolute`) fallback needs no DPI scaling.
+                    // end. The continuous (`absolute`) fallback is a distance
+                    // in surface units, so it crosses into saudade pixels the
+                    // same way a position does before being counted in lines.
+                    let per_line = self.ui.max(0.01) * SCROLL_PIXELS_PER_LINE;
                     let lines = |axis: AxisScroll| {
                         if axis.discrete != 0 {
                             axis.discrete as f32 * WHEEL_LINES_PER_DETENT
                         } else {
-                            axis.absolute as f32 / SCROLL_PIXELS_PER_LINE
+                            axis.absolute as f32 / per_line
                         }
                     };
                     let delta_x = lines(horizontal);
@@ -1838,7 +2288,7 @@ impl DataDeviceHandler for State {
         }
 
         let anchor = self.surface_anchor(surface);
-        let pos = Point::new(x.floor() as i32 + anchor.x, y.floor() as i32 + anchor.y);
+        let pos = self.surface_to_logical(x, y, anchor);
         self.drag = Some(DragSession {
             anchor,
             pos,
@@ -1874,7 +2324,7 @@ impl DataDeviceHandler for State {
         let Some(anchor) = self.drag.as_ref().map(|d| d.anchor) else {
             return;
         };
-        let pos = Point::new(x.floor() as i32 + anchor.x, y.floor() as i32 + anchor.y);
+        let pos = self.surface_to_logical(x, y, anchor);
         if let Some(drag) = self.drag.as_mut() {
             drag.pos = pos;
         }
@@ -2154,6 +2604,53 @@ delegate_xdg_popup!(State);
 delegate_registry!(State);
 
 // -------------------------------------------------------------------- utils
+
+/// Surface-local units one saudade logical pixel spans on a display presented
+/// at `os_scale`: the scale to draw at — `pin`, else the ladder in
+/// [`ui_scale`](crate::ui_scale) at the density `reference_dpi` a logical pixel
+/// is aimed at — over the compositor's own unit.
+///
+/// A Wayland surface coordinate is one of the platform's logical units, the
+/// same nominally-96-dpi thing a Windows or X11 one is, so the default ladder
+/// puts 4/3 of them to a saudade pixel on any display; only the snap to a
+/// twelfth, or a pinned scale, makes the answer depend on `os_scale` at all.
+/// The integer buffer scale does not come into it — that is how finely the
+/// surface is rasterized, not how big anything on it is.
+fn ui_for(os_scale: f32, pin: Option<f32>, reference_dpi: f32) -> f32 {
+    // A factor no compositor could report is taken for 1 rather than divided
+    // by: an infinite one would otherwise take the drawn scale away to nothing
+    // and leave the window no unit to lay anything out in.
+    let os = if os_scale.is_finite() && os_scale > 0.0 {
+        os_scale
+    } else {
+        1.0
+    };
+    let drawn = pin
+        .unwrap_or_else(|| crate::ui_scale::effective_for(os, reference_dpi))
+        .max(0.01);
+    (drawn / os).max(0.01)
+}
+
+/// A surface-local `(w, h)` re-expressed at `ui`, having been counted at `was`:
+/// the same number of saudade pixels, in the unit the compositor now works in.
+fn requantize(size: (u32, u32), was: f32, ui: f32) -> (u32, u32) {
+    let logical = |n: u32| (n.max(1) as f32 / was.max(0.01)).round().max(1.0) as i32;
+    (
+        surface_units(logical(size.0), ui),
+        surface_units(logical(size.1), ui),
+    )
+}
+
+/// `logical` saudade pixels as a surface-local extent — a size, never nothing.
+fn surface_units(logical: i32, ui: f32) -> u32 {
+    (logical.max(1) as f32 * ui).round().max(1.0) as u32
+}
+
+/// `logical` saudade pixels as a surface-local offset, which unlike a size may
+/// be negative: a popup anchored left of or above its parent.
+fn surface_offset(logical: i32, ui: f32) -> i32 {
+    (logical as f32 * ui).round() as i32
+}
 
 fn sanitize(s: &str) -> String {
     s.chars()
@@ -2522,6 +3019,30 @@ impl Dispatch<WpCursorShapeDeviceV1, ()> for State {
 
 // wp_fractional_scale_manager_v1 is sender-only (we only call
 // get_fractional_scale on it). An empty Dispatch satisfies the queue handle.
+impl Dispatch<WpViewporter, ()> for State {
+    fn event(
+        _state: &mut Self,
+        _proxy: &WpViewporter,
+        _event: wp_viewporter::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qhandle: &QueueHandle<Self>,
+    ) {
+    }
+}
+
+impl Dispatch<WpViewport, ()> for State {
+    fn event(
+        _state: &mut Self,
+        _proxy: &WpViewport,
+        _event: wp_viewport::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qhandle: &QueueHandle<Self>,
+    ) {
+    }
+}
+
 impl Dispatch<WpFractionalScaleManagerV1, ()> for State {
     fn event(
         _state: &mut Self,
@@ -2535,8 +3056,10 @@ impl Dispatch<WpFractionalScaleManagerV1, ()> for State {
 }
 
 // The compositor reports the surface's preferred fractional scale here, as a
-// value in 120ths (1.5 → 180). We record the real scale so the UI can show it;
-// rendering still uses the integer buffer scale and the compositor resamples.
+// value in 120ths (1.5 → 180). That is the factor the display is really
+// presented at, so it is what the scale to draw at is derived from (see
+// `ui_for`) and what `Painter::system_scale` reports; rendering still uses the
+// integer buffer scale and the compositor resamples.
 impl Dispatch<WpFractionalScaleV1, ()> for State {
     fn event(
         state: &mut Self,
@@ -2550,8 +3073,9 @@ impl Dispatch<WpFractionalScaleV1, ()> for State {
             let f = scale as f32 / 120.0;
             if state.fractional_scale != Some(f) {
                 state.fractional_scale = Some(f);
-                state.needs_redraw = true;
-                state.mark_popups_dirty();
+                // The scale the UI is drawn at hangs off this one, so take the
+                // window's logical size across to the new unit.
+                state.adopt_scale();
             }
         }
     }
@@ -2611,7 +3135,8 @@ fn _unused(_b: Buffer, _arc: Arc<()>) {}
 #[cfg(test)]
 mod tests {
     use super::{
-        file_uri_to_path, parse_uri_list, paths_to_uri_list, percent_decode, percent_encode_path,
+        UI_EPSILON, file_uri_to_path, parse_uri_list, paths_to_uri_list, percent_decode,
+        percent_encode_path, requantize, surface_offset, surface_units, ui_for,
     };
     use std::path::PathBuf;
 
@@ -2687,5 +3212,113 @@ mod tests {
         assert_eq!(percent_encode_path(b"/a-b_c.d~e/f"), "/a-b_c.d~e/f");
         assert_eq!(percent_encode_path(b"a b"), "a%20b");
         assert_eq!(percent_encode_path(b"#?%"), "%23%3F%25");
+    }
+
+    // ------------------------------------------------- scale
+
+    /// Scales a compositor can present a surface at: the integer ones, and the
+    /// fractional ones `wp_fractional_scale_v1` carries in 120ths.
+    const SCALES: &[f32] = &[1.0, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0];
+
+    /// Surface units to a saudade pixel, at the default reference density.
+    fn ui(os_scale: f32) -> f32 {
+        ui_for(os_scale, None, 72.0)
+    }
+
+    /// The point of the whole exercise: a surface unit is one of the platform's
+    /// own, nominally 96-dpi ones, so a saudade pixel is 4/3 of it — whatever
+    /// the compositor is presenting the display at, and whatever integer scale
+    /// it has us rasterizing into.
+    #[test]
+    fn a_saudade_pixel_is_a_third_over_a_surface_unit_at_every_scale() {
+        for &os in SCALES {
+            assert!((ui(os) - 4.0 / 3.0).abs() < UI_EPSILON, "at {os}");
+        }
+    }
+
+    /// Which is the same as saying the scale drawn at is the one the winit
+    /// runtime derives for the same factor: `ui` times the factor itself.
+    #[test]
+    fn the_scale_drawn_at_is_the_ladders() {
+        for &os in SCALES {
+            let drawn = ui(os) * os;
+            let wanted = crate::ui_scale::effective_for(os, 72.0);
+            assert!((drawn - wanted).abs() < UI_EPSILON, "at {os}: {drawn}");
+        }
+    }
+
+    /// A pinned scale is the scale drawn at, so what it takes in surface units
+    /// moves with the display instead: pinning 2.0 draws at 2.0 on a 125%
+    /// display as much as on a 100% one.
+    #[test]
+    fn a_pin_is_the_drawn_scale_whatever_the_display_says() {
+        for &os in SCALES {
+            let drawn = ui_for(os, Some(2.0), 72.0) * os;
+            assert!((drawn - 2.0).abs() < UI_EPSILON, "at {os}: {drawn}");
+        }
+    }
+
+    /// The reference density moves the ladder here too: at the platforms' own
+    /// 96 dpi a saudade pixel *is* a surface unit.
+    #[test]
+    fn the_reference_density_moves_the_ladder() {
+        for &os in SCALES {
+            assert!((ui_for(os, None, 96.0) - 1.0).abs() < UI_EPSILON, "at {os}");
+        }
+    }
+
+    /// Nothing a compositor can say leaves us with a scale we can't draw at.
+    #[test]
+    fn a_nonsense_scale_does_not_produce_a_nonsense_unit() {
+        for os in [0.0, -1.0, f32::NAN, f32::INFINITY] {
+            assert!(ui(os) > 0.0, "at {os}");
+        }
+        assert!(ui_for(1.0, Some(0.0), 72.0) > 0.0);
+    }
+
+    /// A window keeps the logical size it was asked for: the surface units it
+    /// takes divide back out to the same number of saudade pixels.
+    #[test]
+    fn a_window_size_survives_the_round_trip() {
+        let u = ui(1.25);
+        for logical in [1, 13, 100, 320, 427, 1080] {
+            let surface = surface_units(logical, u);
+            let back = (surface as f32 / u).round() as i32;
+            assert_eq!(back, logical, "{logical} -> {surface}");
+        }
+    }
+
+    /// An extent is never nothing — a zero-sized buffer is a protocol error,
+    /// and a zero-sized surface has nowhere to put the window.
+    #[test]
+    fn an_extent_is_always_at_least_one_unit() {
+        for logical in [i32::MIN, -5, 0, 1] {
+            assert!(surface_units(logical, ui(1.0)) >= 1, "{logical}");
+        }
+        assert!(surface_units(1, 0.001) >= 1);
+    }
+
+    /// Re-counting a size in a new unit keeps the logical size it stood for:
+    /// a window holding 320 saudade pixels goes on holding 320 of them when
+    /// the scale moves under it.
+    #[test]
+    fn a_size_re_counted_in_a_new_unit_is_the_same_logical_size() {
+        let (was, now) = (ui_for(1.0, Some(2.0), 72.0), ui_for(1.25, Some(2.0), 72.0));
+        let before = (surface_units(320, was), surface_units(200, was));
+        let after = requantize(before, was, now);
+        assert_eq!(after, (surface_units(320, now), surface_units(200, now)));
+        // And re-counting into the unit it is already in changes nothing.
+        assert_eq!(requantize(before, was, was), before);
+    }
+
+    /// An offset, unlike an extent, keeps its sign: a popup can sit left of or
+    /// above the parent it is anchored to.
+    #[test]
+    fn an_offset_keeps_its_sign() {
+        let u = ui(1.0);
+        assert_eq!(surface_offset(0, u), 0);
+        assert_eq!(surface_offset(3, u), 4);
+        assert_eq!(surface_offset(-3, u), -4);
+        assert_eq!(surface_offset(-300, u), -400);
     }
 }

@@ -114,45 +114,6 @@ impl Button {
         }
     }
 
-    /// Paint the icon and label in `color`, centered on `rect` as one group.
-    /// The label is set in the theme's button face — bold by default, and
-    /// measured in it, so a wider face still centers on the button.
-    fn paint_face(&self, painter: &mut Painter, rect: Rect, color: Color, theme: &Theme) {
-        let style = theme.button_style;
-        let Some(icon) = &self.icon else {
-            painter.text_centered_styled(
-                rect,
-                &self.label,
-                theme.font_size,
-                color,
-                FontFamily::Sans,
-                style,
-            );
-            return;
-        };
-        let text_w = if self.label.is_empty() {
-            0
-        } else {
-            painter
-                .measure_text_styled(&self.label, theme.font_size, FontFamily::Sans, style)
-                .w
-        };
-        let gap = if text_w > 0 { ICON_GAP } else { 0 };
-        let x = rect.x + (rect.w - (ICON_SIZE + gap + text_w)) / 2;
-        let icon_y = rect.y + (rect.h - ICON_SIZE) / 2;
-        icon.draw_tinted(painter, Rect::new(x, icon_y, ICON_SIZE, ICON_SIZE), color);
-        if text_w > 0 {
-            painter.text_centered_styled(
-                Rect::new(x + ICON_SIZE + gap, rect.y, text_w, rect.h),
-                &self.label,
-                theme.font_size,
-                color,
-                FontFamily::Sans,
-                style,
-            );
-        }
-    }
-
     /// Which keys arm the button on KeyDown. Enter / Space when focused;
     /// Enter alone when we're a non-focused default button (the dialog
     /// accelerator).
@@ -165,6 +126,67 @@ impl Button {
         } else {
             self.default && matches!(key, Key::Named(NamedKey::Enter))
         }
+    }
+}
+
+/// Paint a push button's face — its `icon` and `label`, centered on `rect` as
+/// one group — the way a [`Button`] does, and a
+/// [`ButtonGroup`](crate::widgets::ButtonGroup)'s buttons with it. Disabled,
+/// it comes out engraved: a white copy nudged down-right, with the grey one
+/// laid over it — the classic Win 3.1 greyed look.
+pub(crate) fn paint_face(
+    painter: &mut Painter,
+    rect: Rect,
+    label: &str,
+    icon: Option<&SvgImage>,
+    enabled: bool,
+    theme: &Theme,
+) {
+    if enabled {
+        paint_face_in(painter, rect, label, icon, theme.text, theme);
+    } else {
+        let emboss = Rect::new(rect.x + 1, rect.y + 1, rect.w, rect.h);
+        paint_face_in(painter, emboss, label, icon, theme.highlight, theme);
+        paint_face_in(painter, rect, label, icon, theme.disabled_text, theme);
+    }
+}
+
+/// [`paint_face`] in one `color`. The label is set in the theme's button face
+/// — bold by default, and measured in it, so a wider face still centers on the
+/// button. The icon is tinted the label's color.
+fn paint_face_in(
+    painter: &mut Painter,
+    rect: Rect,
+    label: &str,
+    icon: Option<&SvgImage>,
+    color: Color,
+    theme: &Theme,
+) {
+    let style = theme.button_style;
+    let Some(icon) = icon else {
+        painter.text_centered_styled(rect, label, theme.font_size, color, FontFamily::Sans, style);
+        return;
+    };
+    let text_w = if label.is_empty() {
+        0
+    } else {
+        painter
+            .measure_text_styled(label, theme.font_size, FontFamily::Sans, style)
+            .w
+    };
+    let gap = if text_w > 0 { ICON_GAP } else { 0 };
+    let x = rect.x + (rect.w - (ICON_SIZE + gap + text_w)) / 2;
+    let icon_y = rect.y + (rect.h - ICON_SIZE) / 2;
+    icon.draw_tinted(painter, Rect::new(x, icon_y, ICON_SIZE, ICON_SIZE), color);
+    if text_w > 0 {
+        painter.text_centered_styled(
+            Rect::new(x + ICON_SIZE + gap, rect.y, text_w, rect.h),
+            label,
+            theme.font_size,
+            color,
+            FontFamily::Sans,
+            style,
+        );
     }
 }
 
@@ -185,17 +207,14 @@ impl Widget for Button {
             label_rect.x += 1;
             label_rect.y += 1;
         }
-        if self.enabled {
-            self.paint_face(painter, label_rect, theme.text, theme);
-        } else {
-            // Engraved disabled face: a white copy nudged down-right, with the
-            // grey one laid over it — the classic Win 3.1 greyed look.
-            let mut emboss = label_rect;
-            emboss.x += 1;
-            emboss.y += 1;
-            self.paint_face(painter, emboss, theme.highlight, theme);
-            self.paint_face(painter, label_rect, theme.disabled_text, theme);
-        }
+        paint_face(
+            painter,
+            label_rect,
+            &self.label,
+            self.icon.as_ref(),
+            self.enabled,
+            theme,
+        );
 
         // Dotted focus rectangle inside the bevel — the same chrome Win 3.1
         // drew on its focused buttons. Keep it inset enough that it doesn't

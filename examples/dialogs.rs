@@ -149,7 +149,7 @@ fn build_app() -> (
             let confirmed = confirmed.clone();
             confirm.borrow_mut().show_confirm(
                 "Delete file?",
-                "This permanently deletes the file.\nThis cannot be undone.",
+                "This permanently deletes the file. This cannot be undone.",
                 "Delete",
                 move |_| confirmed.set(true),
             );

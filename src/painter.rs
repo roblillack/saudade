@@ -401,10 +401,11 @@ pub struct Painter<'a> {
     /// monitor (always ≥ 1 in practice).
     scale: f32,
     /// The OS/display scale the window is *presented* at — e.g. 1.5 on a 150%
-    /// display. On the Wayland backend `scale` is the integer buffer scale the
-    /// content is rasterized at (2.0 for a 150% display) and the compositor
-    /// resamples 2.0→1.5; `system_scale` records the real 1.5 so UI can report
-    /// it. Equal to `scale` on every other backend and until a backend calls
+    /// display. Always below `scale`, which carries the UI scale on top of it,
+    /// and further below on a Wayland compositor with no `wp_viewporter`, where
+    /// `scale` then also carries the integer buffer scale the content is
+    /// rasterized at before being resampled down to the fractional size. Equal
+    /// to `scale` until a backend calls
     /// [`Self::set_system_scale`]. Unlike `scale`, it is *not* swapped out by
     /// [`Self::with_scale`] / [`Self::physical`] — it describes the window, not
     /// the current draw transform.
@@ -552,15 +553,20 @@ impl<'a> Painter<'a> {
     /// Windows' Display Settings, "Larger Text" on a Mac — which the scale only
     /// carries mixed in with the display's density.
     ///
-    /// On macOS a device pixel is a pixel of the framebuffer, which is not
-    /// always one of the panel's: a 27" 4K panel in the 2560x1440 mode macOS
-    /// picks for it renders 5120 wide and is resampled down, so it comes out at
-    /// 217 here rather than the panel's own 163.
+    /// A device pixel is not always one of the panel's. On macOS it is a pixel
+    /// of the framebuffer: a 27" 4K panel in the 2560x1440 mode macOS picks for
+    /// it renders 5120 wide and is resampled down, so it comes out at 217 here
+    /// rather than the panel's own 163. On Wayland it is the panel's wherever
+    /// `wp_viewporter` lets the buffer be the fractional size the compositor
+    /// presents; on a compositor without it, a fractional display is
+    /// oversampled at the integer scale above and resampled down, so a 157-dpi
+    /// panel presented at 125% comes out at 252 — the density of what we are
+    /// drawing into, either way.
     ///
     /// `None` when there is no answer: an offscreen
     /// [`MockBackend`](crate::mock::MockBackend) render, unless it fakes one;
-    /// X11 and Wayland, which saudade does not ask; and a display that reports
-    /// no size of its own, as a projector may not.
+    /// and a display that reports no size of its own, as a projector may not,
+    /// nor a virtual output such as the one WSLg gives an external display.
     pub fn display_dpi(&self) -> Option<f32> {
         self.display_dpi
     }
@@ -663,11 +669,16 @@ impl<'a> Painter<'a> {
     }
 
     /// The OS/display scale the window is presented at (e.g. 1.5 on a 150%
-    /// display). On the Wayland backend this can differ from [`Self::scale`],
-    /// the integer buffer scale the content is actually rasterized at before
-    /// the compositor resamples it down to the fractional size; on every other
-    /// backend the two are equal. Defaults to [`Self::scale`] until the
-    /// backend records the display's own scale.
+    /// display) — the figure a native app on the same display would see.
+    ///
+    /// It is not [`Self::scale`], which is what a logical pixel is really worth
+    /// in the pixels being drawn: that carries the UI scale aiming a logical
+    /// pixel at 1/72 in, and on a Wayland compositor without `wp_viewporter`
+    /// the integer buffer scale as well, the content being rasterized at that
+    /// and resampled down to the fractional size the compositor presents. A
+    /// widget asking how the *display* is set wants this one; one placing
+    /// pixels wants `scale`. Defaults to [`Self::scale`] until the backend
+    /// records the display's own scale.
     pub fn system_scale(&self) -> f32 {
         self.system_scale
     }
@@ -1347,6 +1358,13 @@ impl<'a> Painter<'a> {
     /// scrollbar track's "newsprint" pattern; at the default 1.0x it's a classic
     /// 1px black-on-gray checker.
     pub fn fill_checker(&mut self, rect: Rect, base: Color, fg: Color) {
+        self.fill_checker_cells(rect, base, fg, chrome_px(self.scale));
+    }
+
+    /// [`Self::fill_checker`] with cells `cell` device pixels square — for a
+    /// [`Self::crisp`] recipe, whose painter runs at 1.0 while a logical pixel
+    /// of chrome is still [`Frame::depth(1)`](Frame::depth) device pixels.
+    pub(crate) fn fill_checker_cells(&mut self, rect: Rect, base: Color, fg: Color, cell: i32) {
         self.fill_rect(rect, base);
         let x0 = self.origin_x + self.snap(rect.x);
         let y0 = self.origin_y + self.snap(rect.y);
@@ -1357,7 +1375,7 @@ impl<'a> Painter<'a> {
         let ys = y0.max(cy0);
         let xe = x1.min(cx1);
         let ye = y1.min(cy1);
-        let step = chrome_px(self.scale);
+        let step = cell.max(1);
         let fg = fg.0;
         for y in ys..ye {
             let ay = (y - self.origin_y).div_euclid(step);
@@ -1410,17 +1428,29 @@ impl<'a> Painter<'a> {
         let idx = (y * self.width + x) as usize;
         let dst = self.pixels[idx];
         let a = alpha as u32;
-        let inv = 255 - a;
+        // Source-over, with the destination's own alpha in play: the weight it
+        // keeps is what the source lets through, of however much of it there
+        // was. An opaque destination — every pixel of a window that paints its
+        // own background — leaves `dw == 255 - a` and `out == 255`, which is a
+        // plain lerp between the two colours. A transparent one (the field a
+        // popup window with a real alpha channel is cleared to) leaves
+        // `dw == 0`, so the source keeps its own colour at its own coverage
+        // instead of blending toward the black behind the nothing.
+        let dw = ((dst >> 24) & 0xFF) * (255 - a) / 255;
+        let out = a + dw;
+        if out == 0 {
+            return;
+        }
         let sr = color.red() as u32;
         let sg = color.green() as u32;
         let sb = color.blue() as u32;
         let dr = (dst >> 16) & 0xFF;
         let dg = (dst >> 8) & 0xFF;
         let db = dst & 0xFF;
-        let r = (sr * a + dr * inv) / 255;
-        let g = (sg * a + dg * inv) / 255;
-        let b = (sb * a + db * inv) / 255;
-        self.pixels[idx] = 0xFF000000 | (r << 16) | (g << 8) | b;
+        let r = (sr * a + dr * dw) / out;
+        let g = (sg * a + dg * dw) / out;
+        let b = (sb * a + db * dw) / out;
+        self.pixels[idx] = (out << 24) | (r << 16) | (g << 8) | b;
     }
 
     /// Logical-coordinate single-pixel write — a 1×1 logical pixel becomes the
@@ -1909,6 +1939,40 @@ impl<'a> Painter<'a> {
         Size::new(w.ceil() as i32, h.ceil() as i32)
     }
 
+    /// Word-wrap `text` into the lines it takes to draw it with
+    /// [`text`](Self::text) at `size` in a column `max_width` logical pixels
+    /// wide: no line [measures](Self::measure_text) wider than that, unless a
+    /// single character does. See
+    /// [`wrap_text_styled`](Self::wrap_text_styled) for where lines break.
+    pub fn wrap_text<'t>(&self, text: &'t str, size: f32, max_width: i32) -> Vec<&'t str> {
+        self.wrap_text_styled(text, size, max_width, FontFamily::Sans, FontStyle::Regular)
+    }
+
+    /// Word-wrap `text` as it would be drawn by
+    /// [`text_styled`](Self::text_styled) in the same family and style, into
+    /// lines no wider than `max_width` logical pixels.
+    ///
+    /// Every `\n` starts a new line. Otherwise a line breaks after the spaces
+    /// between two words, which are dropped there, or after a hyphen or dash
+    /// joining two words; the spaces inside a line, and a paragraph's
+    /// indentation, are kept. A word too wide for a line of its own is broken
+    /// where it has to be, after a `/` or `\` if it has one — between the
+    /// components of a path. A non-positive `max_width`, or a family without
+    /// a font, only splits the text at its newlines.
+    pub fn wrap_text_styled<'t>(
+        &self,
+        text: &'t str,
+        size: f32,
+        max_width: i32,
+        family: FontFamily,
+        style: FontStyle,
+    ) -> Vec<&'t str> {
+        match self.family_font(family) {
+            Some(font) => crate::wrap::wrap(text, max_width, |ch| font.advance(ch, size, style)),
+            None => crate::wrap::wrap(text, 0, |_| 0.0),
+        }
+    }
+
     /// Cumulative caret x-offsets for `text` drawn in `family` and `style` at
     /// `size` logical pixels — `out[i]` is the x where the caret sits before the
     /// i-th character, `out[len]` the end of the string. One O(n) pass over the
@@ -1951,6 +2015,29 @@ fn resampled(a: u32, r: u32, g: u32, b: u32, bits: u32) -> u32 {
         | (((r + half) >> bits).min(0xFF) << 16)
         | (((g + half) >> bits).min(0xFF) << 8)
         | ((b + half) >> bits).min(0xFF)
+}
+
+/// Premultiply, in place, the straight-alpha `0xAARRGGBB` pixels a painter
+/// writes, for a platform that composites a see-through window from
+/// premultiplied ones: a Wayland `Argb8888` buffer, a Windows layered window.
+/// An opaque pixel reads the same either way, so only a buffer with see-through
+/// pixels in it needs this.
+#[cfg(any(windows, all(unix, not(target_os = "macos"))))]
+pub(crate) fn premultiply(pixels: &mut [u32]) {
+    for px in pixels {
+        let a = *px >> 24;
+        match a {
+            255 => {}
+            // Whatever colour a fully transparent pixel carries, premultiplied
+            // it is nothing — and a compositor adds what is left.
+            0 => *px = 0,
+            _ => {
+                let v = *px;
+                let scaled = |shift: u32| (((v >> shift) & 0xFF) * a + 127) / 255;
+                *px = (a << 24) | (scaled(16) << 16) | (scaled(8) << 8) | scaled(0);
+            }
+        }
+    }
 }
 
 /// One axis of a resample, worked out once for every destination pixel: the
@@ -3255,5 +3342,31 @@ mod tests {
             vec![(Color::BLACK.0, h), (0, 4)],
             "the outline fills the rule and stops at its bottom edge"
         );
+    }
+
+    /// Anti-aliasing onto a see-through pixel — what a transparent popup window
+    /// is cleared to — keeps the colour drawn at the coverage it was drawn
+    /// with, rather than darkening it toward the black of `Color::TRANSPARENT`.
+    /// Onto an opaque pixel it is the plain blend it always was.
+    #[test]
+    fn blending_onto_a_transparent_pixel_keeps_the_colour() {
+        let mut px = [Color::TRANSPARENT.0, Color::WHITE.0];
+        {
+            let mut p = Painter::new(&mut px, 2, 1, 1.0, 0, 0, FontSet::default());
+            p.blend_pixel_phys(0, 0, Color::rgb(0xFF, 0x80, 0x00), 0x80);
+            p.blend_pixel_phys(1, 0, Color::BLACK, 0x80);
+        }
+        assert_eq!(px, [0x80FF_8000, 0xFF7F_7F7F]);
+    }
+
+    /// Premultiplying leaves an opaque pixel alone, turns a fully transparent
+    /// one into nothing whatever colour it carried, and scales a partial one's
+    /// colour by its coverage.
+    #[cfg(any(windows, all(unix, not(target_os = "macos"))))]
+    #[test]
+    fn premultiplying_scales_colour_by_coverage() {
+        let mut px = [0xFF12_3456, 0x00FF_FFFF, 0x80FF_8000, 0x0000_0000];
+        premultiply(&mut px);
+        assert_eq!(px, [0xFF12_3456, 0x0000_0000, 0x8080_4000, 0x0000_0000]);
     }
 }

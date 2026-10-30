@@ -48,13 +48,18 @@ members = ["macros"]
 # part of this package, so they're covered by `cargo build --all-targets`.
 
 [dependencies]
-# winit drives X11 only. We bypass it entirely on Wayland sessions and
-# talk to the compositor through smithay-client-toolkit, which gives us
-# real xdg_popup and proper window placement. Disabling winit's Wayland
+# winit drives Windows, macOS, and X11. We bypass it entirely on Wayland
+# sessions and talk to the compositor through smithay-client-toolkit, which
+# gives us real xdg_popup and proper window placement. Disabling winit's Wayland
 # features drops `wayland-csd-adwaita` and `wayland-dlopen` from the
 # tree as a side benefit. The `x11` feature is a harmless no-op off
 # free-unix (winit's X11 platform crates are themselves target-gated).
 winit = { version = "0.30.12", default-features = false, features = ["rwh_06", "x11"] }
+# 0.4 has no alpha mode: every backend shows a pixel opaque, whatever its alpha
+# byte says. A popup window that wants see-through pixels is presented by
+# saudade itself where the platform allows — `win32_layered` on Windows,
+# `macos_layer` on macOS (softbuffer's `master` can do the latter, but no
+# release carries it yet).
 softbuffer = "0.4"
 fontdue = "0.8"
 fontdb = "0.16"
@@ -80,6 +85,10 @@ smithay-client-toolkit = "0.19"
 wayland-client = "0.31"
 wayland-protocols = { version = "0.32", features = ["client", "staging"] }
 arboard = { version = "3", default-features = false, features = ["wayland-data-control"] }
+# X11: the two hints that make a window a dialog of another, and a display's
+# physical size, none of which winit can say or tell (see `src/x11.rs`). Already
+# in the tree through winit's own `x11` feature, RandR included.
+x11rb = { version = "0.13", features = ["randr"] }
 
 # macOS/Windows: arboard with its native (Cocoa / Win32) clipboard backend.
 # default-features = false drops the unused `image-data` feature (and the heavy
@@ -91,8 +100,10 @@ arboard = { version = "3", default-features = false }
 # working around a winit 0.30 bug that has a window flap between two displays
 # of different densities while it is dragged across (see `win32_dpi.rs`). And
 # `GetDpiForMonitor`, for a display's physical density (`Painter::display_dpi`).
+# And `EnableWindow`, which keeps the window beneath an open dialog from being
+# activated (see `win32_popup.rs`).
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Graphics_Gdi", "Win32_UI_HiDpi", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Graphics_Gdi", "Win32_UI_HiDpi", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 # Two NSWindow settings winit has no API for (see `open_popup`): popup windows
@@ -101,11 +112,19 @@ windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Graphic
 # winit can't do — `applicationIconImage`, the dock tile (see `icon.rs`), which
 # on macOS is where an app's icon lives since its windows have none.
 # `CGDisplayScreenSize` is a fourth: a display's physical size, which
-# `Painter::display_dpi` works a density out of.
+# `Painter::display_dpi` works a density out of. And a popup window's own
+# Core Animation layer (see `macos_layer`), shown from a straight-alpha
+# `CGImage`, is the fifth: softbuffer 0.4's drops the alpha byte. The sixth is
+# a popup window being a child of the window it drops from, which keeps the
+# keyboard (see `macos_popup`): `NSGraphics` has the ordering mode, an
+# `NSTrackingArea` brings it mouse moves, and an `NSEvent` monitor (a block,
+# hence `block2`) catches a click on that window's title bar.
 objc2 ={ version = "0.6", default-features = false, features = ["std"] }
-objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSApplication", "NSImage", "NSWindow", "NSResponder", "NSScreen", "NSView", "objc2-core-graphics"] }
-objc2-core-foundation = { version = "0.3", default-features = false, features = ["CFBase", "CFString", "CFCGTypes", "std"] }
-objc2-core-graphics = { version = "0.3", default-features = false, features = ["CGContext", "CGBitmapContext", "CGColorSpace", "CGDirectDisplay", "CGDisplayConfiguration", "CGImage", "std"] }
+block2 = { version = "0.6", default-features = false, features = ["std"] }
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "block2", "NSApplication", "NSEvent", "NSGraphics", "NSImage", "NSTrackingArea", "NSWindow", "NSResponder", "NSScreen", "NSView", "objc2-core-graphics", "objc2-quartz-core"] }
+objc2-core-foundation = { version = "0.3", default-features = false, features = ["CFBase", "CFData", "CFString", "CFCGTypes", "std"] }
+objc2-core-graphics = { version = "0.3", default-features = false, features = ["CGContext", "CGBitmapContext", "CGColorSpace", "CGDataProvider", "CGDirectDisplay", "CGDisplayConfiguration", "CGImage", "std"] }
+objc2-quartz-core = { version = "0.3", default-features = false, features = ["CALayer", "CATransaction", "objc2-core-foundation", "std"] }
 objc2-core-text = { version = "0.3", default-features = false, features = ["CTFont", "CTFontDescriptor", "CTFontTraits", "CTDefines", "std", "objc2-core-graphics"] }
 
 [dev-dependencies]

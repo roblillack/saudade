@@ -1,9 +1,10 @@
-//! Saudade — a minimal, retained-mode GUI library for small Win 3.1-styled
-//! programs and utilities. Targets Wayland, X11, Windows, macOS.
+//! Saudade — a small, retained-mode, cross-platform GUI toolkit for fast,
+//! self-contained native programs styled after Windows 3.1. Runs equally well
+//! on Windows, macOS, and UNIX (Wayland and X11).
 //!
 //! The library stays intentionally small:
 //!
-//! * the runtime drives winit + softbuffer
+//! * the runtime drives winit (smithay-client-toolkit on Wayland) + softbuffer
 //! * widgets are ordinary Rust values implementing [`Widget`]
 //! * events are typed (no integer message IDs)
 //! * widgets request repaint / window close via [`EventCtx`]
@@ -42,11 +43,16 @@ mod event;
 mod font;
 mod geometry;
 mod icon;
+#[cfg(target_os = "macos")]
+mod macos_layer;
+#[cfg(target_os = "macos")]
+mod macos_popup;
 pub mod mock;
 mod painter;
 // Only used off macOS, but built on every Unix so its tests run on a Mac too.
 #[cfg(unix)]
 mod portal;
+mod present;
 mod svg;
 mod theme;
 mod ui_scale;
@@ -58,6 +64,13 @@ mod widgets;
 mod win32_dpi;
 #[cfg(windows)]
 mod win32_fullscreen;
+#[cfg(windows)]
+mod win32_layered;
+#[cfg(windows)]
+mod win32_popup;
+mod wrap;
+#[cfg(all(unix, not(target_os = "macos")))]
+mod x11;
 
 pub use accel::{Accel, AccelMods, ModifierScheme};
 pub use app::{App, WindowConfig};
@@ -76,8 +89,8 @@ pub use svg::{FillRule, SvgImage, SvgPolygon};
 pub use theme::Theme;
 pub use widget::{PopupKind, PopupRequest, Widget};
 pub use widgets::{
-    Bevel, Button, Checkbox, Column, Container, ContextMenu, Dialog, DialogIcon, Dropdown,
-    FileDialog, FileFilter, FocusLabel, Image, Label, List, ListIcon, ListItem, Menu, MenuBar,
-    MenuItem, Modal, Orientation, ProgressBar, Row, SCROLLBAR_THICKNESS, ScrollBar, Slider,
-    TextEditor, TextInput,
+    Bevel, Button, ButtonGroup, Checkbox, Column, Container, ContextMenu, Dialog, DialogIcon,
+    Dropdown, FileDialog, FileFilter, FocusLabel, GroupButton, Image, Label, List, ListIcon,
+    ListItem, Menu, MenuBar, MenuItem, Modal, NumberInput, Orientation, ProgressBar, Row,
+    SCROLLBAR_THICKNESS, ScrollBar, Slider, SpinButton, TextEditor, TextInput,
 };

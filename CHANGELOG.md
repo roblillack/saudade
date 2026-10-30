@@ -28,6 +28,23 @@ While pre-1.0, the minor version is bumped for breaking changes.
 - `ListItem::with_svg_glyph` shows a one-color mark in the row's text color.
   The `..` row of `FileDialog` and the `filer` example uses it, so its arrow
   turns white on the selection band and stays visible on the dark theme.
+- `SpinButton`: a pair of arrow buttons, vertical (up / down) or horizontal
+  (left / right), that report steps for their owner to apply — a click is one,
+  holding an arrow repeats it at the scrollbar arrows' pace, and the wheel
+  steps once per notch.
+- `NumberInput`: a text field for a number, with spin buttons along its right
+  edge. It takes nothing but a number in its range, with no more decimals than
+  its precision. The arrows, Up / Down, Page Up / Page Down and the wheel move
+  it from one multiple of its step to the next. Taking the focus selects the
+  number, so typing replaces it, and an optional unit (`"mm"`, `"%"`) shows in
+  grey inside the field.
+- `ButtonGroup`: a row or column of joined buttons, one of them selected at a
+  time — a radio choice. Each button (a `GroupButton`) shows a label, an icon,
+  or both; the selected one stays pushed in with a stippled face. The
+  `page_layout` example picks its orientation with one, next to `NumberInput`s
+  for its margins, scale and copies.
+- `Painter::wrap_text` and `wrap_text_styled` break text into the lines it
+  takes to fit a width, the way a `Label` wraps. (#89)
 
 ### Changed
 
@@ -42,6 +59,103 @@ While pre-1.0, the minor version is bumped for breaking changes.
   on the light theme and suit the dark one.
 - The examples take their colors from the theme, so they all go dark with the
   system — except `svg`, whose comparison is drawn for a white workspace.
+- `Dialog` word-wraps its message to the width of the box and grows in height
+  to fit it, so a long message no longer needs `\n`s to fit, and one of
+  several lines no longer leaves extra space above the buttons. Since that
+  takes a font, the box measures itself on the first paint after it is shown
+  and opens its window then. (#89)
+- `Label` keeps the spaces inside a line, may break a line after a hyphen or
+  dash joining two words, and breaks a word too wide for the box — after a `/`
+  or `\` if it has one — instead of cutting it off. (#89)
+
+- Windows: a dialog is now owned by the window it belongs to, like a native
+  one. It opens centered over that window rather than wherever Windows puts a
+  new window, stays above it, has no taskbar button of its own, and shows up
+  when that window is shared in a video call. (#72)
+- macOS: a dialog is now a child window of the window it opens over. It opens
+  centered over that window rather than in the middle of the screen, stays
+  above it when that window is clicked, moves and is minimized along with it,
+  and shows up when that window is shared in a video call. It also keeps the
+  keyboard for as long as it is open, as a modal one does: clicking the window
+  beneath no longer makes that window active while its keystrokes went to the
+  dialog. (#78)
+- X11: a dialog is now modal and transient for the window it opens over, and
+  opens centered over it. Its frame only moves and closes it (WSLg still lets
+  its edges resize it). (#84)
+
+### Fixed
+
+- macOS: `TextInput` and `TextEditor` take ⌘C / ⌘X / ⌘V / ⌘A for Copy, Cut,
+  Paste and Select All, and ⌥←/→ to move by word, instead of the Ctrl chords.
+  Both now follow a `ModifierScheme`, which `with_scheme` pins. (#88)
+- `TextInput` and `TextEditor` no longer select the character just typed, for
+  the next keystroke to replace, when the selection is empty: after
+  `select_all()` on empty text, or after Shift+arrowing away from the caret and
+  back. Backspace in that state no longer panics either. (#86)
+- Wayland: a dialog opened over another one is now transient for that one, not
+  for the main window, so it opens over it. (#85)
+- Wayland: keys typed into the window beneath an open dialog no longer reach
+  the dialog, where the compositor lets that window take the keyboard. (#85)
+- `Painter::display_dpi` answers on X11, off RandR, so `examples/credit_card`
+  draws a card at its real 85.60 mm there. (#84)
+- X11: keys typed into the window beneath an open dialog no longer reach the
+  dialog, where the window manager lets that window take the keyboard. (#84)
+- The Wayland backend draws the UI at the size the other backends do. It laid
+  its widgets out in raw surface coordinates, so the 96→72 dpi alignment (see
+  "How big a logical pixel is") was missing there and a window came out a third
+  smaller than the same program under X11. The scale now follows the factor the
+  compositor presents the surface at, and a window keeps its logical size when
+  that moves. (#76)
+- `App::with_ui_scale`, `SAUDADE_UI_SCALE` and `SAUDADE_UI_DPI` work on
+  Wayland, having been silently ignored there. (#76)
+- Wayland windows are rasterized at the scale they are presented at, through
+  `wp_viewporter`, rather than at the integer buffer scale above it: a display
+  presented at 125% is drawn at 1.667x and goes to the glass 1:1, instead of
+  being drawn at 2.667x for the compositor to rescale by 0.625 — which undid
+  the painter's snapping, the grid every edge landed on no longer being the
+  panel's. Compositors without the protocol keep the integer path. (#76)
+- `Painter::display_dpi` answers on Wayland, off the physical size and current
+  mode `wl_output` reports, so `examples/credit_card` draws a card at its real
+  85.60 mm there rather than falling back to a nominal 72 logical pixels to the
+  inch. (#76)
+- Windows: opening a menu or dropdown no longer deactivates the window it drops
+  from, and sharing that window in a video call now shows its open menus and
+  dropdowns. A popup is now an owned `WS_POPUP` window that never activates,
+  like a native menu, instead of an application window of its own. (#71)
+- macOS: opening a menu or dropdown no longer takes the keyboard from the
+  window it drops from, whose title bar stays active; an open one moves along
+  with that window; and sharing that window in a video call now shows it. A
+  popup is now a child window of that window that never becomes key, like a
+  native menu, instead of a window of its own lying on top: the window server
+  carries it along, and ScreenCaptureKit's single-window capture, which Chrome
+  shares a window with, takes it in. A click on that window's title bar closes
+  it. (#77)
+- Windows: a menu or dropdown opened from a window on a display of another
+  scale than the primary one is no longer cut off at its right and bottom
+  edges. (#73)
+- Windows: a click is no longer ignored when the pointer has just come back
+  into a window at the very spot it left it — after a menu that opened under
+  the pointer closes again, for instance. (#74)
+- `examples/scaling` opens its slider at the scale the window is really drawn
+  at. It read that once, on the first paint — which on Wayland comes before the
+  compositor has reported a scale at all. (#76)
+- The `circle_drawer` example's right-click menu now takes the keyboard:
+  Escape, the arrow keys and Enter did nothing. `ContextMenu`'s docs now say
+  that a widget owning one forwards `accepts_accelerators` to it too. (#75)
+- Menus, dropdown lists and context menus no longer show a strip of window
+  background along their right and bottom edges, or a square of it out over the
+  desktop when they hang off their window. Popup windows are now transparent
+  where the menu doesn't cover them on macOS, Windows and Wayland. X11 still
+  repaints the app underneath, now up to the popup's edge. (#52)
+- Windows: the window beneath an open dialog can no longer be activated while
+  the keys typed into it went to the dialog. It is disabled for as long as the
+  dialog is open, as the owner of a native modal dialog is, so the keyboard and
+  the active title bar stay with the dialog, and a click on that window closes a
+  dropdown open in the dialog. (#82)
+- With a dialog open over another one, Escape or the close button of the one
+  on top closes just that one, rather than both. A `Modal` now consumes the
+  Escape it closes on, and a key still held as a window takes the keyboard is
+  no longer taken for a fresh press there (Windows, X11). (#83)
 
 ## [0.7.0] - 2026-10-24
 
