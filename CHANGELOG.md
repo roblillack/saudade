@@ -10,7 +10,28 @@ While pre-1.0, the minor version is bumped for breaking changes.
 
 ## [Unreleased] - ReleaseDate
 
+### Added
+
+- Drops of links, and of images out of a web browser. `DragData` carries a
+  drag in two more forms next to `paths`: `urls`, the addresses a drag carries
+  (a link, or a dragged image's address), and `files`, files by their contents
+  as `DraggedFile`s with no path (Windows' "virtual files": an image dragged
+  out of a web browser, an attachment out of a mail program).
+  `DragData::from_urls`, `from_files` and `is_empty` go with them. Windows
+  reads all three; Wayland reads links from the `text/uri-list` it already
+  read paths from; macOS and X11 still see file paths only.
+- Windows: drags report where they are, so a window gets `DragMove`s, and
+  `DragEnter` and `Drop` land where the pointer is rather than where it last
+  moved before the drag.
+
 ### Changed
+
+- Windows: the main window takes drags through saudade's own OLE drop target
+  instead of winit's, which reads file paths only. The drag cursor now follows
+  `EventCtx::accept_drop`, as on Wayland, and a drop where no widget accepted
+  the drag ends it with `DragLeave` rather than a `Drop`.
+- `DragData` has two new public fields, so code that builds one from a struct
+  literal needs `..DragData::default()`.
 
 - Windows: a dialog is now owned by the window it belongs to, like a native
   one. It opens centered over that window rather than wherever Windows puts a

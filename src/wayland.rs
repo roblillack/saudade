@@ -2380,13 +2380,10 @@ impl DataDeviceHandler for State {
                         Ok(0) => {
                             // EOF: the source finished writing the uri-list.
                             let text = String::from_utf8_lossy(&buf);
-                            let paths = parse_uri_list(text.as_ref());
+                            let data = parse_uri_list(text.as_ref());
                             offer.finish();
                             offer.destroy();
-                            state.dispatch(Event::Drop {
-                                pos,
-                                data: DragData::from_paths(paths),
-                            });
+                            state.dispatch(Event::Drop { pos, data });
                             state.mark_popups_dirty();
                             PostAction::Remove
                         }
@@ -2637,13 +2634,22 @@ fn sanitize(s: &str) -> String {
 const URI_LIST_MIME: &str = "text/uri-list";
 
 /// Parse an RFC 2483 `text/uri-list` payload into the local file paths it
-/// references. Blank lines, comments (`#…`), and non-`file:` URIs are skipped.
-fn parse_uri_list(text: &str) -> Vec<PathBuf> {
-    text.lines()
+/// references and the other addresses it carries, such as a link dragged out
+/// of a web browser. Blank lines and comments (`#…`) are skipped.
+fn parse_uri_list(text: &str) -> DragData {
+    let mut data = DragData::default();
+    let uris = text
+        .lines()
         .map(str::trim)
-        .filter(|line| !line.is_empty() && !line.starts_with('#'))
-        .filter_map(file_uri_to_path)
-        .collect()
+        .filter(|line| !line.is_empty() && !line.starts_with('#'));
+    for uri in uris {
+        match file_uri_to_path(uri) {
+            Some(path) => data.paths.push(path),
+            None if !uri.starts_with("file:") => data.urls.push(uri.to_string()),
+            None => {}
+        }
+    }
+    data
 }
 
 /// Turn a single `file://[host]/path` URI into a [`PathBuf`], percent-decoding
@@ -3113,7 +3119,7 @@ mod tests {
         // leading comment line; both must be tolerated.
         let payload = "#comment\r\nfile:///home/rob/a.txt\r\nfile:///tmp/b.png\r\n";
         assert_eq!(
-            parse_uri_list(payload),
+            parse_uri_list(payload).paths,
             vec![
                 PathBuf::from("/home/rob/a.txt"),
                 PathBuf::from("/tmp/b.png"),
@@ -3139,7 +3145,17 @@ mod tests {
             Some(PathBuf::from("/etc/hosts"))
         );
         assert_eq!(file_uri_to_path("https://example.com/x"), None);
-        assert!(parse_uri_list("https://example.com/x\n\n").is_empty());
+        assert!(parse_uri_list("https://example.com/x\n\n").paths.is_empty());
+    }
+
+    #[test]
+    fn keeps_web_addresses_apart_from_files() {
+        // A link or an image dragged out of a web browser.
+        let data = parse_uri_list("https://example.com/a.png\r\nfile:///tmp/b.png\r\n");
+        assert_eq!(data.urls, ["https://example.com/a.png"]);
+        assert_eq!(data.paths, [PathBuf::from("/tmp/b.png")]);
+        // A `file:` URI that names no path is neither.
+        assert!(parse_uri_list("file:relative").is_empty());
     }
 
     #[test]
@@ -3171,7 +3187,7 @@ mod tests {
             PathBuf::from("/tmp/with space & symbols#1.txt"),
             PathBuf::from("/home/rob/Bilder/Größe.png"),
         ];
-        assert_eq!(parse_uri_list(&paths_to_uri_list(&paths)), paths);
+        assert_eq!(parse_uri_list(&paths_to_uri_list(&paths)).paths, paths);
     }
 
     #[test]

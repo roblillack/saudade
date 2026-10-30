@@ -59,6 +59,8 @@ mod widgets;
 #[cfg(windows)]
 mod win32_dpi;
 #[cfg(windows)]
+mod win32_drop;
+#[cfg(windows)]
 mod win32_fullscreen;
 #[cfg(windows)]
 mod win32_layered;
@@ -71,7 +73,9 @@ pub use accel::{Accel, AccelMods, ModifierScheme};
 pub use app::{App, WindowConfig};
 pub use background::{BackgroundPattern, PATTERN_COLORS};
 pub use chrome::{WindowChrome, WindowFrame};
-pub use event::{Cursor, DragData, Event, EventCtx, Key, Modifiers, MouseButton, NamedKey};
+pub use event::{
+    Cursor, DragData, DraggedFile, Event, EventCtx, Key, Modifiers, MouseButton, NamedKey,
+};
 pub use font::{Font, FontFamily, FontSet, FontStyle};
 pub use geometry::{Color, Point, Rect, Size};
 pub use painter::{Frame, Merged, Painter, Ring, RoundedBand};

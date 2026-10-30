@@ -308,6 +308,11 @@ struct AppHandler {
     /// `true` once we've emitted `DragEnter` for the current hover, so we don't
     /// re-announce it every idle iteration while the drag lingers.
     drag_active: bool,
+    /// Windows: the main window's own drop target, which reads more of a drag
+    /// than winit's and where it is (see [`crate::win32_drop`]). Its drags are
+    /// taken up in `about_to_wait`, like winit's file drags.
+    #[cfg(windows)]
+    os_drags: Option<Rc<crate::win32_drop::Drags>>,
     /// Tracks a key press a widget asked to swallow until release (via
     /// [`EventCtx::swallow_key_until_release`]).
     swallow: KeySwallow,
@@ -431,6 +436,8 @@ impl AppHandler {
             drag_hovered: Vec::new(),
             drag_dropped: Vec::new(),
             drag_active: false,
+            #[cfg(windows)]
+            os_drags: None,
             swallow: KeySwallow::default(),
         }
     }
@@ -459,11 +466,23 @@ impl ApplicationHandler for AppHandler {
         if let Some(min) = self.window_config.min_size {
             attrs = attrs.with_min_inner_size(self.to_platform(min));
         }
+        // Windows: saudade's drop target in place of winit's, which reads only
+        // file paths. A window takes one target, so winit's is turned off.
+        #[cfg(windows)]
+        let own_drop_target = crate::win32_drop::init_ole();
+        #[cfg(windows)]
+        {
+            use winit::platform::windows::WindowAttributesExtWindows;
+            attrs = attrs.with_drag_and_drop(!own_drop_target);
+        }
         let win = event_loop
             .create_window(attrs)
             .expect("saudade: failed to create window");
         #[cfg(windows)]
         {
+            if own_drop_target {
+                self.os_drags = crate::win32_drop::register(&win);
+            }
             crate::win32_dpi::watch_dpi_changes(&win);
             crate::win32_popup::dismiss_popups_on_frame_click(&win);
         }
@@ -525,6 +544,8 @@ impl ApplicationHandler for AppHandler {
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
         self.flush_file_drag(event_loop);
+        #[cfg(windows)]
+        self.flush_os_drags(event_loop);
         // Once the moves and resizes of this burst have all landed — a
         // Win+Shift+Arrow move between displays is several of them.
         #[cfg(windows)]
@@ -1040,9 +1061,49 @@ impl AppHandler {
         // A drop target may have called `accept_drop`, but the OS has already
         // committed to offering the file drag on the winit backends — we can't
         // refuse it the way Wayland can — so the flag is advisory here and the
-        // `Drop` is delivered regardless.
+        // `Drop` is delivered regardless. Windows' own drop target is the
+        // exception: `flush_os_drags` reads the flag off the returned context.
         let _ = ctx.accepts_drop;
         ctx
+    }
+
+    /// Dispatch the drags saudade's own drop target queued (see
+    /// [`crate::win32_drop`]), with the positions it reported, and tell it
+    /// whether a widget took each one. A drop where none did ends the drag
+    /// instead, as on Wayland.
+    #[cfg(windows)]
+    fn flush_os_drags(&mut self, event_loop: &ActiveEventLoop) {
+        use crate::win32_drop::Drag;
+        let Some(drags) = self.os_drags.clone() else {
+            return;
+        };
+        for drag in drags.take() {
+            let (scale, content) = (self.scale, self.root.bounds().into());
+            let (origin_x, origin_y) = origin(content, scale, self.physical);
+            let at = |p| physical_to_logical(p, scale, origin_x, origin_y);
+            match drag {
+                Drag::Enter(p) => {
+                    let ctx = self.dispatch(&Event::DragEnter { pos: at(p) }, event_loop);
+                    drags.set_accepted(Some(ctx.accepts_drop));
+                }
+                Drag::Move(p) => {
+                    let ctx = self.dispatch(&Event::DragMove { pos: at(p) }, event_loop);
+                    drags.set_accepted(Some(ctx.accepts_drop));
+                }
+                Drag::Leave => {
+                    drags.set_accepted(None);
+                    self.dispatch(&Event::DragLeave, event_loop);
+                }
+                Drag::Drop(p, data) => {
+                    let event = match drags.accepted() {
+                        Some(false) => Event::DragLeave,
+                        _ => Event::Drop { pos: at(p), data },
+                    };
+                    drags.set_accepted(None);
+                    self.dispatch(&event, event_loop);
+                }
+            }
+        }
     }
 
     /// Turn the file paths buffered from `HoveredFile` / `DroppedFile` events
