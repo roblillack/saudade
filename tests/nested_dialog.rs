@@ -13,20 +13,23 @@ use saudade::{
 
 const PARENT: Rect = Rect::new(0, 0, 400, 320);
 
-/// A custom dialog whose content holds a message box, shared so the test can
-/// show it, both open.
-fn nested_dialogs() -> (Modal, Rc<RefCell<Dialog>>) {
+/// A window with a custom dialog open whose content holds a message box, both
+/// shared so the test can show them, both open.
+fn nested_dialogs() -> (Column, Rc<RefCell<Modal>>, Rc<RefCell<Dialog>>) {
     let inner = Rc::new(RefCell::new(Dialog::new()));
     let body = Column::new().add_overlay(Shared(inner.clone()));
-    let mut outer = Modal::new();
-    outer.layout(PARENT); // establish parent bounds
-    outer.show("Outer", Size::new(240, 160), Box::new(body));
-    outer.layout(PARENT); // lay the content out
+    let outer = Rc::new(RefCell::new(Modal::new()));
+    let mut root = Column::new().add_overlay(Shared(outer.clone()));
+    root.layout(PARENT); // establish parent bounds
+    outer
+        .borrow_mut()
+        .show("Outer", Size::new(240, 160), Box::new(body));
+    root.layout(PARENT); // lay the content out
     inner
         .borrow_mut()
         .show_info("Inner", "Shown over the outer dialog.");
-    outer.layout(PARENT);
-    (outer, inner)
+    root.layout(PARENT);
+    (root, outer, inner)
 }
 
 fn escape() -> Event {
@@ -36,9 +39,9 @@ fn escape() -> Event {
     }
 }
 
-fn dialogs(outer: &Modal) -> usize {
+fn dialogs(root: &Column) -> usize {
     let mut popups = Vec::new();
-    outer.collect_popups(&mut popups);
+    root.collect_popups(&mut popups);
     popups
         .iter()
         .filter(|p| p.kind == PopupKind::Dialog)
@@ -47,23 +50,30 @@ fn dialogs(outer: &Modal) -> usize {
 
 #[test]
 fn escape_closes_only_the_dialog_on_top() {
-    let (mut outer, inner) = nested_dialogs();
+    let (mut root, outer, inner) = nested_dialogs();
     let backend = MockBackend::new(PARENT.w, PARENT.h);
-    assert_eq!(dialogs(&outer), 2);
+    // The message box opens once a paint has measured its message — in the
+    // outer dialog's pass, as that is where it is painted.
+    assert_eq!(dialogs(&root), 1);
+    backend.render(&mut root);
+    assert_eq!(dialogs(&root), 2);
 
-    backend.dispatch(&mut outer, &escape());
+    backend.dispatch(&mut root, &escape());
     assert!(!inner.borrow().is_open(), "Escape closes the message box");
-    assert!(outer.is_open(), "the dialog beneath stays open");
-    assert_eq!(dialogs(&outer), 1);
+    assert!(outer.borrow().is_open(), "the dialog beneath stays open");
+    assert_eq!(dialogs(&root), 1);
 
-    backend.dispatch(&mut outer, &escape());
-    assert!(!outer.is_open(), "a second Escape closes that one too");
+    backend.dispatch(&mut root, &escape());
+    assert!(
+        !outer.borrow().is_open(),
+        "a second Escape closes that one too"
+    );
 }
 
 /// Lets the test keep a handle on a dialog the widget tree owns.
-struct Shared(Rc<RefCell<Dialog>>);
+struct Shared<W>(Rc<RefCell<W>>);
 
-impl Widget for Shared {
+impl<W: Widget> Widget for Shared<W> {
     fn bounds(&self) -> Rect {
         self.0.borrow().bounds()
     }
