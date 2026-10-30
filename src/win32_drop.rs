@@ -470,7 +470,7 @@ fn format_etc(format: u16, index: i32, tymed: TYMED) -> FORMATETC {
     FORMATETC {
         cfFormat: format,
         ptd: ptr::null_mut(),
-        dwAspect: DVASPECT_CONTENT as u32,
+        dwAspect: DVASPECT_CONTENT,
         lindex: index,
         tymed: tymed as u32,
     }
