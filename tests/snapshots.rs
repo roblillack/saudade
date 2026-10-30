@@ -13,8 +13,8 @@ use common::{snapshot_at_all_scales, snapshot_framed_at_all_scales};
 use saudade::{
     Bevel, Button, Checkbox, Color, Column, Container, ContextMenu, Dialog, Dropdown, Event, Image,
     Key, Label, List, ListIcon, ListItem, Menu, MenuBar, MenuItem, ModifierScheme, Modifiers,
-    NamedKey, Orientation, Point, ProgressBar, Rect, Row, ScrollBar, Slider, TextEditor, TextInput,
-    Widget, WindowChrome,
+    MouseButton, NamedKey, NumberInput, Orientation, Point, ProgressBar, Rect, Row, ScrollBar,
+    Slider, SpinButton, TextEditor, TextInput, Widget, WindowChrome,
 };
 
 // ---------------------------------------------------------------- Bevel
@@ -1051,6 +1051,108 @@ fn text_input_selection() {
             Container::new(200, 32)
                 .with_background(Color::LIGHT_GRAY)
                 .add(input),
+        )
+    });
+}
+
+// ---------------------------------------------------------------- SpinButton
+
+fn left_press(x: i32, y: i32) -> Event {
+    Event::PointerDown {
+        pos: Point::new(x, y),
+        button: MouseButton::Left,
+        modifiers: Modifiers::default(),
+    }
+}
+
+/// A vertical pair, a horizontal one, and a disabled vertical one.
+#[test]
+fn spin_button() {
+    snapshot_at_all_scales("spin_button", 112, 40, || {
+        Box::new(
+            Container::new(112, 40)
+                .with_background(Color::LIGHT_GRAY)
+                .add(SpinButton::vertical(Rect::new(8, 8, 16, 24)))
+                .add(SpinButton::horizontal(Rect::new(32, 12, 32, 16)))
+                .add(SpinButton::vertical(Rect::new(72, 8, 16, 24)).with_enabled(false)),
+        )
+    });
+}
+
+/// The up arrow of the vertical pair and the right one of the horizontal pair
+/// held down: pushed in, their glyphs a pixel down and right.
+#[test]
+fn spin_button_pressed() {
+    use saudade::mock::MockBackend;
+    snapshot_at_all_scales("spin_button_pressed", 80, 40, || {
+        let backend = MockBackend::new(80, 40);
+        let mut vertical = SpinButton::vertical(Rect::new(8, 8, 16, 24));
+        backend.dispatch(&mut vertical, &left_press(16, 12));
+        let mut horizontal = SpinButton::horizontal(Rect::new(32, 12, 32, 16));
+        backend.dispatch(&mut horizontal, &left_press(56, 20));
+        Box::new(
+            Container::new(80, 40)
+                .with_background(Color::LIGHT_GRAY)
+                .add(vertical)
+                .add(horizontal),
+        )
+    });
+}
+
+// ---------------------------------------------------------------- NumberInput
+
+/// A whole number, and a negative one shown with two decimals.
+#[test]
+fn number_input() {
+    snapshot_at_all_scales("number_input", 200, 32, || {
+        Box::new(
+            Container::new(200, 32)
+                .with_background(Color::LIGHT_GRAY)
+                .add(
+                    NumberInput::new(Rect::new(8, 6, 80, 20))
+                        .with_range(0.0, 100.0)
+                        .with_value(42.0),
+                )
+                .add(
+                    NumberInput::new(Rect::new(104, 6, 88, 20))
+                        .with_range(-10.0, 10.0)
+                        .with_precision(2)
+                        .with_value(-3.5),
+                ),
+        )
+    });
+}
+
+/// Focused, caret on, with its lower arrow held down.
+#[test]
+fn number_input_focused() {
+    use saudade::mock::MockBackend;
+    snapshot_at_all_scales("number_input_focused", 104, 32, || {
+        let mut input = NumberInput::new(Rect::new(8, 6, 88, 20))
+            .with_step(0.5)
+            .with_precision(1)
+            .with_value(1.5);
+        input.set_focused(true);
+        MockBackend::new(104, 32).dispatch(&mut input, &left_press(88, 22));
+        Box::new(
+            Container::new(104, 32)
+                .with_background(Color::LIGHT_GRAY)
+                .add(input),
+        )
+    });
+}
+
+#[test]
+fn number_input_disabled() {
+    snapshot_at_all_scales("number_input_disabled", 104, 32, || {
+        Box::new(
+            Container::new(104, 32)
+                .with_background(Color::LIGHT_GRAY)
+                .add(
+                    NumberInput::new(Rect::new(8, 6, 88, 20))
+                        .with_value(12.0)
+                        .with_enabled(false),
+                ),
         )
     });
 }

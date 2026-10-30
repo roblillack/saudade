@@ -15,6 +15,17 @@ const BLINK_HALF_MS: u64 = 500;
 
 type ChangeHandler = Box<dyn FnMut(&mut EventCtx, &str)>;
 
+/// Everything an edit can change about a [`TextInput`]: its text, caret,
+/// selection, and how far it is scrolled. A field that only takes some texts —
+/// a [`NumberInput`](crate::widgets::NumberInput)'s — takes one of these before
+/// handing an edit on, and puts it back if the edit left text it doesn't take.
+pub(crate) struct EditState {
+    chars: Vec<char>,
+    cursor: usize,
+    selection_anchor: Option<usize>,
+    scroll_x: i32,
+}
+
 /// Single-line text input — sunken white field with proportional text, caret,
 /// range selection, clipboard, double-click word select / triple-click
 /// select-all and horizontal scrolling when the text doesn't fit. Companion
@@ -148,6 +159,23 @@ impl TextInput {
             self.last_click = None;
             self.click_count = 0;
         }
+    }
+
+    pub(crate) fn edit_state(&self) -> EditState {
+        EditState {
+            chars: self.chars.clone(),
+            cursor: self.cursor,
+            selection_anchor: self.selection_anchor,
+            scroll_x: self.scroll_x,
+        }
+    }
+
+    /// Undo whatever happened since `state` was taken. Fires no `on_change`.
+    pub(crate) fn restore_edit_state(&mut self, state: EditState) {
+        self.chars = state.chars;
+        self.cursor = state.cursor;
+        self.selection_anchor = state.selection_anchor;
+        self.scroll_x = state.scroll_x;
     }
 
     fn font_size_for(&self, theme: &Theme) -> f32 {

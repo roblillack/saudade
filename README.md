@@ -137,22 +137,22 @@ to an object-oriented UI framework.
 
 ## Module map
 
-| Module     | Contents                                                                                                                                                                                                                                                        |
-| ---------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| geometry   | `Point`, `Size`, `Rect`, `Color`                                                                                                                                                                                                                                |
-| event      | `Event`, `DragData`, `MouseButton`, `Key`, `NamedKey`, `Modifiers`, `Cursor`, `EventCtx`                                                                                                                                                                        |
-| accel      | `Accel`, `ModifierScheme` — menu shortcuts that read ⌘ on macOS and Ctrl elsewhere                                                                                                                                                                              |
-| theme      | `Theme`, default `Theme::windows_31()` palette                                                                                                                                                                                                                  |
-| background | `BackgroundPattern` — the pattern every window draws behind its widgets                                                                                                                                                                                         |
-| painter    | `Painter` — drawing primitives + Win 3.1 chrome helpers                                                                                                                                                                                                         |
-| svg        | `SvgImage`, `SvgPolygon`, `FillRule` + the `include_svg!` macro — compile-time vector icons                                                                                                                                                                     |
-| font       | `Font`, `FontSet`, `FontFamily`, `FontStyle` — system font lookup + glyph rasterization                                                                                                                                                                         |
-| widget     | `Widget` trait (paint / event / focus / overlay hooks)                                                                                                                                                                                                          |
-| widgets    | `Container`, `Column`, `Row`, `Label`, `FocusLabel`, `Button`, `Checkbox`, `Bevel`, `Image`, `MenuBar`, `Menu`, `MenuItem`, `ContextMenu`, `ScrollBar`, `Slider`, `ProgressBar`, `List`, `Dropdown`, `Modal`, `Dialog`, `FileDialog`, `TextInput`, `TextEditor` |
-| app        | `App`, `WindowConfig` — runtime entry point                                                                                                                                                                                                                     |
-| icon       | turns `WindowConfig::icon` into what each platform's title bar, taskbar or dock wants                                                                                                                                                                           |
-| mock       | `MockBackend`, `Snapshot`, `Desktop` — offscreen rendering to a pixel buffer / PNG                                                                                                                                                                              |
-| chrome     | `WindowChrome`, `WindowFrame` — Canoe-style title bar + frame for screenshots                                                                                                                                                                                   |
+| Module     | Contents                                                                                                                                                                                                                                                                                     |
+| ---------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| geometry   | `Point`, `Size`, `Rect`, `Color`                                                                                                                                                                                                                                                             |
+| event      | `Event`, `DragData`, `MouseButton`, `Key`, `NamedKey`, `Modifiers`, `Cursor`, `EventCtx`                                                                                                                                                                                                     |
+| accel      | `Accel`, `ModifierScheme` — menu shortcuts that read ⌘ on macOS and Ctrl elsewhere                                                                                                                                                                                                           |
+| theme      | `Theme`, default `Theme::windows_31()` palette                                                                                                                                                                                                                                               |
+| background | `BackgroundPattern` — the pattern every window draws behind its widgets                                                                                                                                                                                                                      |
+| painter    | `Painter` — drawing primitives + Win 3.1 chrome helpers                                                                                                                                                                                                                                      |
+| svg        | `SvgImage`, `SvgPolygon`, `FillRule` + the `include_svg!` macro — compile-time vector icons                                                                                                                                                                                                  |
+| font       | `Font`, `FontSet`, `FontFamily`, `FontStyle` — system font lookup + glyph rasterization                                                                                                                                                                                                      |
+| widget     | `Widget` trait (paint / event / focus / overlay hooks)                                                                                                                                                                                                                                       |
+| widgets    | `Container`, `Column`, `Row`, `Label`, `FocusLabel`, `Button`, `Checkbox`, `Bevel`, `Image`, `MenuBar`, `Menu`, `MenuItem`, `ContextMenu`, `ScrollBar`, `Slider`, `SpinButton`, `ProgressBar`, `List`, `Dropdown`, `Modal`, `Dialog`, `FileDialog`, `TextInput`, `NumberInput`, `TextEditor` |
+| app        | `App`, `WindowConfig` — runtime entry point                                                                                                                                                                                                                                                  |
+| icon       | turns `WindowConfig::icon` into what each platform's title bar, taskbar or dock wants                                                                                                                                                                                                        |
+| mock       | `MockBackend`, `Snapshot`, `Desktop` — offscreen rendering to a pixel buffer / PNG                                                                                                                                                                                                           |
+| chrome     | `WindowChrome`, `WindowFrame` — Canoe-style title bar + frame for screenshots                                                                                                                                                                                                                |
 
 Everything user-facing is re-exported from the crate root; you generally
 just `use saudade::*;`.
@@ -955,6 +955,35 @@ gauge or label bound to it updates as the user moves the thumb. Use
 `set_on_change` to install the handler after construction (when the slider is
 held behind an `Rc<RefCell<…>>`).
 
+### `SpinButton`
+
+A pair of arrow buttons that step something up or down: an up arrow over a down
+arrow, or a left arrow beside a right one. It holds no value of its own — it
+reports steps and leaves what a step means to its owner: a number, a date, the
+next entry of a list. For a number typed into a field, `NumberInput` builds one
+in already.
+
+```rust
+let paper = SpinButton::vertical(Rect::new(272, 16, 16, 24))
+    .on_step(|cx, steps| {
+        // +1 for the up / right arrow, -1 for the down / left one
+        cx.request_paint();
+    });
+let orientation = SpinButton::horizontal(Rect::new(256, 48, 32, 24));
+```
+
+| Input       | Effect                                              |
+| ----------- | --------------------------------------------------- |
+| click arrow | one step                                            |
+| hold arrow  | repeat the step, at the scrollbar arrows' pace      |
+| mouse wheel | one step per notch: up (or a swipe right) counts up |
+
+A quick turn of the wheel can bring several steps in one call, so scale by
+`steps` rather than assume ±1. Like `ScrollBar`, it takes no keyboard focus.
+To set one flush against a field of your own, as `NumberInput` does, let the
+field run two pixels on under the arrows: their border then is the field's right
+edge.
+
 ### `ProgressBar`
 
 A sunken white field that fills from the left with a solid grey bar in
@@ -1018,6 +1047,57 @@ field leaves Enter alone, so it reaches the container's default `Button`
 wedge at the bottom of the field marks where the caret will be once the
 focus comes back. As on `TextEditor`, `cut`, `copy`, `paste`, and
 `select_all` are there to call from menu items.
+
+### `NumberInput`
+
+A `TextInput` for a number, with a `SpinButton` pair along its right edge to
+step it. The number lies in a range, is shown with a fixed number of decimals —
+its precision — and moves by a step:
+
+```rust
+let margin = NumberInput::new(Rect::new(72, 120, 72, 24))
+    .with_range(0.0, 50.0)              // inclusive; unlimited by default
+    .with_step(0.5)                     // what one arrow click adds (default 1)
+    .with_precision(1)                  // decimals shown (default 0) — set it
+    .with_value(25.0)                   // before the value, which it rounds
+    .on_change(|cx, mm| {
+        // fires whenever the user changes the value
+        cx.request_paint();
+    });
+
+let mm: f64 = margin.value();
+```
+
+The field takes only text that reads as such a number, or as the start of one:
+digits, a `-` in front if the range reaches below zero, and a decimal point
+followed by no more digits than the precision allows. A keystroke or a paste
+that would leave anything else is dropped. A comma typed stands in for the
+decimal point, since that is what the keypad's decimal key types on many
+layouts.
+
+The value follows the text as it is typed: whenever the text reads as a number,
+the value is that number clamped to the range, and `on_change` fires. Enter, or
+leaving the field, rewrites the text to show the value at its precision —
+`250` becomes `100` in a field that stops at 100, and a field left empty shows
+its value again.
+
+The arrows, keys and wheel move the value from one multiple of the step to the
+next: with a step of 0.5, up from 1.3 goes to 1.5 and down to 1.0, and on from
+there by 0.5. A step lands on the precision too, so ten steps of 0.1 make
+exactly 1.
+
+| Input             | Effect                                               |
+| ----------------- | ---------------------------------------------------- |
+| click arrow       | step up / down                                       |
+| hold arrow        | repeat the step, at the scrollbar arrows' pace       |
+| ↑ / ↓             | step up / down                                       |
+| PageUp / PageDown | ten steps up / down                                  |
+| mouse wheel       | one step per notch, over the arrows or while focused |
+| anything else     | edits the text as in a `TextInput`                   |
+
+`on_change` never fires for `set_value`, `set_range`, `set_step` or
+`set_precision`, so inputs that update each other don't loop. The value is an
+`f64`; with no decimals, cast it to the integer type you need.
 
 ### `TextEditor`
 
@@ -1355,8 +1435,9 @@ and File → Save As.
 
 ### Disabled controls
 
-Every interactive widget — `Button`, `Checkbox`, `TextInput`, `TextEditor`,
-`Slider`, `List`, and `Dropdown` — carries an enabled flag. Construct with
+Every interactive widget — `Button`, `Checkbox`, `TextInput`, `NumberInput`,
+`TextEditor`, `Slider`, `SpinButton`, `List`, and `Dropdown` — carries an
+enabled flag. Construct with
 `.with_enabled(false)` or flip it at runtime with `set_enabled(bool)` (read it
 back with `is_enabled()`). A disabled control paints greyed (an engraved label
 on a button, greyed text elsewhere), refuses keyboard focus, and ignores every

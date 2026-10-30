@@ -17,9 +17,10 @@ const MIN_THUMB: i32 = 16;
 /// How long an arrow button must stay held before its line-step scroll begins
 /// to auto-repeat, and the steady interval between repeats once it does. These
 /// mirror a typical keyboard auto-repeat: a longer initial pause, then a
-/// regular stream of clicks for as long as the button is held.
-const REPEAT_DELAY: Duration = Duration::from_millis(300);
-const REPEAT_INTERVAL: Duration = Duration::from_millis(50);
+/// regular stream of clicks for as long as the button is held. A held
+/// [`SpinButton`](crate::widgets::SpinButton) arrow repeats at the same pace.
+pub(crate) const REPEAT_DELAY: Duration = Duration::from_millis(300);
+pub(crate) const REPEAT_INTERVAL: Duration = Duration::from_millis(50);
 
 /// State of an arrow button held down with the primary mouse button. While a
 /// button is held the bar paints it depressed and auto-repeats its scroll, the

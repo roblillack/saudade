@@ -10,6 +10,17 @@ While pre-1.0, the minor version is bumped for breaking changes.
 
 ## [Unreleased] - ReleaseDate
 
+### Added
+
+- `SpinButton`: a pair of arrow buttons, vertical (up / down) or horizontal
+  (left / right), that report steps for their owner to apply — a click is one,
+  holding an arrow repeats it at the scrollbar arrows' pace, and the wheel
+  steps once per notch.
+- `NumberInput`: a text field for a number, with spin buttons along its right
+  edge. It takes nothing but a number in its range, with no more decimals than
+  its precision. The arrows, Up / Down, Page Up / Page Down and the wheel move
+  it from one multiple of its step to the next.
+
 ### Changed
 
 - Windows: a dialog is now owned by the window it belongs to, like a native
