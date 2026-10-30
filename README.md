@@ -137,22 +137,22 @@ to an object-oriented UI framework.
 
 ## Module map
 
-| Module     | Contents                                                                                                                                                                                                                                                                                     |
-| ---------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| geometry   | `Point`, `Size`, `Rect`, `Color`                                                                                                                                                                                                                                                             |
-| event      | `Event`, `DragData`, `MouseButton`, `Key`, `NamedKey`, `Modifiers`, `Cursor`, `EventCtx`                                                                                                                                                                                                     |
-| accel      | `Accel`, `ModifierScheme` — menu shortcuts that read ⌘ on macOS and Ctrl elsewhere                                                                                                                                                                                                           |
-| theme      | `Theme`, default `Theme::windows_31()` palette                                                                                                                                                                                                                                               |
-| background | `BackgroundPattern` — the pattern every window draws behind its widgets                                                                                                                                                                                                                      |
-| painter    | `Painter` — drawing primitives + Win 3.1 chrome helpers                                                                                                                                                                                                                                      |
-| svg        | `SvgImage`, `SvgPolygon`, `FillRule` + the `include_svg!` macro — compile-time vector icons                                                                                                                                                                                                  |
-| font       | `Font`, `FontSet`, `FontFamily`, `FontStyle` — system font lookup + glyph rasterization                                                                                                                                                                                                      |
-| widget     | `Widget` trait (paint / event / focus / overlay hooks)                                                                                                                                                                                                                                       |
-| widgets    | `Container`, `Column`, `Row`, `Label`, `FocusLabel`, `Button`, `Checkbox`, `Bevel`, `Image`, `MenuBar`, `Menu`, `MenuItem`, `ContextMenu`, `ScrollBar`, `Slider`, `SpinButton`, `ProgressBar`, `List`, `Dropdown`, `Modal`, `Dialog`, `FileDialog`, `TextInput`, `NumberInput`, `TextEditor` |
-| app        | `App`, `WindowConfig` — runtime entry point                                                                                                                                                                                                                                                  |
-| icon       | turns `WindowConfig::icon` into what each platform's title bar, taskbar or dock wants                                                                                                                                                                                                        |
-| mock       | `MockBackend`, `Snapshot`, `Desktop` — offscreen rendering to a pixel buffer / PNG                                                                                                                                                                                                           |
-| chrome     | `WindowChrome`, `WindowFrame` — Canoe-style title bar + frame for screenshots                                                                                                                                                                                                                |
+| Module     | Contents                                                                                                                                                                                                                                                                                                    |
+| ---------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| geometry   | `Point`, `Size`, `Rect`, `Color`                                                                                                                                                                                                                                                                            |
+| event      | `Event`, `DragData`, `MouseButton`, `Key`, `NamedKey`, `Modifiers`, `Cursor`, `EventCtx`                                                                                                                                                                                                                    |
+| accel      | `Accel`, `ModifierScheme` — menu shortcuts that read ⌘ on macOS and Ctrl elsewhere                                                                                                                                                                                                                          |
+| theme      | `Theme`, default `Theme::windows_31()` palette                                                                                                                                                                                                                                                              |
+| background | `BackgroundPattern` — the pattern every window draws behind its widgets                                                                                                                                                                                                                                     |
+| painter    | `Painter` — drawing primitives + Win 3.1 chrome helpers                                                                                                                                                                                                                                                     |
+| svg        | `SvgImage`, `SvgPolygon`, `FillRule` + the `include_svg!` macro — compile-time vector icons                                                                                                                                                                                                                 |
+| font       | `Font`, `FontSet`, `FontFamily`, `FontStyle` — system font lookup + glyph rasterization                                                                                                                                                                                                                     |
+| widget     | `Widget` trait (paint / event / focus / overlay hooks)                                                                                                                                                                                                                                                      |
+| widgets    | `Container`, `Column`, `Row`, `Label`, `FocusLabel`, `Button`, `ButtonGroup`, `Checkbox`, `Bevel`, `Image`, `MenuBar`, `Menu`, `MenuItem`, `ContextMenu`, `ScrollBar`, `Slider`, `SpinButton`, `ProgressBar`, `List`, `Dropdown`, `Modal`, `Dialog`, `FileDialog`, `TextInput`, `NumberInput`, `TextEditor` |
+| app        | `App`, `WindowConfig` — runtime entry point                                                                                                                                                                                                                                                                 |
+| icon       | turns `WindowConfig::icon` into what each platform's title bar, taskbar or dock wants                                                                                                                                                                                                                       |
+| mock       | `MockBackend`, `Snapshot`, `Desktop` — offscreen rendering to a pixel buffer / PNG                                                                                                                                                                                                                          |
+| chrome     | `WindowChrome`, `WindowFrame` — Canoe-style title bar + frame for screenshots                                                                                                                                                                                                                               |
 
 Everything user-facing is re-exported from the crate root; you generally
 just `use saudade::*;`.
@@ -648,6 +648,50 @@ const UP: SvgImage = include_svg!("assets/icons/up.svg");
 Button::new(Rect::new(8, 8, 80, 24), "Up").with_icon(UP);
 Button::new(Rect::new(96, 8, 32, 24), "").with_icon(UP); // icon only
 ```
+
+### `ButtonGroup`
+
+A row (or column) of buttons joined into one control, of which one is
+selected at a time: a radio choice made of push buttons, for a page's
+orientation, a paragraph's alignment, a view mode. Each button shows a label,
+an icon, or both — a `GroupButton`, or just a `&str` for a label alone:
+
+```rust
+const PORTRAIT: SvgImage = include_svg!("examples/assets/icons/portrait.svg");
+const LANDSCAPE: SvgImage = include_svg!("examples/assets/icons/landscape.svg");
+
+let orientation = ButtonGroup::horizontal(Rect::new(104, 48, 184, 24))
+    .with_buttons([
+        GroupButton::new("Portrait").with_icon(PORTRAIT), // icon and label
+        GroupButton::new("Landscape").with_icon(LANDSCAPE),
+    ])
+    .on_change(|cx, index| {
+        // fires when the user selects a different button
+        cx.request_paint();
+    });
+
+let align = ButtonGroup::vertical(Rect::new(8, 8, 80, 70))
+    .with_buttons(["Left", "Center", "Right"])      // labels only
+    .with_selected(1);
+let view = ButtonGroup::horizontal(Rect::new(8, 8, 57, 24))
+    .with_buttons([GroupButton::icon(PORTRAIT), GroupButton::icon(LANDSCAPE)]);
+```
+
+The buttons share the group's rect evenly, and the borders between them. They
+wear the scrollbar arrows' lighter chrome, square-cornered so they join into
+one frame, and set their faces like a `Button`'s: in `theme.button_style`, the
+icon tinted with the label. The selected button stays pushed in, its face
+stippled with white the way a latched toolbar button's is. The first button
+starts out selected; `set_selected` picks another without firing `on_change`.
+
+| Input           | Effect                                           |
+| --------------- | ------------------------------------------------ |
+| click a button  | select it (on release, as a `Button` fires)      |
+| ← / ↑ and → / ↓ | select the previous / next button, while focused |
+| Home / End      | select the first / last button, while focused    |
+
+The group takes the focus as a whole, drawing the dotted focus rectangle inside
+the selected button, so a `FocusLabel` in front of it can jump there.
 
 ### `Checkbox`
 
@@ -1435,9 +1479,9 @@ and File → Save As.
 
 ### Disabled controls
 
-Every interactive widget — `Button`, `Checkbox`, `TextInput`, `NumberInput`,
-`TextEditor`, `Slider`, `SpinButton`, `List`, and `Dropdown` — carries an
-enabled flag. Construct with
+Every interactive widget — `Button`, `ButtonGroup`, `Checkbox`, `TextInput`,
+`NumberInput`, `TextEditor`, `Slider`, `SpinButton`, `List`, and `Dropdown` —
+carries an enabled flag. Construct with
 `.with_enabled(false)` or flip it at runtime with `set_enabled(bool)` (read it
 back with `is_enabled()`). A disabled control paints greyed (an engraved label
 on a button, greyed text elsewhere), refuses keyboard focus, and ignores every

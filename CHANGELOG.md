@@ -20,6 +20,9 @@ While pre-1.0, the minor version is bumped for breaking changes.
   edge. It takes nothing but a number in its range, with no more decimals than
   its precision. The arrows, Up / Down, Page Up / Page Down and the wheel move
   it from one multiple of its step to the next.
+- `ButtonGroup`: a row or column of joined buttons, one of them selected at a
+  time — a radio choice. Each button (a `GroupButton`) shows a label, an icon,
+  or both; the selected one stays pushed in with a stippled face.
 
 ### Changed
 

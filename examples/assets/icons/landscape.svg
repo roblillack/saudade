@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 12 12">
+  <!-- The page of portrait.svg turned on its side, 12 by 8, for a "landscape"
+       button: a 1px outline with two text rules, one color, cut out with the
+       even-odd rule. -->
+  <path fill-rule="evenodd" fill="#000000"
+        d="M0 2 H12 V10 H0 Z M1 3 V9 H11 V3 Z
+           M3 4 H9 V5 H3 Z M3 6 H7 V7 H3 Z"/>
+</svg>

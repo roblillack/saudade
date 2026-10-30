@@ -11,10 +11,10 @@ mod common;
 use common::{snapshot_at_all_scales, snapshot_framed_at_all_scales};
 
 use saudade::{
-    Bevel, Button, Checkbox, Color, Column, Container, ContextMenu, Dialog, Dropdown, Event, Image,
-    Key, Label, List, ListIcon, ListItem, Menu, MenuBar, MenuItem, ModifierScheme, Modifiers,
-    MouseButton, NamedKey, NumberInput, Orientation, Point, ProgressBar, Rect, Row, ScrollBar,
-    Slider, SpinButton, TextEditor, TextInput, Widget, WindowChrome,
+    Bevel, Button, ButtonGroup, Checkbox, Color, Column, Container, ContextMenu, Dialog, Dropdown,
+    Event, GroupButton, Image, Key, Label, List, ListIcon, ListItem, Menu, MenuBar, MenuItem,
+    ModifierScheme, Modifiers, MouseButton, NamedKey, NumberInput, Orientation, Point, ProgressBar,
+    Rect, Row, ScrollBar, Slider, SpinButton, TextEditor, TextInput, Widget, WindowChrome,
 };
 
 // ---------------------------------------------------------------- Bevel
@@ -115,6 +115,91 @@ fn button_icon() {
                     Button::new(Rect::new(136, 8, 96, 24), "Upload")
                         .with_icon(ICON)
                         .with_enabled(false),
+                ),
+        )
+    });
+}
+
+// ---------------------------------------------------------------- ButtonGroup
+
+const PORTRAIT: saudade::SvgImage = saudade::include_svg!("examples/assets/icons/portrait.svg");
+const LANDSCAPE: saudade::SvgImage = saudade::include_svg!("examples/assets/icons/landscape.svg");
+
+fn orientations() -> [GroupButton; 2] {
+    [
+        GroupButton::new("Portrait").with_icon(PORTRAIT),
+        GroupButton::new("Landscape").with_icon(LANDSCAPE),
+    ]
+}
+
+/// Labels only, the middle one selected; an icon and a label each; icons only,
+/// the second selected.
+#[test]
+fn button_group() {
+    snapshot_at_all_scales("button_group", 216, 104, || {
+        Box::new(
+            Container::new(216, 104)
+                .with_background(Color::LIGHT_GRAY)
+                .add(
+                    ButtonGroup::horizontal(Rect::new(8, 8, 200, 24))
+                        .with_buttons(["Left", "Center", "Right"])
+                        .with_selected(1),
+                )
+                .add(
+                    ButtonGroup::horizontal(Rect::new(8, 40, 200, 24)).with_buttons(orientations()),
+                )
+                .add(
+                    ButtonGroup::horizontal(Rect::new(8, 72, 57, 24))
+                        .with_buttons([GroupButton::icon(PORTRAIT), GroupButton::icon(LANDSCAPE)])
+                        .with_selected(1),
+                ),
+        )
+    });
+}
+
+/// Focused, with the mouse held down on a button that isn't the selected one:
+/// pushed in, but not latched.
+#[test]
+fn button_group_focused() {
+    use saudade::mock::MockBackend;
+    snapshot_at_all_scales("button_group_focused", 216, 40, || {
+        let mut group = ButtonGroup::horizontal(Rect::new(8, 8, 200, 24))
+            .with_buttons(["Left", "Center", "Right"]);
+        group.set_focused(true);
+        MockBackend::new(216, 40).dispatch(&mut group, &left_press(170, 20));
+        Box::new(
+            Container::new(216, 40)
+                .with_background(Color::LIGHT_GRAY)
+                .add(group),
+        )
+    });
+}
+
+#[test]
+fn button_group_disabled() {
+    snapshot_at_all_scales("button_group_disabled", 216, 40, || {
+        Box::new(
+            Container::new(216, 40)
+                .with_background(Color::LIGHT_GRAY)
+                .add(
+                    ButtonGroup::horizontal(Rect::new(8, 8, 200, 24))
+                        .with_buttons(orientations())
+                        .with_enabled(false),
+                ),
+        )
+    });
+}
+
+#[test]
+fn button_group_vertical() {
+    snapshot_at_all_scales("button_group_vertical", 112, 88, || {
+        Box::new(
+            Container::new(112, 88)
+                .with_background(Color::LIGHT_GRAY)
+                .add(
+                    ButtonGroup::vertical(Rect::new(8, 8, 96, 70))
+                        .with_buttons(["Top", "Middle", "Bottom"])
+                        .with_selected(2),
                 ),
         )
     });

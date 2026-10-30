@@ -1,5 +1,6 @@
 mod bevel;
 mod button;
+mod button_group;
 mod checkbox;
 mod column;
 mod container;
@@ -61,6 +62,7 @@ pub(crate) fn tab_action(event: &Event) -> Option<TabAction> {
 
 pub use bevel::Bevel;
 pub use button::Button;
+pub use button_group::{ButtonGroup, GroupButton};
 pub use checkbox::Checkbox;
 pub use column::Column;
 pub use container::Container;
