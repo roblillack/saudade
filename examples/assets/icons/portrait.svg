@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 12 12">
+  <!-- An upright page for a "portrait" button: a 1px outline, 8 by 12, with
+       three text rules. One color, cut out with the even-odd rule, so it can
+       be drawn tinted like any button icon. The 12-unit viewBox is the
+       button's icon box, which puts every edge on a whole pixel at 1.0x. -->
+  <path fill-rule="evenodd" fill="#000000"
+        d="M2 0 H10 V12 H2 Z M3 1 V11 H9 V1 Z
+           M4 3 H8 V4 H4 Z M4 5 H8 V6 H4 Z M4 7 H7 V8 H4 Z"/>
+</svg>

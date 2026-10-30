@@ -1358,6 +1358,13 @@ impl<'a> Painter<'a> {
     /// scrollbar track's "newsprint" pattern; at the default 1.0x it's a classic
     /// 1px black-on-gray checker.
     pub fn fill_checker(&mut self, rect: Rect, base: Color, fg: Color) {
+        self.fill_checker_cells(rect, base, fg, chrome_px(self.scale));
+    }
+
+    /// [`Self::fill_checker`] with cells `cell` device pixels square — for a
+    /// [`Self::crisp`] recipe, whose painter runs at 1.0 while a logical pixel
+    /// of chrome is still [`Frame::depth(1)`](Frame::depth) device pixels.
+    pub(crate) fn fill_checker_cells(&mut self, rect: Rect, base: Color, fg: Color, cell: i32) {
         self.fill_rect(rect, base);
         let x0 = self.origin_x + self.snap(rect.x);
         let y0 = self.origin_y + self.snap(rect.y);
@@ -1368,7 +1375,7 @@ impl<'a> Painter<'a> {
         let ys = y0.max(cy0);
         let xe = x1.min(cx1);
         let ye = y1.min(cy1);
-        let step = chrome_px(self.scale);
+        let step = cell.max(1);
         let fg = fg.0;
         for y in ys..ye {
             let ay = (y - self.origin_y).div_euclid(step);

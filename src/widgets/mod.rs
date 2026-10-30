@@ -1,5 +1,6 @@
 mod bevel;
 mod button;
+mod button_group;
 mod checkbox;
 mod column;
 mod container;
@@ -15,10 +16,12 @@ mod menu;
 mod menu_popup;
 pub(crate) mod mnemonic;
 mod modal;
+mod number_input;
 mod progress_bar;
 mod row;
 mod scrollbar;
 mod slider;
+mod spin_button;
 mod text_editor;
 mod text_input;
 
@@ -59,6 +62,7 @@ pub(crate) fn tab_action(event: &Event) -> Option<TabAction> {
 
 pub use bevel::Bevel;
 pub use button::Button;
+pub use button_group::{ButtonGroup, GroupButton};
 pub use checkbox::Checkbox;
 pub use column::Column;
 pub use container::Container;
@@ -72,9 +76,11 @@ pub use label::Label;
 pub use list::{List, ListIcon, ListItem};
 pub use menu::{Menu, MenuBar, MenuItem};
 pub use modal::Modal;
+pub use number_input::NumberInput;
 pub use progress_bar::ProgressBar;
 pub use row::Row;
 pub use scrollbar::{Orientation, SCROLLBAR_THICKNESS, ScrollBar};
 pub use slider::Slider;
+pub use spin_button::SpinButton;
 pub use text_editor::TextEditor;
 pub use text_input::TextInput;
