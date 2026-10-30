@@ -10,7 +10,21 @@ While pre-1.0, the minor version is bumped for breaking changes.
 
 ## [Unreleased] - ReleaseDate
 
+### Added
+
+- `Painter::wrap_text` and `wrap_text_styled` break text into the lines it
+  takes to fit a width, the way a `Label` wraps. (#89)
+
 ### Changed
+
+- `Dialog` word-wraps its message to the width of the box and grows in height
+  to fit it, so a long message no longer needs `\n`s to fit, and one of
+  several lines no longer leaves extra space above the buttons. Since that
+  takes a font, the box measures itself on the first paint after it is shown
+  and opens its window then. (#89)
+- `Label` keeps the spaces inside a line, may break a line after a hyphen or
+  dash joining two words, and breaks a word too wide for the box — after a `/`
+  or `\` if it has one — instead of cutting it off. (#89)
 
 - Windows: a dialog is now owned by the window it belongs to, like a native
   one. It opens centered over that window rather than wherever Windows puts a

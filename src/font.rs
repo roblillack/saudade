@@ -469,7 +469,7 @@ impl Font {
     /// Cached advance width of a single glyph at `size` pixels in `style`. The
     /// first call for a `(char, size, style)` triple asks fontdue; the rest are
     /// map lookups.
-    fn advance(&self, ch: char, size: f32, style: FontStyle) -> f32 {
+    pub(crate) fn advance(&self, ch: char, size: f32, style: FontStyle) -> f32 {
         let resolved = self.resolved(style);
         let key = (ch, size.to_bits(), resolved);
         if let Some(a) = self.advances.borrow().get(&key) {
