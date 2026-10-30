@@ -22,7 +22,9 @@ While pre-1.0, the minor version is bumped for breaking changes.
   it from one multiple of its step to the next.
 - `ButtonGroup`: a row or column of joined buttons, one of them selected at a
   time — a radio choice. Each button (a `GroupButton`) shows a label, an icon,
-  or both; the selected one stays pushed in with a stippled face.
+  or both; the selected one stays pushed in with a stippled face. The
+  `page_layout` example picks its orientation with one, next to `NumberInput`s
+  for its margins, scale and copies.
 
 ### Changed
 
