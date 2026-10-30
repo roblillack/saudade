@@ -177,7 +177,7 @@ pub fn window(initial_path: PathBuf) -> (WindowConfig, impl Widget) {
                 move |cx| {
                     dialog.borrow_mut().show_info(
                         "About Notepad",
-                        "notepad\n\nA saudade demonstration.\n\nBuilt on saudade — a\nminimal Win 3.1-styled\nGUI toolkit in Rust.",
+                        "notepad\n\nA saudade demonstration.\n\nBuilt on saudade — a minimal Win 3.1-styled GUI toolkit in Rust.",
                     );
                     cx.request_paint();
                 }
@@ -229,7 +229,7 @@ fn warn(
 }
 
 const UNIMPL: &str =
-    "This action is not implemented\nyet in saudade's notepad demo.\n\nClick OK to dismiss.";
+    "This action is not implemented yet in saudade's notepad demo.\n\nClick OK to dismiss.";
 
 /// Tiny adapter that lets us hold a `TextEditor` in a `Rc<RefCell>` while
 /// still satisfying the `Widget` trait. The menu callbacks clone the `Rc` so

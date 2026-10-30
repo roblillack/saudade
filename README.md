@@ -574,9 +574,11 @@ Label::new(Rect::new(10, 50, 120, 16), "Red").with_color(Color::RED);
 
 Text is multi-line and word-wrapped to the box automatically — no wrap
 points to specify by hand. Explicit `\n` characters always start a new line,
-and any line too wide for the box breaks at whitespace (a single word wider
-than the box overflows rather than being split mid-word). Lines stack at the
-font's natural line height.
+and any line too wide for the box breaks between words, or after a hyphen or
+dash joining two. A single word wider than the box is broken too, after a `/`
+or `\` if it has one, so a long path splits between its components. Spaces
+inside a line are kept as typed. Lines stack at the font's natural line
+height.
 
 ```rust
 Label::new(Rect::new(10, 10, 200, 60),
@@ -1398,11 +1400,15 @@ dialog.borrow_mut().show_error("Error", "The file could not be opened.");
 dialog.borrow_mut().show("Notice", "No icon on this one.", DialogIcon::None);
 ```
 
-The box keeps the classic width and grows only in height, so break long
-messages into lines with `\n` yourself — it does not word-wrap. `with_size`
-pins the box to a size of your choosing instead. OK, Enter, Space, Escape,
-and the window's close button all dismiss it, and `on_dismiss` runs
-whichever it was: the `picker` example closes its main window from there.
+The box keeps the classic width, word-wraps the message to it the way a
+`Label` wraps, and grows in height to fit the lines that takes — a `\n` is
+only needed to start a new paragraph. `with_size` pins the box to a size of
+your choosing instead; the message then wraps to that width and is cut off
+above the buttons if it doesn't fit. As its size depends on the font, the
+box measures itself on the first paint after it is shown, and its window
+opens then. OK, Enter, Space, Escape, and the window's close button all
+dismiss it, and `on_dismiss` runs whichever it was: the `picker` example
+closes its main window from there.
 
 `show_confirm` asks before something consequential: a warning icon, the
 message, and two buttons — Cancel, and one labeled as you choose, which
@@ -1411,7 +1417,7 @@ runs the handler.
 ```rust
 dialog.borrow_mut().show_confirm(
     "Delete file?",
-    "This permanently deletes the file.\nThis cannot be undone.",
+    "This permanently deletes the file. This cannot be undone.",
     "Delete",
     |cx| { /* delete it */ cx.request_paint(); },
 );
@@ -1613,7 +1619,13 @@ p.text(x, y, "Hello", 11.0, Color::BLACK);
 p.text_centered(rect, "OK", 11.0, Color::BLACK);
 
 let size = p.measure_text("Hello", 11.0);   // returns Size in logical px
+let lines = p.wrap_text(long_text, 11.0, 200); // lines no wider than 200 px
 ```
+
+`wrap_text` breaks text into lines the way a `Label` does: at every `\n`,
+then between words to fit the width, breaking a word only when it is too
+wide for a line of its own. The lines borrow from the text, ready to hand
+to `text` one below the other.
 
 `Painter::font()` returns the loaded font, if any. If no system font
 could be loaded, text calls become no-ops; layout code that depends on

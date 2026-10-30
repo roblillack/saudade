@@ -749,6 +749,26 @@ fn dialog_multiline() {
     });
 }
 
+/// A message too long for one line is word-wrapped to the box's width, and the
+/// box grows to fit the lines it takes — a path too long for a line of its own
+/// breaks between its components.
+#[test]
+fn dialog_wrapped() {
+    snapshot_at_all_scales("dialog_wrapped", 420, 240, || {
+        let mut dialog = Dialog::new();
+        dialog.show_error(
+            "Error",
+            "The document could not be saved, because the folder it belongs in \
+             has been moved or deleted: /home/alice/Documents/Correspondence/2026/Drafts\n\n\
+             Choose another folder and try again.",
+        );
+        let column = Column::new()
+            .with_background(Color::LIGHT_GRAY)
+            .add_overlay(dialog);
+        Box::new(column)
+    });
+}
+
 // ---------------------------------------------------------------- TextEditor
 
 /// TextEditor wraps an internal ScrollBar that's only sized via

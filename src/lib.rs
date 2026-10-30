@@ -64,6 +64,7 @@ mod win32_fullscreen;
 mod win32_layered;
 #[cfg(windows)]
 mod win32_popup;
+mod wrap;
 #[cfg(all(unix, not(target_os = "macos")))]
 mod x11;
 

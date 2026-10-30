@@ -1939,6 +1939,40 @@ impl<'a> Painter<'a> {
         Size::new(w.ceil() as i32, h.ceil() as i32)
     }
 
+    /// Word-wrap `text` into the lines it takes to draw it with
+    /// [`text`](Self::text) at `size` in a column `max_width` logical pixels
+    /// wide: no line [measures](Self::measure_text) wider than that, unless a
+    /// single character does. See
+    /// [`wrap_text_styled`](Self::wrap_text_styled) for where lines break.
+    pub fn wrap_text<'t>(&self, text: &'t str, size: f32, max_width: i32) -> Vec<&'t str> {
+        self.wrap_text_styled(text, size, max_width, FontFamily::Sans, FontStyle::Regular)
+    }
+
+    /// Word-wrap `text` as it would be drawn by
+    /// [`text_styled`](Self::text_styled) in the same family and style, into
+    /// lines no wider than `max_width` logical pixels.
+    ///
+    /// Every `\n` starts a new line. Otherwise a line breaks after the spaces
+    /// between two words, which are dropped there, or after a hyphen or dash
+    /// joining two words; the spaces inside a line, and a paragraph's
+    /// indentation, are kept. A word too wide for a line of its own is broken
+    /// where it has to be, after a `/` or `\` if it has one — between the
+    /// components of a path. A non-positive `max_width`, or a family without
+    /// a font, only splits the text at its newlines.
+    pub fn wrap_text_styled<'t>(
+        &self,
+        text: &'t str,
+        size: f32,
+        max_width: i32,
+        family: FontFamily,
+        style: FontStyle,
+    ) -> Vec<&'t str> {
+        match self.family_font(family) {
+            Some(font) => crate::wrap::wrap(text, max_width, |ch| font.advance(ch, size, style)),
+            None => crate::wrap::wrap(text, 0, |_| 0.0),
+        }
+    }
+
     /// Cumulative caret x-offsets for `text` drawn in `family` and `style` at
     /// `size` logical pixels — `out[i]` is the x where the caret sits before the
     /// i-th character, `out[len]` the end of the string. One O(n) pass over the
