@@ -1097,7 +1097,7 @@ focus comes back. As on `TextEditor`, `cut`, `copy`, `paste`, and
 
 A `TextInput` for a number, with a `SpinButton` pair along its right edge to
 step it. The number lies in a range, is shown with a fixed number of decimals —
-its precision — and moves by a step:
+its precision — and moves by a step. A unit can show inside the field:
 
 ```rust
 let margin = NumberInput::new(Rect::new(72, 120, 72, 24))
@@ -1105,6 +1105,7 @@ let margin = NumberInput::new(Rect::new(72, 120, 72, 24))
     .with_step(0.5)                     // what one arrow click adds (default 1)
     .with_precision(1)                  // decimals shown (default 0) — set it
     .with_value(25.0)                   // before the value, which it rounds
+    .with_unit("mm")                    // grey, next to the arrows (default none)
     .on_change(|cx, mm| {
         // fires whenever the user changes the value
         cx.request_paint();
@@ -1118,7 +1119,13 @@ digits, a `-` in front if the range reaches below zero, and a decimal point
 followed by no more digits than the precision allows. A keystroke or a paste
 that would leave anything else is dropped. A comma typed stands in for the
 decimal point, since that is what the keypad's decimal key types on many
-layouts.
+layouts. The unit is only shown: the number keeps clear of it, but it can't be
+typed over or selected, and the value doesn't include it.
+
+Taking the focus selects the whole number — whether by Tab, a `FocusLabel`'s
+mnemonic, or a click in the text — so typing replaces it right away; a click in
+a field that already has the focus places the caret. Unlike a `TextInput`, the
+field shows neither a caret nor a selection while it doesn't have the focus.
 
 The value follows the text as it is typed: whenever the text reads as a number,
 the value is that number clamped to the range, and `on_change` fires. Enter, or

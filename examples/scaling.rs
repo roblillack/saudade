@@ -589,10 +589,12 @@ fn build_sample() -> Vec<Box<dyn Widget>> {
         Box::new(Label::new(Rect::new(10, 6, 114, 14), "Preview").with_size(11.0)),
         Box::new(TextInput::new(Rect::new(10, 24, 114, 18)).with_text("Type here")),
         // Its arrows are two light buttons sharing a border, and their glyphs
-        // sit in halves shorter than the scrollbar's buttons.
+        // sit in halves shorter than the scrollbar's buttons. The unit is grey
+        // text set against them.
         Box::new(
             NumberInput::new(Rect::new(10, 48, 114, 20))
                 .with_precision(2)
+                .with_unit("cm")
                 .with_value(2.5),
         ),
         Box::new(

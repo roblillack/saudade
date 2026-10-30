@@ -16,6 +16,9 @@ const SPIN_W: i32 = SCROLLBAR_THICKNESS;
 const MAX_PRECISION: usize = 15;
 /// Steps Page Up / Page Down take at once.
 const PAGE_STEPS: i32 = 10;
+/// Logical pixels from the field's border to where its text starts, which
+/// the unit keeps from the arrows and the text from the unit.
+const UNIT_PAD: i32 = 4;
 
 /// A text field for a number, with spin buttons to step it: the sunken field
 /// of a [`TextInput`] with an up / down [`SpinButton`] pair along its right
@@ -24,11 +27,19 @@ const PAGE_STEPS: i32 = 10;
 /// The number lies in an inclusive [range](Self::set_range), is shown with a
 /// fixed number of decimals, its [precision](Self::set_precision), and the
 /// arrows move it from one multiple of its [step](Self::set_step) to the next.
-/// The field only takes text that
-/// reads as such a number, or as the start of one: digits, one `-` in front if
-/// the range reaches below zero, and a decimal point followed by no more
-/// digits than the precision allows. A keystroke or a paste that would leave
-/// anything else is dropped. A comma typed stands in for the decimal point.
+/// An optional [unit](Self::set_unit) — `"mm"`, `"%"` — shows in grey at the
+/// right end of the field.
+///
+/// The field only takes text that reads as such a number, or as the start of
+/// one: digits, one `-` in front if the range reaches below zero, and a
+/// decimal point followed by no more digits than the precision allows. A
+/// keystroke or a paste that would leave anything else is dropped. A comma
+/// typed stands in for the decimal point.
+///
+/// Taking the focus selects the whole number, however the focus comes — Tab, a
+/// mnemonic, or a click in the text — so typing replaces it straight away; a
+/// click in a field that already has the focus places the caret. Without the
+/// focus the field shows neither a caret nor a selection.
 ///
 /// The value follows the text as it is typed: whenever the text reads as a
 /// number, the value is that number, clamped to the range, and
@@ -44,6 +55,8 @@ pub struct NumberInput {
     max: f64,
     step: f64,
     precision: usize,
+    /// Shown after the number, inside the field; empty for none.
+    unit: String,
     on_change: Option<ChangeHandler>,
 }
 
@@ -53,15 +66,35 @@ impl NumberInput {
     pub fn new(rect: Rect) -> Self {
         Self {
             rect,
-            field: TextInput::new(field_rect(rect)).with_text("0"),
+            field: TextInput::new(field_rect(rect))
+                .with_text("0")
+                .without_unfocused_marks(),
             spin: SpinButton::vertical(spin_rect(rect)),
             value: 0.0,
             min: f64::MIN,
             max: f64::MAX,
             step: 1.0,
             precision: 0,
+            unit: String::new(),
             on_change: None,
         }
+    }
+
+    pub fn with_unit(mut self, unit: impl Into<String>) -> Self {
+        self.set_unit(unit);
+        self
+    }
+
+    pub fn unit(&self) -> &str {
+        &self.unit
+    }
+
+    /// Show `unit` — `"mm"`, `"%"`, `"pt"` — in grey at the right end of the
+    /// field, next to the arrows; the number keeps clear of it. Empty (the
+    /// default) shows none. It is only shown, not part of the text: it can't
+    /// be typed over or selected, and the value doesn't include it.
+    pub fn set_unit(&mut self, unit: impl Into<String>) {
+        self.unit = unit.into();
     }
 
     pub fn with_value(mut self, value: f64) -> Self {
@@ -334,9 +367,43 @@ impl Widget for NumberInput {
     }
 
     fn paint(&mut self, painter: &mut Painter, theme: &Theme) {
+        let size = theme.font_size;
+        let unit_w = if self.unit.is_empty() {
+            0
+        } else {
+            painter.measure_text(&self.unit, size).w
+        };
+        // The text keeps clear of the unit by the room it keeps from the
+        // field's left border.
+        let reserved = if unit_w > 0 { unit_w + UNIT_PAD } else { 0 };
+        self.field.set_reserved_right(reserved);
+        self.field.paint(painter, theme);
+
+        let spin = spin_rect(self.rect);
+        if unit_w > 0 {
+            // As far in from the arrows as the text is from the left border,
+            // on the text's own line.
+            let inner = Rect::new(
+                self.rect.x + 2,
+                self.rect.y + 2,
+                (spin.x - self.rect.x - 2).max(0),
+                (self.rect.h - 4).max(0),
+            );
+            let h = painter.measure_text("Ag", size).h;
+            let y = self.rect.y + ((self.rect.h - h) / 2).max(0);
+            let saved = painter.push_clip(inner);
+            painter.text(
+                spin.x - (UNIT_PAD - 1) - unit_w,
+                y,
+                &self.unit,
+                size,
+                theme.disabled_text,
+            );
+            painter.restore_clip(saved);
+        }
+
         // The buttons go over the right end of the field, the way a
         // dropdown's arrow button sits in its field.
-        self.field.paint(painter, theme);
         self.spin.paint(painter, theme);
     }
 
@@ -425,8 +492,16 @@ impl Widget for NumberInput {
     }
 
     fn set_focused(&mut self, focused: bool) {
+        let gained = focused && !self.field.is_focused();
         self.field.set_focused(focused);
-        if !focused {
+        if gained {
+            // Select it all, so typing replaces it. A click in the text that
+            // brought the focus has placed the caret and started a selection
+            // drag by now; ending the drag keeps the click's release, and any
+            // jitter before it, from shrinking the selection again.
+            self.field.select_all();
+            self.field.end_drag();
+        } else if !focused {
             self.show_value();
         }
     }
@@ -509,6 +584,61 @@ mod tests {
                 delta_y: -WHEEL_LINES_PER_DETENT,
             },
         );
+    }
+
+    fn pointer(input: &mut NumberInput, event: fn(Point) -> Event, x: i32) {
+        send(input, event(Point::new(x, 12)));
+    }
+
+    fn down(pos: Point) -> Event {
+        Event::PointerDown {
+            pos,
+            button: MouseButton::Left,
+            modifiers: Modifiers::default(),
+        }
+    }
+
+    fn up(pos: Point) -> Event {
+        Event::PointerUp {
+            pos,
+            button: MouseButton::Left,
+            modifiers: Modifiers::default(),
+        }
+    }
+
+    fn moved(pos: Point) -> Event {
+        Event::PointerMove { pos }
+    }
+
+    #[test]
+    fn taking_the_focus_selects_the_number() {
+        let mut input = NumberInput::new(RECT).with_value(42.0);
+        input.set_focused(true);
+        type_text(&mut input, "7");
+        assert_eq!(text(&input), "7");
+    }
+
+    #[test]
+    fn a_click_that_brings_the_focus_selects_the_number() {
+        let mut input = NumberInput::new(RECT).with_value(42.0);
+        // The press lands first; the container hands over the focus after it.
+        pointer(&mut input, down, 10);
+        input.set_focused(true);
+        pointer(&mut input, moved, 30);
+        pointer(&mut input, up, 30);
+        type_text(&mut input, "5");
+        assert_eq!(text(&input), "5");
+    }
+
+    #[test]
+    fn a_click_in_a_focused_field_places_the_caret() {
+        let mut input = NumberInput::new(RECT).with_value(42.0);
+        input.set_focused(true);
+        // Nothing has been painted, so every x maps to the start of the text.
+        pointer(&mut input, down, 10);
+        pointer(&mut input, up, 10);
+        type_text(&mut input, "1");
+        assert_eq!(text(&input), "142");
     }
 
     #[test]

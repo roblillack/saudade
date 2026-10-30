@@ -7,9 +7,11 @@
 //!   which is selected at a time;
 //! * the margins are [`NumberInput`]s in millimetres with one decimal, stepped
 //!   by half a millimetre; the scale goes in steps of 5 % and the number of
-//!   copies in whole numbers, each limited to its own range.
+//!   copies in whole numbers, each limited to its own range. The margins and
+//!   the scale show their unit inside the field.
 //!
-//! The number fields take nothing but numbers. Type into them, click or hold
+//! The number fields take nothing but numbers, and select theirs whenever they
+//! take the focus, so typing replaces it. Type into them, click or hold
 //! their arrows, press Up / Down or Page Up / Page Down, or turn the wheel over
 //! the arrows: the preview follows every change. The arrow keys also move the
 //! orientation along while it has the focus. Alt plus the underlined letter
@@ -115,11 +117,13 @@ pub fn window() -> (WindowConfig, impl Widget) {
             .with_range(0.0, 50.0)
             .with_step(0.5)
             .with_precision(1)
+            .with_unit("mm")
             .with_value(value)
             .on_change(move |_cx, mm| setup.borrow_mut().margins[side] = mm)
     };
 
-    let scale = NumberInput::new(Rect::new(72, 184, 64, 24))
+    let scale = NumberInput::new(Rect::new(72, 184, 72, 24))
+        .with_unit("%")
         .with_range(25.0, 400.0)
         .with_step(5.0)
         .with_value(100.0)
@@ -175,7 +179,7 @@ pub fn window() -> (WindowConfig, impl Widget) {
         .add(caption(16, 48, 80, "&Orientation:"))
         .add(orientation)
         .add(Bevel::etched_line(16, 86, 272))
-        .add(Label::new(Rect::new(16, 96, 272, 16), "Margins (mm)"))
+        .add(Label::new(Rect::new(16, 96, 272, 16), "Margins"))
         .add(caption(16, 120, 56, "&Top:"))
         .add(margin(72, 120, 0))
         .add(caption(160, 120, 56, "&Bottom:"))
@@ -186,7 +190,6 @@ pub fn window() -> (WindowConfig, impl Widget) {
         .add(margin(216, 152, 3))
         .add(caption(16, 184, 56, "&Scale:"))
         .add(scale)
-        .add(Label::new(Rect::new(140, 189, 16, 16), "%"))
         .add(caption(160, 184, 56, "&Copies:"))
         .add(copies)
         .add(Preview(setup.clone()))

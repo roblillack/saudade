@@ -1227,6 +1227,32 @@ fn number_input_focused() {
     });
 }
 
+/// Units in grey at the right end: unfocused, and focused with the number
+/// selected, the selection stopping short of the unit. The unfocused one had
+/// the focus, and with it everything selected, before losing it again — which
+/// leaves no grey selection band behind.
+#[test]
+fn number_input_unit() {
+    snapshot_at_all_scales("number_input_unit", 200, 32, || {
+        let mut mm = NumberInput::new(Rect::new(8, 6, 88, 20))
+            .with_precision(1)
+            .with_value(25.0)
+            .with_unit("mm");
+        mm.set_focused(true);
+        mm.set_focused(false);
+        let mut percent = NumberInput::new(Rect::new(104, 6, 88, 20))
+            .with_value(100.0)
+            .with_unit("%");
+        percent.set_focused(true);
+        Box::new(
+            Container::new(200, 32)
+                .with_background(Color::LIGHT_GRAY)
+                .add(mm)
+                .add(percent),
+        )
+    });
+}
+
 #[test]
 fn number_input_disabled() {
     snapshot_at_all_scales("number_input_disabled", 104, 32, || {

@@ -56,6 +56,12 @@ pub struct TextInput {
     blink_since: Instant,
     /// Cached on/off state of the focused caret. Updated by `Event::Tick`.
     blink_on: bool,
+    /// Whether the caret's place and the selection show without the focus:
+    /// the wedge under the text, and the selection band in its inactive grey.
+    unfocused_marks: bool,
+    /// Logical pixels at the right end of the field the text stays out of,
+    /// for a host that draws something there — a `NumberInput`'s unit.
+    reserved_right: i32,
 }
 
 impl TextInput {
@@ -78,7 +84,28 @@ impl TextInput {
             on_change: None,
             blink_since: Instant::now(),
             blink_on: true,
+            unfocused_marks: true,
+            reserved_right: 0,
         }
+    }
+
+    /// Show neither the caret's place nor the selection while the field has
+    /// no focus — for a field that sets both afresh whenever it takes the
+    /// focus, as a `NumberInput` selects its whole number.
+    pub(crate) fn without_unfocused_marks(mut self) -> Self {
+        self.unfocused_marks = false;
+        self
+    }
+
+    /// Keep the text out of the last `width` logical pixels of the field.
+    pub(crate) fn set_reserved_right(&mut self, width: i32) {
+        self.reserved_right = width.max(0);
+    }
+
+    /// Abandon a selection drag, so the pointer's moves and release leave the
+    /// selection be.
+    pub(crate) fn end_drag(&mut self) {
+        self.drag_active = false;
     }
 
     pub fn with_text(mut self, text: impl AsRef<str>) -> Self {
@@ -512,15 +539,18 @@ impl Widget for TextInput {
         painter.stroke_rect(self.rect, theme.border);
 
         self.rebuild_widths(painter, font_size);
-        let visible_w = (self.rect.w - PADDING_X * 2).max(0);
+        let visible_w = (self.rect.w - PADDING_X * 2 - self.reserved_right).max(0);
         self.adjust_scroll(visible_w);
 
         let text_x0 = self.rect.x + PADDING_X - self.scroll_x;
         let text_h = painter.measure_text("Ag", font_size).h;
         let text_y = self.rect.y + ((self.rect.h - text_h) / 2).max(0);
 
-        let inner = self.rect.inset(2);
-        let selection = self.selection_range();
+        let mut inner = self.rect.inset(2);
+        inner.w = (inner.w - self.reserved_right).max(0);
+        let selection = self
+            .selection_range()
+            .filter(|_| self.focused || self.unfocused_marks);
 
         // Clip text, selection band, and caret to the inner area so glyphs
         // don't leak past the field's chrome when the content is wider than
@@ -542,7 +572,8 @@ impl Widget for TextInput {
         // An unfocused field still draws its selection so the user can see
         // what's selected when keyboard focus is elsewhere — but in the
         // muted "inactive" palette (black-on-gray) rather than the active
-        // navy-on-white, matching CUA convention.
+        // navy-on-white, matching CUA convention. (Unless it was told to show
+        // no unfocused marks, in which case `selection` is already `None`.)
         let (sel_bg, sel_text) = if self.focused {
             (theme.highlight_bg, theme.highlight_text)
         } else {
@@ -580,7 +611,7 @@ impl Widget for TextInput {
             if self.blink_on {
                 painter.v_line(cx, inner.y, inner.h, theme.text);
             }
-        } else {
+        } else if self.unfocused_marks {
             // Unfocused: a small wedge at the bottom of the line marks
             // where the caret would land if the user clicked back in.
             draw_unfocused_caret(painter, cx, inner.bottom() - 2, theme.text);

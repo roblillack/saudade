@@ -19,7 +19,9 @@ While pre-1.0, the minor version is bumped for breaking changes.
 - `NumberInput`: a text field for a number, with spin buttons along its right
   edge. It takes nothing but a number in its range, with no more decimals than
   its precision. The arrows, Up / Down, Page Up / Page Down and the wheel move
-  it from one multiple of its step to the next.
+  it from one multiple of its step to the next. Taking the focus selects the
+  number, so typing replaces it, and an optional unit (`"mm"`, `"%"`) shows in
+  grey inside the field.
 - `ButtonGroup`: a row or column of joined buttons, one of them selected at a
   time — a radio choice. Each button (a `GroupButton`) shows a label, an icon,
   or both; the selected one stays pushed in with a stippled face. The
