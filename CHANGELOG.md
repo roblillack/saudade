@@ -45,6 +45,9 @@ While pre-1.0, the minor version is bumped for breaking changes.
   for its margins, scale and copies.
 - `Painter::wrap_text` and `wrap_text_styled` break text into the lines it
   takes to fit a width, the way a `Label` wraps. (#89)
+- Drops of links and of images out of a web browser, on Windows, Wayland and
+  X11: `DragData` gains `urls` and `files` next to `paths`.
+- Windows and X11: drags report where they are, and windows get `DragMove`s.
 
 ### Changed
 
@@ -67,6 +70,10 @@ While pre-1.0, the minor version is bumped for breaking changes.
 - `Label` keeps the spaces inside a line, may break a line after a hyphen or
   dash joining two words, and breaks a word too wide for the box — after a `/`
   or `\` if it has one — instead of cutting it off. (#89)
+- Windows and X11: the drag cursor follows `EventCtx::accept_drop`, as on
+  Wayland, and a drag released where no widget accepted it is not dropped.
+- `DragData` has two new public fields, so code that builds one from a struct
+  literal needs `..DragData::default()`.
 
 - Windows: a dialog is now owned by the window it belongs to, like a native
   one. It opens centered over that window rather than wherever Windows puts a

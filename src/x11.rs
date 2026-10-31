@@ -32,7 +32,8 @@
 //! off and then drops: [`display_dpi`] asks for it again.
 //!
 //! winit keeps its connection to the X server to itself, so all of this goes
-//! over one of our own, opened the first time it is needed.
+//! over one of our own, opened the first time it is needed — as does the
+//! drop target in `x11_drop`.
 
 use std::sync::OnceLock;
 
@@ -180,7 +181,7 @@ pub(crate) fn display_dpi(monitor: &MonitorHandle) -> Option<f32> {
 }
 
 /// Our connection to the X server, or `None` if there is none to be had.
-fn connection() -> Option<&'static RustConnection> {
+pub(crate) fn connection() -> Option<&'static RustConnection> {
     static CONNECTION: OnceLock<Option<RustConnection>> = OnceLock::new();
     CONNECTION
         .get_or_init(|| x11rb::connect(None).ok().map(|(conn, _screen)| conn))
@@ -188,7 +189,7 @@ fn connection() -> Option<&'static RustConnection> {
 }
 
 /// The X window behind a winit window.
-fn xid(win: &Window) -> Option<u32> {
+pub(crate) fn xid(win: &Window) -> Option<u32> {
     match win.window_handle().ok()?.as_raw() {
         RawWindowHandle::Xlib(handle) => u32::try_from(handle.window).ok(),
         RawWindowHandle::Xcb(handle) => Some(handle.window.get()),

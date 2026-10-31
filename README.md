@@ -37,7 +37,7 @@ Reference apps live under `examples/`. Run any of them with
 | --------------- | ------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `notepad`       | <img src="docs/screenshots/notepad.png" alt="The notepad example" width="300">             | Editor window with menu bar (`MenuBar`, `TextEditor`); File → Open / Save As drive a `FileDialog`. Also the one example that names a `WindowConfig::icon`, so it shows the desktop's own icon slot filled.                                                                                                                                                                                                                                                                                                                                                                                                                                               |
 | `filer`         | <img src="docs/screenshots/filer.png" alt="The filer example" width="300">                 | Filesystem browser using `List` with folder/file icons. Drag an entry out of the window to drop it onto another app (drag _source_ via `EventCtx::start_drag`; Wayland only).                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
-| `dnd`           | <img src="docs/screenshots/dnd.png" alt="The dnd example" width="300">                     | A drop zone that highlights while a file drag hovers and lists the paths dropped onto it. Demonstrates OS file drag-and-drop (`DragEnter` / `DragMove` / `DragLeave` / `Drop`) across macOS, Windows, X11, and Wayland.                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| `dnd`           | <img src="docs/screenshots/dnd.png" alt="The dnd example" width="300">                     | A drop zone that highlights while a drag hovers and shows what is dropped onto it, form by form: files by path, links, and files by their contents, with a thumbnail of a PNG image. Demonstrates OS drag-and-drop (`DragEnter` / `DragMove` / `DragLeave` / `Drop`) across macOS, Windows, X11, and Wayland.                                                                                                                                                                                                                                                                                                                                            |
 | `fullscreen`    | <img src="docs/screenshots/fullscreen.png" alt="The fullscreen example" width="300">       | Toggles the window in and out of fullscreen with a button, F, and Escape (`EventCtx::toggle_fullscreen` / `set_fullscreen`), showing the state `EventCtx::is_fullscreen` reports and the size the layout receives. Run it with `-- --fullscreen` to open fullscreen (`WindowConfig::fullscreen`).                                                                                                                                                                                                                                                                                                                                                        |
 | `picker`        | <img src="docs/screenshots/picker.png" alt="The picker example" width="300">               | Pick-an-item dialog: `List` + buttons + `Dialog`, with Tab/Shift+Tab focus cycling.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
 | `dialogs`       | <img src="docs/screenshots/dialogs.png" alt="The dialogs example" width="300">             | A launcher with one button per kind of dialog: message boxes (`Dialog::show_info` / `show_warning` / `show_error`, and `show` without an icon), a confirmation box (`Dialog::show_confirm`), and a custom `Modal` around an ordinary `Container` whose `Slider` previews its value in the launcher while open, commits on OK, and reverts on Cancel, Escape or the close button (`Widget::on_cancel`).                                                                                                                                                                                                                                                   |
@@ -140,7 +140,7 @@ to an object-oriented UI framework.
 | Module     | Contents                                                                                                                                                                                                                                                                                                    |
 | ---------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | geometry   | `Point`, `Size`, `Rect`, `Color`                                                                                                                                                                                                                                                                            |
-| event      | `Event`, `DragData`, `MouseButton`, `Key`, `NamedKey`, `Modifiers`, `Cursor`, `EventCtx`                                                                                                                                                                                                                    |
+| event      | `Event`, `DragData`, `DraggedFile`, `MouseButton`, `Key`, `NamedKey`, `Modifiers`, `Cursor`, `EventCtx`                                                                                                                                                                                                     |
 | accel      | `Accel`, `ModifierScheme` — menu shortcuts that read ⌘ on macOS and Ctrl elsewhere                                                                                                                                                                                                                          |
 | theme      | `Theme`, default `Theme::windows_31()` palette and its dark-mode counterpart, `Theme::windows_31_dark()`                                                                                                                                                                                                    |
 | background | `BackgroundPattern` — the pattern every window draws behind its widgets                                                                                                                                                                                                                                     |
@@ -200,17 +200,23 @@ pub enum Event {
     PointerUp    { pos: Point, button: MouseButton },
     PointerLeave,
     Scroll       { pos: Point, delta_x: f32, delta_y: f32 },
-    DragEnter    { pos: Point },              // a file drag entered the window
-    DragMove     { pos: Point },              // …and moved (Wayland only)
+    DragEnter    { pos: Point },              // a drag entered the window
+    DragMove     { pos: Point },              // …and moved (not macOS)
     DragLeave,                                // …and left without dropping
-    Drop         { pos: Point, data: DragData }, // files were dropped
+    Drop         { pos: Point, data: DragData }, // it was dropped
     KeyDown      { key: Key, modifiers: Modifiers },
     KeyUp        { key: Key, modifiers: Modifiers },
     Char         { ch: char, modifiers: Modifiers },
     Tick,        // ~60 Hz while any widget wants_ticks()
 }
 
-pub struct DragData { pub paths: Vec<PathBuf> }
+pub struct DragData {
+    pub paths: Vec<PathBuf>,        // files, by their path
+    pub files: Vec<DraggedFile>,    // files, by their contents (not macOS)
+    pub urls: Vec<String>,          // links (not macOS)
+}
+
+pub struct DraggedFile { pub name: String, pub contents: Vec<u8> }
 
 pub enum MouseButton { Left, Right, Middle }
 
@@ -234,7 +240,8 @@ including `Scroll` and the positional drag events (`DragEnter`, `DragMove`,
 for `PointerLeave`, `DragLeave`, and keyboard events.
 `Event::is_keyboard()` distinguishes the three keyboard variants.
 
-`Event` is `Clone` but not `Copy`: `Drop` owns a `DragData` (a `Vec` of paths).
+`Event` is `Clone` but not `Copy`: `Drop` owns a `DragData` (`Vec`s of paths,
+files and links).
 Dispatch always passes `&Event`, so this costs nothing on the hot path — only a
 widget that keeps a dropped payload pays for the clone.
 
@@ -256,16 +263,17 @@ ingest "\x01" for Ctrl+A; the matching `KeyDown` still fires.
 
 ### Drag and drop
 
-Saudade receives **file drops from the OS** on every backend — drag files from
-Finder / Explorer / your file manager onto a window and the runtime turns the
-drag into the same typed events everything else uses:
+Saudade receives **drops from the OS** on every backend — drag files from
+Finder / Explorer / your file manager, or a link or an image out of a web
+browser, onto a window and the runtime turns the drag into the same typed
+events everything else uses:
 
 | Event       | When                                           | Carries            |
 | ----------- | ---------------------------------------------- | ------------------ |
-| `DragEnter` | a file drag entered the window                 | `pos`              |
-| `DragMove`  | the drag moved (Wayland only)                  | `pos`              |
+| `DragEnter` | a drag entered the window                      | `pos`              |
+| `DragMove`  | the drag moved (not on macOS)                  | `pos`              |
 | `DragLeave` | the drag left / was cancelled without dropping | —                  |
-| `Drop`      | the files were released                        | `pos` + `DragData` |
+| `Drop`      | it was released                                | `pos` + `DragData` |
 
 A widget opts in by matching these in its `event` handler — there's no separate
 trait method. `DragEnter` / `DragMove` / `Drop` carry a `pos` and route to the
@@ -294,9 +302,11 @@ fn event(&mut self, event: &Event, ctx: &mut EventCtx) {
 }
 ```
 
-(On Wayland `accept_drop` accepts the drag offer per position; on the winit
-backends the OS has already committed to the drop, so it's advisory there but
-keeps drop targets portable.)
+(On Wayland and X11 `accept_drop` accepts the drag per position, and the
+source's cursor says so. On Windows the drag cursor follows it too, a move
+behind, as the OS asks before the widgets can be: a drop where no widget
+accepted the drag ends it with `DragLeave`. On macOS the OS has already
+committed to the drop, so it's advisory there but keeps drop targets portable.)
 
 The **payload only arrives with `Drop`**, never with `DragEnter` / `DragMove`:
 the platforms only let us read a drag's contents reliably once the user actually
@@ -304,17 +314,28 @@ drops (reading mid-hover can block on a source that withholds the data), so the
 enter/move events are a presence-and-position signal and `Drop` delivers the
 files.
 
-Two per-backend caveats:
+Three per-backend caveats:
 
-- **Position.** On Wayland the drag position is exact and `DragMove` tracks the
-  pointer continuously, so per-widget routing during a drag works. On the winit
-  backends (macOS, Windows, X11) winit reports no cursor position during a file
-  drag — `DragEnter` / `Drop` use the last in-window pointer location and there
-  is no `DragMove`, so treat the whole window as one drop zone there.
-- **Paths only, copy only.** A drop currently resolves to local file paths
-  (`text/uri-list` on Wayland; winit's `HoveredFile` / `DroppedFile`
-  elsewhere). On Wayland we always accept the _copy_ action, never move, so a
-  drop never makes the source delete the user's file.
+- **Position.** On Wayland, Windows and X11 the drag position is exact and
+  `DragMove` tracks the pointer continuously, so per-widget routing during a
+  drag works. On macOS winit reports no cursor position during a file drag —
+  `DragEnter` / `Drop` use the last in-window pointer location and there is no
+  `DragMove`, so treat the whole window as one drop zone there.
+- **What a drop carries.** `DragData` holds a drag in up to three forms: local
+  file `paths`, `files` by their contents (an image dragged out of a web
+  browser, an attachment out of a mail program), and `urls` (a link, or the
+  address of a dragged image). Windows reads all three through saudade's own
+  OLE drop target. Wayland and X11 read paths and links from `text/uri-list`
+  (or a browser's `text/x-moz-url` / `_NETSCAPE_URL`), and, for a drag with no
+  paths, a file's contents from an image type or `application/octet-stream`;
+  X11 does so through saudade's own XDND drop target, which the main window
+  names as its `XdndProxy`, and which also takes the messages of a source that
+  ignores the proxy (an XWayland compositor handing on a Wayland drag) off
+  winit's connection. macOS reads file paths only: winit's `HoveredFile` /
+  `DroppedFile`.
+- **Copy only.** saudade always takes the _copy_ action (or _link_, where an
+  X11 source asks for it or a Windows source offers nothing else), never move,
+  so a drop never makes the source delete the user's file.
 
 See `examples/dnd.rs` (`cargo run --example dnd`) for a working drop zone.
 

@@ -195,8 +195,8 @@ impl TextEditor {
         } else {
             out.extend(self.lines[start.0].chars().skip(start.1));
             out.push('\n');
-            for row in (start.0 + 1)..end.0 {
-                out.push_str(&self.lines[row]);
+            for line in &self.lines[start.0 + 1..end.0] {
+                out.push_str(line);
                 out.push('\n');
             }
             out.extend(self.lines[end.0].chars().take(end.1));

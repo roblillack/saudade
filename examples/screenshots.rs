@@ -30,8 +30,8 @@ use std::time::Duration;
 
 use saudade::mock::{Desktop, MockBackend, Snapshot};
 use saudade::{
-    DragData, Event, Font, Key, Modifiers, MouseButton, NamedKey, Point, PopupKind, Size, Widget,
-    WindowChrome, WindowConfig,
+    DragData, DraggedFile, Event, Font, Key, Modifiers, MouseButton, NamedKey, Point, PopupKind,
+    Size, Widget, WindowChrome, WindowConfig,
 };
 
 // Every example, as a module. Only its `window()` is called from here, which
@@ -123,13 +123,7 @@ fn main() {
         },
     );
     shoot(&out, "filer", filer::window(root.join("examples")), |_| {});
-    shoot(&out, "dnd", dnd::window(), |w| {
-        w.drop_files(&[
-            "/home/ada/Documents/notes.txt",
-            "/home/ada/Pictures/lisbon.jpg",
-            "/home/ada/Music/fado.flac",
-        ]);
-    });
+    shoot(&out, "dnd", dnd::window(), stage_dnd);
     shoot(&out, "fullscreen", fullscreen::window(false), |_| {});
     shoot(&out, "picker", picker::window(), |w| {
         w.ctrl_click(60, 76); // Capers
@@ -200,6 +194,54 @@ fn main() {
     let size = about.bounds();
     let config = WindowConfig::new("About Saudade", size.w, size.h);
     shoot(&out, "chrome", (config, about), |_| {});
+}
+
+fn stage_dnd(w: &mut Driver) {
+    // Every form a drop comes in at once: files out of a file manager, and an
+    // image out of a web browser, by its address and its contents.
+    let paths = ["/home/ada/Documents/notes.txt", "/home/ada/Music/fado.flac"];
+    w.drop(DragData {
+        paths: paths.map(PathBuf::from).to_vec(),
+        urls: vec!["https://example.com/photos/lisbon.jpg".into()],
+        files: vec![DraggedFile {
+            name: "lisbon.png".into(),
+            contents: sunset(),
+        }],
+    });
+}
+
+/// A sunset over the water, as the PNG a browser hands over for an image.
+fn sunset() -> Vec<u8> {
+    let (w, h, horizon) = (120, 80, 50);
+    let blend = |a: [u8; 3], b: [u8; 3], t: f32| -> [u8; 3] {
+        [0, 1, 2].map(|i| (a[i] as f32 + (b[i] as f32 - a[i] as f32) * t).round() as u8)
+    };
+    let mut pixels = Vec::with_capacity((w * h * 3) as usize);
+    for y in 0..h {
+        for x in 0..w {
+            let (dx, dy) = (x as f32 - 60.0, y as f32 - 47.0);
+            let px = if y < horizon && dx * dx + dy * dy < 15.0 * 15.0 {
+                [255, 226, 120]
+            } else if y < horizon {
+                blend([44, 42, 107], [255, 150, 80], y as f32 / horizon as f32)
+            } else if y % 3 == 0 && dx.abs() < 15.0 - (y - horizon) as f32 * 0.4 {
+                // The sun's reflection, broken up by the waves.
+                [255, 196, 110]
+            } else {
+                let t = (y - horizon) as f32 / (h - horizon) as f32;
+                blend([36, 84, 112], [14, 40, 64], t)
+            };
+            pixels.extend(px);
+        }
+    }
+    let mut out = Vec::new();
+    let mut encoder = png::Encoder::new(&mut out, w, h);
+    encoder.set_color(png::ColorType::Rgb);
+    encoder.set_depth(png::BitDepth::Eight);
+    let mut writer = encoder.write_header().expect("PNG header");
+    writer.write_image_data(&pixels).expect("PNG data");
+    writer.finish().expect("PNG end");
+    out
 }
 
 fn stage_temperature(w: &mut Driver) {
@@ -450,14 +492,11 @@ impl Driver<'_> {
         self.send(Event::Tick);
     }
 
-    /// Drop files from elsewhere onto the middle of the window.
-    fn drop_files(&mut self, paths: &[&str]) {
+    /// Drop `data` from elsewhere onto the middle of the window.
+    fn drop(&mut self, data: DragData) {
         let size = self.root.bounds();
         let pos = Point::new(size.w / 2, size.h / 2);
         self.send(Event::DragEnter { pos });
-        self.send(Event::Drop {
-            pos,
-            data: DragData::from_paths(paths.iter().map(PathBuf::from)),
-        });
+        self.send(Event::Drop { pos, data });
     }
 }

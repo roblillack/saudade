@@ -7,6 +7,8 @@ use winit::dpi::{LogicalSize, PhysicalPosition, PhysicalSize};
 use winit::event::{
     ElementState, InnerSizeWriter, MouseButton as WinitMouseButton, MouseScrollDelta, WindowEvent,
 };
+#[cfg(all(unix, not(target_os = "macos")))]
+use winit::event_loop::EventLoopProxy;
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{Key as WKey, ModifiersKeyState, NamedKey as WNamedKey};
 use winit::monitor::MonitorHandle;
@@ -40,6 +42,12 @@ use crate::present::{Alpha, Surface};
 use crate::svg::SvgImage;
 use crate::theme::Theme;
 use crate::widget::{PopupKind, PopupRequest, Widget};
+// The main window's own drop target, where saudade has one: see
+// `AppHandler::flush_os_drags`.
+#[cfg(windows)]
+use crate::win32_drop as os_drop;
+#[cfg(all(unix, not(target_os = "macos")))]
+use crate::x11_drop as os_drop;
 
 pub struct WindowConfig {
     pub title: String,
@@ -209,20 +217,25 @@ impl App {
 
     fn run_winit(self) {
         // The user events are the system appearance, for the platforms where
-        // winit doesn't report it itself.
-        let event_loop = EventLoop::<Appearance>::with_user_event()
+        // winit doesn't report it itself, and `None` from X11's drop target,
+        // which only wakes the loop to take up the drags it queued.
+        let event_loop = EventLoop::<Option<Appearance>>::with_user_event()
             .build()
             .expect("saudade: failed to create event loop");
         event_loop.set_control_flow(ControlFlow::Wait);
 
         let mut handler = AppHandler::new(self);
+        #[cfg(all(unix, not(target_os = "macos")))]
+        {
+            handler.drop_waker = Some(event_loop.create_proxy());
+        }
         // X11: ask the settings portal, before the window opens so it can open
         // in the right theme, and hear about every change after on the loop.
         #[cfg(all(unix, not(target_os = "macos")))]
         if handler.themes.follows_system() {
             let proxy = event_loop.create_proxy();
             let initial =
-                crate::portal::watch(move |appearance| proxy.send_event(appearance).is_ok());
+                crate::portal::watch(move |appearance| proxy.send_event(Some(appearance)).is_ok());
             if let Some(appearance) = initial {
                 handler.themes.follow(appearance);
             }
@@ -356,6 +369,15 @@ struct AppHandler {
     /// `true` once we've emitted `DragEnter` for the current hover, so we don't
     /// re-announce it every idle iteration while the drag lingers.
     drag_active: bool,
+    /// Windows and X11: the main window's own drop target, which reads more of
+    /// a drag than winit's and where it is (see `win32_drop` and `x11_drop`).
+    /// Its drags are taken up in `about_to_wait`, like winit's file drags.
+    #[cfg(any(windows, all(unix, not(target_os = "macos"))))]
+    os_drags: Option<Rc<os_drop::Drags>>,
+    /// X11: what the drop target's thread wakes the event loop with, to have
+    /// its drags taken up. Handed to it as the main window is created.
+    #[cfg(all(unix, not(target_os = "macos")))]
+    drop_waker: Option<EventLoopProxy<Option<Appearance>>>,
     /// Tracks a key press a widget asked to swallow until release (via
     /// [`EventCtx::swallow_key_until_release`]).
     swallow: KeySwallow,
@@ -479,12 +501,16 @@ impl AppHandler {
             drag_hovered: Vec::new(),
             drag_dropped: Vec::new(),
             drag_active: false,
+            #[cfg(any(windows, all(unix, not(target_os = "macos"))))]
+            os_drags: None,
+            #[cfg(all(unix, not(target_os = "macos")))]
+            drop_waker: None,
             swallow: KeySwallow::default(),
         }
     }
 }
 
-impl ApplicationHandler<Appearance> for AppHandler {
+impl ApplicationHandler<Option<Appearance>> for AppHandler {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if self.main_win.is_some() {
             return; // already initialized; ignore redundant resumes
@@ -508,13 +534,31 @@ impl ApplicationHandler<Appearance> for AppHandler {
         if let Some(min) = self.window_config.min_size {
             attrs = attrs.with_min_inner_size(self.to_platform(min));
         }
+        // Windows: saudade's drop target in place of winit's, which reads only
+        // file paths. A window takes one target, so winit's is turned off.
+        #[cfg(windows)]
+        let own_drop_target = crate::win32_drop::init_ole();
+        #[cfg(windows)]
+        {
+            use winit::platform::windows::WindowAttributesExtWindows;
+            attrs = attrs.with_drag_and_drop(!own_drop_target);
+        }
         let win = event_loop
             .create_window(attrs)
             .expect("saudade: failed to create window");
         #[cfg(windows)]
         {
+            if own_drop_target {
+                self.os_drags = crate::win32_drop::register(&win);
+            }
             crate::win32_dpi::watch_dpi_changes(&win);
             crate::win32_popup::dismiss_popups_on_frame_click(&win);
+        }
+        // X11: saudade's drop target in place of winit's, which reads only file
+        // paths.
+        #[cfg(all(unix, not(target_os = "macos")))]
+        if let Some(wake) = self.drop_waker.take() {
+            self.os_drags = crate::x11_drop::register(&win, wake);
         }
         if let Some(image) = self.window_config.icon.as_ref() {
             crate::icon::set_window_icon(&win, image);
@@ -584,12 +628,16 @@ impl ApplicationHandler<Appearance> for AppHandler {
     }
 
     /// The settings portal reported the system's appearance (X11).
-    fn user_event(&mut self, _event_loop: &ActiveEventLoop, appearance: Appearance) {
-        self.follow_system(appearance);
+    fn user_event(&mut self, _event_loop: &ActiveEventLoop, appearance: Option<Appearance>) {
+        if let Some(appearance) = appearance {
+            self.follow_system(appearance);
+        }
     }
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
         self.flush_file_drag(event_loop);
+        #[cfg(any(windows, all(unix, not(target_os = "macos"))))]
+        self.flush_os_drags(event_loop);
         // Once the moves and resizes of this burst have all landed — a
         // Win+Shift+Arrow move between displays is several of them.
         #[cfg(windows)]
@@ -1141,9 +1189,50 @@ impl AppHandler {
         // A drop target may have called `accept_drop`, but the OS has already
         // committed to offering the file drag on the winit backends — we can't
         // refuse it the way Wayland can — so the flag is advisory here and the
-        // `Drop` is delivered regardless.
+        // `Drop` is delivered regardless. saudade's own drop targets on Windows
+        // and X11 are the exception: `flush_os_drags` reads the flag off the
+        // returned context.
         let _ = ctx.accepts_drop;
         ctx
+    }
+
+    /// Dispatch the drags saudade's own drop target queued (see `win32_drop`
+    /// and `x11_drop`), with the positions it reported, and tell it whether a
+    /// widget took each one. A drop where none did ends the drag instead, as on
+    /// Wayland.
+    #[cfg(any(windows, all(unix, not(target_os = "macos"))))]
+    fn flush_os_drags(&mut self, event_loop: &ActiveEventLoop) {
+        use os_drop::Drag;
+        let Some(drags) = self.os_drags.clone() else {
+            return;
+        };
+        for drag in drags.take() {
+            let (scale, content) = (self.scale, self.root.bounds().into());
+            let (origin_x, origin_y) = origin(content, scale, self.physical);
+            let at = |p| physical_to_logical(p, scale, origin_x, origin_y);
+            match drag {
+                Drag::Enter(p) => {
+                    let ctx = self.dispatch(&Event::DragEnter { pos: at(p) }, event_loop);
+                    drags.set_accepted(Some(ctx.accepts_drop));
+                }
+                Drag::Move(p) => {
+                    let ctx = self.dispatch(&Event::DragMove { pos: at(p) }, event_loop);
+                    drags.set_accepted(Some(ctx.accepts_drop));
+                }
+                Drag::Leave => {
+                    drags.set_accepted(None);
+                    self.dispatch(&Event::DragLeave, event_loop);
+                }
+                Drag::Drop(p, data) => {
+                    let event = match drags.accepted() {
+                        Some(false) => Event::DragLeave,
+                        _ => Event::Drop { pos: at(p), data },
+                    };
+                    drags.set_accepted(None);
+                    self.dispatch(&event, event_loop);
+                }
+            }
+        }
     }
 
     /// Turn the file paths buffered from `HoveredFile` / `DroppedFile` events
