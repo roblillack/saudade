@@ -17,51 +17,53 @@ While pre-1.0, the minor version is bumped for breaking changes.
   flips it. The dark one is the new `Theme::windows_31_dark()`: the same
   chrome — black outlines, bevels lit from the top left — on a charcoal
   workspace, with dark-gray faces and light text. `App::with_dark_theme`
-  brings an app's own. The
-  appearance comes from winit on macOS and Windows, and from the freedesktop
-  settings portal's `color-scheme` on X11 and Wayland, read by a minimal D-Bus
-  client of saudade's own rather than a new dependency; without a portal, an
-  app stays light. `SAUDADE_THEME=dark` or `light` overrides the system,
-  title bars included where the platform draws them; `auto` follows it.
+  brings an app's own. The appearance comes from winit on macOS and Windows,
+  and from the freedesktop settings portal's `color-scheme` on X11 and
+  Wayland, read by a minimal D-Bus client of saudade's own rather than a new
+  dependency; without a portal, an app stays light. `SAUDADE_THEME=dark` or
+  `light` overrides the system, title bars included where the platform draws
+  them; `auto` follows it. (#70)
 - `Color::mix` blends two colors, for shades that should follow the theme
-  rather than be pinned.
+  rather than be pinned. (#70)
 - `ListItem::with_svg_glyph` shows a one-color mark in the row's text color.
   The `..` row of `FileDialog` and the `filer` example uses it, so its arrow
-  turns white on the selection band and stays visible on the dark theme.
+  turns white on the selection band and stays visible on the dark theme. (#70)
 - `SpinButton`: a pair of arrow buttons, vertical (up / down) or horizontal
   (left / right), that report steps for their owner to apply — a click is one,
   holding an arrow repeats it at the scrollbar arrows' pace, and the wheel
-  steps once per notch.
+  steps once per notch. (#90)
 - `NumberInput`: a text field for a number, with spin buttons along its right
   edge. It takes nothing but a number in its range, with no more decimals than
   its precision. The arrows, Up / Down, Page Up / Page Down and the wheel move
   it from one multiple of its step to the next. Taking the focus selects the
   number, so typing replaces it, and an optional unit (`"mm"`, `"%"`) shows in
-  grey inside the field.
+  grey inside the field. (#90)
 - `ButtonGroup`: a row or column of joined buttons, one of them selected at a
   time — a radio choice. Each button (a `GroupButton`) shows a label, an icon,
   or both; the selected one stays pushed in with a stippled face. The
   `page_layout` example picks its orientation with one, next to `NumberInput`s
-  for its margins, scale and copies.
+  for its margins, scale and copies. (#90)
 - `Painter::wrap_text` and `wrap_text_styled` break text into the lines it
   takes to fit a width, the way a `Label` wraps. (#89)
 - Drops of links and of images out of a web browser, on Windows, Wayland and
-  X11: `DragData` gains `urls` and `files` next to `paths`.
+  X11: `DragData` gains `urls` and `files` next to `paths`. (#91)
 - Windows and X11: drags report where they are, and windows get `DragMove`s.
+  (#91)
 
 ### Changed
 
 - `App::with_theme` now sets the theme for light mode only. An app that
   customizes it gets the stock dark theme in dark mode unless it passes one
   to `App::with_dark_theme` as well; passing the same theme to both keeps one
-  look whatever the system says.
+  look whatever the system says. (#70)
 - Text inputs, text editors, lists and dropdowns fill their fields with
   `theme.background` rather than a fixed white. The drop shadow under menus
   and dropdown lists, the default ink of the window background pattern, and
   the progress bar's fill now derive from the theme, so they come out the same
-  on the light theme and suit the dark one.
+  on the light theme and suit the dark one. (#70)
 - The examples take their colors from the theme, so they all go dark with the
   system — except `svg`, whose comparison is drawn for a white workspace.
+  (#70)
 - `Dialog` word-wraps its message to the width of the box and grows in height
   to fit it, so a long message no longer needs `\n`s to fit, and one of
   several lines no longer leaves extra space above the buttons. Since that
@@ -72,9 +74,9 @@ While pre-1.0, the minor version is bumped for breaking changes.
   or `\` if it has one — instead of cutting it off. (#89)
 - Windows and X11: the drag cursor follows `EventCtx::accept_drop`, as on
   Wayland, and a drag released where no widget accepted it is not dropped.
+  (#91)
 - `DragData` has two new public fields, so code that builds one from a struct
-  literal needs `..DragData::default()`.
-
+  literal needs `..DragData::default()`. (#91)
 - Windows: a dialog is now owned by the window it belongs to, like a native
   one. It opens centered over that window rather than wherever Windows puts a
   new window, stays above it, has no taskbar button of its own, and shows up

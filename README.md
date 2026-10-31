@@ -1153,6 +1153,11 @@ Editing works like the editor's, minus the vertical moves:
 | triple-click         | select everything                                 |
 | drag with left       | extend the selection                              |
 
+On macOS the chords are the Mac's own: ⌘ A / C / X / V, and ⌥ Option + ← / →
+to move by word. They follow a `ModifierScheme`, as menu accelerators do;
+`with_scheme` pins one instead of the platform's, for tests that must behave
+the same on every host.
+
 Text that doesn't fit scrolls sideways to keep the caret in view. The
 field leaves Enter alone, so it reaches the container's default `Button`
 — the usual way a dialog's text field submits. Without the focus, a small
@@ -1249,6 +1254,7 @@ Editing operations:
 | Delete            | deletes the next char or the selection     |
 | Enter             | splits the line (replacing the selection)  |
 | ← / →             | move cursor one character                  |
+| Ctrl + ← / →      | move cursor one word                       |
 | ↑ / ↓             | move cursor one line, clamping column      |
 | Home / End        | jump to line start / end                   |
 | PageUp / PageDown | jump by one viewport                       |
@@ -1259,6 +1265,10 @@ Editing operations:
 | Ctrl + V          | paste at the cursor (replaces selection)   |
 | left click        | place the cursor                           |
 | drag with left    | extend the selection                       |
+
+On macOS, ⌘ takes Ctrl's place for select all / copy / cut / paste, and
+⌥ Option for moving by word, as in a `TextInput`; `with_scheme` pins the
+`ModifierScheme` they follow.
 
 Selected text renders with `theme.highlight_bg` (navy) behind it and
 `theme.highlight_text` (white) on top. Multi-line selections show a
