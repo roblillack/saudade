@@ -2,16 +2,18 @@
 //!
 //! A *regular* top-level window paints a 1-bit texture behind the widget tree —
 //! the System 6 / Win 3.1 desktop look. Dialogs and modals (which the runtime
-//! renders in a separate "popup pass") deliberately stay plain white; only the
+//! renders in a separate "popup pass") deliberately stay plain; only the
 //! main window honors the [`BackgroundPattern`].
 //!
 //! The pattern + color are a property of the *window surface*, fixed for the
-//! life of the process. The default is a `superlight` forward-diagonal hatch;
-//! set `SAUDADE_WINDOW_PATTERN` and `SAUDADE_WINDOW_PATTERN_COLOR` to override
+//! life of the process. The default is a faint forward-diagonal hatch —
+//! `superlight` on the light theme, its counterpart on the dark one; set
+//! `SAUDADE_WINDOW_PATTERN` and `SAUDADE_WINDOW_PATTERN_COLOR` to override
 //! (see [`BackgroundState::from_env`]). The `patterns` example cycles them live
 //! for previewing.
 
 use crate::geometry::Color;
+use crate::theme::Theme;
 
 /// A fill pattern for the background of a regular top-level window.
 ///
@@ -97,13 +99,16 @@ pub fn pattern_color(name: &str) -> Option<Color> {
 /// tree. Fixed for the process: read once from the environment at startup.
 pub(crate) struct BackgroundState {
     pub pattern: BackgroundPattern,
-    pub color: Color,
+    /// The pattern's ink, if one was named. `None` takes the theme's own —
+    /// see [`Self::ink`].
+    pub color: Option<Color>,
 }
 
 impl BackgroundState {
     /// Resolve the pattern from `SAUDADE_WINDOW_PATTERN` and the color from
-    /// `SAUDADE_WINDOW_PATTERN_COLOR`, falling back to a `superlight` forward
-    /// diagonal. An unrecognized value is reported on stderr and ignored.
+    /// `SAUDADE_WINDOW_PATTERN_COLOR`, falling back to a forward diagonal in
+    /// the theme's faint default ink. An unrecognized value is reported on
+    /// stderr and ignored.
     pub fn from_env() -> Self {
         let pattern = match std::env::var("SAUDADE_WINDOW_PATTERN") {
             Ok(v) => BackgroundPattern::from_name(&v).unwrap_or_else(|| {
@@ -113,13 +118,21 @@ impl BackgroundState {
             Err(_) => BackgroundPattern::DiagonalForward,
         };
         let color = match std::env::var("SAUDADE_WINDOW_PATTERN_COLOR") {
-            Ok(v) => pattern_color(&v).unwrap_or_else(|| {
+            Ok(v) => pattern_color(&v).or_else(|| {
                 eprintln!("[saudade] ignoring unknown SAUDADE_WINDOW_PATTERN_COLOR={v:?}");
-                PATTERN_COLORS[0].1
+                None
             }),
-            Err(_) => PATTERN_COLORS[0].1,
+            Err(_) => None,
         };
         Self { pattern, color }
+    }
+
+    /// The color the pattern is drawn in under `theme`: the one named, or else
+    /// a faint tint the theme derives — `superlight` on the light theme, and
+    /// a shade just off the background on the dark one, where `superlight`
+    /// would glare.
+    pub fn ink(&self, theme: &Theme) -> Color {
+        self.color.unwrap_or_else(|| theme.pattern_ink())
     }
 }
 

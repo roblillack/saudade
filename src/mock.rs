@@ -22,7 +22,7 @@
 //! able to feed [`Event`]s into the same backend to
 //! drive widgets between renders.
 
-use crate::background::{BackgroundPattern, BackgroundState, PATTERN_COLORS};
+use crate::background::{BackgroundPattern, BackgroundState};
 use crate::chrome::{self, WindowChrome};
 use crate::event::{Event, EventCtx};
 use crate::font::{Font, FontSet};
@@ -81,10 +81,11 @@ impl MockBackend {
             serif_font: None,
             mono_font: None,
             // The live runtime's default backdrop (`BackgroundState::from_env`
-            // with nothing set): a `superlight` forward-diagonal hatch.
+            // with nothing set): a forward-diagonal hatch in the theme's faint
+            // ink — `superlight` on the default theme.
             bg: BackgroundState {
                 pattern: BackgroundPattern::DiagonalForward,
-                color: PATTERN_COLORS[0].1,
+                color: None,
             },
             screen: None,
             display_dpi: None,
@@ -164,10 +165,14 @@ impl MockBackend {
 
     /// Override the window background pattern painted behind the widget tree by
     /// [`Self::render_framed`] for regular (resizable / fixed) windows. Defaults
-    /// to the live runtime's default — a `superlight` forward-diagonal hatch.
+    /// to the live runtime's default — a forward-diagonal hatch in the theme's
+    /// faint ink, `superlight` on the default theme.
     /// Dialog frames ignore this and stay plain, matching the live backend.
     pub fn with_background_pattern(mut self, pattern: BackgroundPattern, color: Color) -> Self {
-        self.bg = BackgroundState { pattern, color };
+        self.bg = BackgroundState {
+            pattern,
+            color: Some(color),
+        };
         self
     }
 
@@ -253,12 +258,14 @@ impl MockBackend {
                 Backdrop::Pattern if root.paints_own_background() => painter.fill_pattern_around(
                     self.theme.background,
                     self.bg.pattern,
-                    self.bg.color,
+                    self.bg.ink(&self.theme),
                     root.bounds(),
                 ),
-                Backdrop::Pattern => {
-                    painter.fill_pattern(self.theme.background, self.bg.pattern, self.bg.color)
-                }
+                Backdrop::Pattern => painter.fill_pattern(
+                    self.theme.background,
+                    self.bg.pattern,
+                    self.bg.ink(&self.theme),
+                ),
             }
             root.paint(&mut painter, &self.theme);
         }
@@ -635,6 +642,7 @@ impl Snapshot {
 mod tests {
     use super::*;
     use crate::Container;
+    use crate::background::PATTERN_COLORS;
 
     /// A regular (resizable / fixed) framed window paints the window background
     /// pattern behind its content, exactly like the live main surface; a dialog

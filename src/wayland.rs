@@ -23,7 +23,7 @@ use smithay_client_toolkit::data_device_manager::data_source::{DataSourceHandler
 use smithay_client_toolkit::data_device_manager::{DataDeviceManagerState, WritePipe};
 use smithay_client_toolkit::output::{OutputHandler, OutputState};
 use smithay_client_toolkit::reexports::calloop::{
-    EventLoop as CalloopLoop, LoopHandle, PostAction,
+    EventLoop as CalloopLoop, LoopHandle, PostAction, channel,
 };
 use smithay_client_toolkit::reexports::calloop_wayland_source::WaylandSource;
 use smithay_client_toolkit::registry::{ProvidesRegistryState, RegistryState};
@@ -73,6 +73,7 @@ use wayland_protocols::xdg::toplevel_icon::v1::client::xdg_toplevel_icon_manager
 use wayland_protocols::xdg::toplevel_icon::v1::client::xdg_toplevel_icon_v1::XdgToplevelIconV1;
 
 use crate::app::{App, KeySwallow};
+use crate::appearance::{Appearance, Themes};
 use crate::background::BackgroundState;
 use crate::event::{
     Cursor, DragData, Event, EventCtx, Key, Modifiers, MouseButton, NamedKey,
@@ -83,7 +84,6 @@ use crate::geometry::{Color, Point, Rect, Size};
 use crate::mime_drop::{self, Reading, URI_LIST};
 use crate::painter::Painter;
 use crate::svg::SvgImage;
-use crate::theme::Theme;
 use crate::widget::{PopupKind, PopupRequest, Widget};
 
 /// Icon sizes handed to the compositor before it has said which it wants —
@@ -101,7 +101,7 @@ const DEFAULT_ICON_SIZES: &[u32] = &[16, 24, 32, 48, 64, 128];
 const UI_EPSILON: f32 = 1e-4;
 
 pub(crate) fn run(app: App) {
-    let (window_cfg, theme, root, app_scale) = app.into_parts();
+    let (window_cfg, mut themes, root, app_scale) = app.into_parts();
 
     let conn = Connection::connect_to_env().expect("saudade: Wayland connect failed");
     let (globals, event_queue) =
@@ -114,6 +114,24 @@ pub(crate) fn run(app: App) {
     WaylandSource::new(conn.clone(), event_queue)
         .insert(loop_handle)
         .expect("saudade: WaylandSource insert failed");
+
+    // Ask the settings portal for the desktop's light or dark mode, before
+    // the window opens so it opens in the right theme, and hear about every
+    // change after through a channel the loop wakes on.
+    if themes.follows_system() {
+        let (sender, changes) = channel::channel();
+        if let Some(appearance) = crate::portal::watch(move |a| sender.send(a).is_ok()) {
+            themes.follow(appearance);
+        }
+        event_loop
+            .handle()
+            .insert_source(changes, |event, _, state: &mut State| {
+                if let channel::Event::Msg(appearance) = event {
+                    state.follow_system(appearance);
+                }
+            })
+            .expect("saudade: portal source insert failed");
+    }
 
     let compositor =
         CompositorState::bind(&globals, &qh).expect("saudade: wl_compositor not available");
@@ -241,7 +259,7 @@ pub(crate) fn run(app: App) {
 
         window,
         root,
-        theme,
+        themes,
         font: Font::load_sans(),
         serif_font: Font::load_serif(),
         mono_font: Font::load_monospace(),
@@ -325,7 +343,9 @@ struct State {
 
     window: XdgWindow,
     root: Box<dyn Widget>,
-    theme: Theme,
+    /// The light and dark themes, and which one the desktop's appearance —
+    /// or `SAUDADE_THEME` — currently calls for.
+    themes: Themes,
     font: Option<Font>,
     serif_font: Option<Font>,
     mono_font: Option<Font>,
@@ -449,7 +469,7 @@ struct State {
     icons: Vec<ToplevelIcon>,
     modifiers: Modifiers,
     /// Background pattern + color for the main window, toggled with the
-    /// `p` / `c` debug keys. Popups/dialogs ignore it and stay white.
+    /// `p` / `c` debug keys. Popups/dialogs ignore it and stay plain.
     bg: BackgroundState,
     /// Cursor position in *widget-tree logical coordinates* — i.e., the
     /// coordinates the widget tree expects (already converted from
@@ -769,6 +789,16 @@ impl State {
         }
     }
 
+    /// The desktop switched to `appearance`: repaint every surface in the
+    /// matching theme, unless it is the one showing already or the
+    /// environment pinned the other.
+    fn follow_system(&mut self, appearance: Appearance) {
+        if self.themes.follow(appearance) {
+            self.needs_redraw = true;
+            self.mark_popups_dirty();
+        }
+    }
+
     /// The scale the display is presented at, as the compositor describes it:
     /// the fractional scale where the protocol is there to report it, else the
     /// integer buffer scale. The counterpart of the factor winit reports, and
@@ -1042,7 +1072,7 @@ impl State {
     fn create_drag_icon(&self, data: &DragData) -> Option<DragIcon> {
         let label = drag_icon_label(&data.paths);
         let font = self.font.as_ref()?;
-        let (text_w, text_h) = font.measure(&label, self.theme.font_size);
+        let (text_w, text_h) = font.measure(&label, self.themes.current().font_size);
         let text_h = text_h.ceil() as i32;
 
         let badge = text_h.max(DRAG_ICON_BADGE_MIN);
@@ -1120,17 +1150,18 @@ impl State {
                 None,
             );
             painter.set_system_scale(self.os_scale());
+            let theme = self.themes.current();
             let area = Rect::new(0, 0, icon.logical_w, icon.logical_h);
-            painter.fill_rect(area, self.theme.background);
-            painter.raised_bevel(area, self.theme.highlight, self.theme.shadow);
+            painter.fill_rect(area, theme.background);
+            painter.raised_bevel(area, theme.highlight, theme.shadow);
             let badge = Rect::new(DRAG_ICON_PAD, DRAG_ICON_PAD, icon.badge, icon.badge);
             draw_drag_badge(&mut painter, badge, icon.feedback);
             painter.text(
                 DRAG_ICON_PAD + icon.badge + DRAG_ICON_GAP,
                 DRAG_ICON_PAD,
                 &icon.label,
-                self.theme.font_size,
-                self.theme.text,
+                theme.font_size,
+                theme.text,
             );
         }
         let _ = buffer.attach_to(&icon.surface);
@@ -1343,8 +1374,9 @@ impl State {
         // the UI is drawn at: widgets asking what the *display* is set to want
         // this one.
         painter.set_system_scale(system_scale);
-        painter.fill_pattern(self.theme.background, self.bg.pattern, self.bg.color);
-        self.root.paint(&mut painter, &self.theme);
+        let theme = self.themes.current();
+        painter.fill_pattern(theme.background, self.bg.pattern, self.bg.ink(theme));
+        self.root.paint(&mut painter, theme);
 
         let surface = self.window.wl_surface();
         let _ = buffer.attach_to(surface);
@@ -1426,14 +1458,15 @@ impl State {
         )
         .with_display_dpi(display_dpi);
         painter.set_system_scale(system_scale);
+        let theme = self.themes.current();
         if transparent {
             painter.fill(Color::TRANSPARENT);
             painter.set_clip_phys(0, 0, clip_w.max(buf_w), clip_h.max(buf_h));
-            self.root.paint_overlay(&mut painter, &self.theme);
+            self.root.paint_overlay(&mut painter, theme);
         } else {
-            painter.fill(self.theme.background);
+            painter.fill(theme.background);
             painter.set_clip_phys(0, 0, clip_w, clip_h);
-            self.root.paint(&mut painter, &self.theme);
+            self.root.paint(&mut painter, theme);
         }
         painter.clear_clip();
         if transparent {

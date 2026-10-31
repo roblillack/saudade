@@ -79,6 +79,9 @@ mod fullscreen;
 #[path = "notepad.rs"]
 mod notepad;
 #[allow(dead_code)]
+#[path = "page_layout.rs"]
+mod page_layout;
+#[allow(dead_code)]
 #[path = "patterns.rs"]
 mod patterns;
 #[allow(dead_code)]
@@ -174,6 +177,16 @@ fn main() {
     shoot(&out, "credit_card", credit_card::window(), |_| {});
     shoot(&out, "svg", svg::window(), |_| {});
     shoot(&out, "dialogs", dialogs::window(), |_| {});
+    shoot(&out, "page_layout", page_layout::window(), |w| {
+        // Into the top margin, and ten half-millimetre steps up.
+        w.click(100, 132);
+        for _ in 0..10 {
+            w.key(NamedKey::Up);
+        }
+        w.click(240, 60); // Landscape
+        w.click(280, 188); // the copies' up arrow, twice
+        w.click(280, 188);
+    });
 
     // The chrome example frames a bare about box rather than opening a window
     // of its own; picture it the way it pictures itself.

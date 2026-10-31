@@ -79,7 +79,7 @@ impl FileBrowser {
         let entries = read_entries(&self.path);
         let mut items = Vec::with_capacity(entries.len() + 1);
         if self.path.parent().is_some() {
-            items.push(ListItem::new("..").with_svg_icon(UP_ICON));
+            items.push(ListItem::new("..").with_svg_glyph(UP_ICON));
         }
         for entry in entries {
             let icon = if entry.is_dir { FOLDER_ICON } else { FILE_ICON };

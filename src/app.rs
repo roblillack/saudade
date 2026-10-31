@@ -29,6 +29,7 @@ use winit::platform::x11::{WindowAttributesExtX11, WindowType as XWindowType};
 #[cfg(target_os = "macos")]
 use winit::platform::macos::WindowAttributesExtMacOS;
 
+use crate::appearance::{Appearance, Themes};
 use crate::background::BackgroundState;
 use crate::event::{
     Cursor, DragData, Event, EventCtx, Key, Modifiers, MouseButton, NamedKey,
@@ -122,12 +123,13 @@ impl WindowConfig {
     }
 }
 
-/// Top-level entry point. Owns the window configuration, the theme, and the
+/// Top-level entry point. Owns the window configuration, the themes, and the
 /// root widget tree, and drives the winit event loop until the user closes the
 /// window or a widget calls [`EventCtx::close`](crate::event::EventCtx::close).
 pub struct App {
     window: WindowConfig,
     theme: Theme,
+    dark_theme: Theme,
     root: Box<dyn Widget>,
     ui_scale: Option<f32>,
 }
@@ -136,14 +138,42 @@ impl App {
     pub fn new(window: WindowConfig, root: impl Widget + 'static) -> Self {
         Self {
             window,
-            theme: Theme::default(),
+            theme: Theme::windows_31(),
+            dark_theme: Theme::windows_31_dark(),
             root: Box::new(root),
             ui_scale: None,
         }
     }
 
+    /// The theme to paint with while the system is in light mode —
+    /// [`Theme::windows_31`] unless set.
+    ///
+    /// An app paints with one of two themes, whichever matches the system's
+    /// light or dark appearance, and switches between them as soon as the user
+    /// flips it. The system's say is the default; the `SAUDADE_THEME`
+    /// environment variable overrides it: `light` or `dark` paints with that
+    /// theme whatever the system says, and `auto` — as good as unset — goes
+    /// back to following it.
+    ///
+    /// An app that customizes this theme will usually want to bring a matching
+    /// [`with_dark_theme`](Self::with_dark_theme) too, or dark mode shows the
+    /// stock [`Theme::windows_31_dark`]. To keep one look whatever the system
+    /// does, pass the same theme to both.
+    ///
+    /// The appearance comes from the platform itself on macOS and Windows, and
+    /// from the freedesktop settings portal's `color-scheme` on X11 and
+    /// Wayland — what GNOME, KDE and the like set from their own light / dark
+    /// switch. A desktop that runs no portal is taken to be light.
     pub fn with_theme(mut self, theme: Theme) -> Self {
         self.theme = theme;
+        self
+    }
+
+    /// The theme to paint with while the system is in dark mode —
+    /// [`Theme::windows_31_dark`] unless set. See
+    /// [`with_theme`](Self::with_theme) for when it applies.
+    pub fn with_dark_theme(mut self, theme: Theme) -> Self {
+        self.dark_theme = theme;
         self
     }
 
@@ -186,7 +216,12 @@ impl App {
     }
 
     fn run_winit(self) {
-        let event_loop = EventLoop::new().expect("saudade: failed to create event loop");
+        // The user events are the system appearance, for the platforms where
+        // winit doesn't report it itself, and `None` from X11's drop target,
+        // which only wakes the loop to take up the drags it queued.
+        let event_loop = EventLoop::<Option<Appearance>>::with_user_event()
+            .build()
+            .expect("saudade: failed to create event loop");
         event_loop.set_control_flow(ControlFlow::Wait);
 
         let mut handler = AppHandler::new(self);
@@ -194,14 +229,26 @@ impl App {
         {
             handler.drop_waker = Some(event_loop.create_proxy());
         }
+        // X11: ask the settings portal, before the window opens so it can open
+        // in the right theme, and hear about every change after on the loop.
+        #[cfg(all(unix, not(target_os = "macos")))]
+        if handler.themes.follows_system() {
+            let proxy = event_loop.create_proxy();
+            let initial =
+                crate::portal::watch(move |appearance| proxy.send_event(Some(appearance)).is_ok());
+            if let Some(appearance) = initial {
+                handler.themes.follow(appearance);
+            }
+        }
         event_loop
             .run_app(&mut handler)
             .expect("saudade: event loop error");
     }
 
     #[cfg(all(unix, not(target_os = "macos")))]
-    pub(crate) fn into_parts(self) -> (WindowConfig, Theme, Box<dyn Widget>, Option<f32>) {
-        (self.window, self.theme, self.root, self.ui_scale)
+    pub(crate) fn into_parts(self) -> (WindowConfig, Themes, Box<dyn Widget>, Option<f32>) {
+        let themes = Themes::new(self.theme, self.dark_theme);
+        (self.window, themes, self.root, self.ui_scale)
     }
 }
 
@@ -219,7 +266,9 @@ struct AppHandler {
     // Static configuration:
     window_config: WindowConfig,
     design_size: Size,
-    theme: Theme,
+    /// The light and dark themes, and which one the system's appearance —
+    /// or `SAUDADE_THEME` — currently calls for.
+    themes: Themes,
     root: Box<dyn Widget>,
     font: Option<Font>,
     serif_font: Option<Font>,
@@ -272,7 +321,7 @@ struct AppHandler {
     modifiers: Modifiers,
     needs_redraw: bool,
     /// Background pattern + color for the main window, toggled with the
-    /// `p` / `c` debug keys. Popups/dialogs ignore it and stay white.
+    /// `p` / `c` debug keys. Popups/dialogs ignore it and stay plain.
     bg: BackgroundState,
     /// Where the display is, in the root widget's logical coordinates —
     /// [`Painter::screen_area`], handed to every paint pass. Recomputed only
@@ -328,7 +377,7 @@ struct AppHandler {
     /// X11: what the drop target's thread wakes the event loop with, to have
     /// its drags taken up. Handed to it as the main window is created.
     #[cfg(all(unix, not(target_os = "macos")))]
-    drop_waker: Option<EventLoopProxy<()>>,
+    drop_waker: Option<EventLoopProxy<Option<Appearance>>>,
     /// Tracks a key press a widget asked to swallow until release (via
     /// [`EventCtx::swallow_key_until_release`]).
     swallow: KeySwallow,
@@ -418,7 +467,7 @@ impl AppHandler {
         Self {
             window_config: app.window,
             design_size,
-            theme: app.theme,
+            themes: Themes::new(app.theme, app.dark_theme),
             root: app.root,
             font: Font::load_sans(),
             serif_font: Font::load_serif(),
@@ -461,7 +510,7 @@ impl AppHandler {
     }
 }
 
-impl ApplicationHandler for AppHandler {
+impl ApplicationHandler<Option<Appearance>> for AppHandler {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if self.main_win.is_some() {
             return; // already initialized; ignore redundant resumes
@@ -480,7 +529,8 @@ impl ApplicationHandler for AppHandler {
         let mut attrs = WindowAttributes::default()
             .with_title(&self.window_config.title)
             .with_inner_size(self.to_platform(self.window_config.size))
-            .with_resizable(self.window_config.resizable);
+            .with_resizable(self.window_config.resizable)
+            .with_theme(self.window_theme());
         if let Some(min) = self.window_config.min_size {
             attrs = attrs.with_min_inner_size(self.to_platform(min));
         }
@@ -513,6 +563,12 @@ impl ApplicationHandler for AppHandler {
         if let Some(image) = self.window_config.icon.as_ref() {
             crate::icon::set_window_icon(&win, image);
             crate::icon::set_app_icon(image);
+        }
+        // macOS and Windows report the system's appearance on the window: take
+        // it before the first paint. (X11 reports none; the portal answered for
+        // it before the loop started.)
+        if let Some(theme) = win.theme() {
+            self.themes.follow(appearance_of(theme));
         }
         let win = Rc::new(win);
         let id = win.id();
@@ -559,10 +615,22 @@ impl ApplicationHandler for AppHandler {
         window_id: WindowId,
         event: WindowEvent,
     ) {
+        // Every window is told; whichever is first flips the theme for all.
+        if let WindowEvent::ThemeChanged(theme) = event {
+            self.follow_system(appearance_of(theme));
+            return;
+        }
         if Some(window_id) == self.main_id {
             self.handle_main_event(event, event_loop);
         } else if let Some(idx) = self.popups.iter().position(|p| p.win_id == window_id) {
             self.handle_popup_event(idx, event, event_loop);
+        }
+    }
+
+    /// The settings portal reported the system's appearance (X11).
+    fn user_event(&mut self, _event_loop: &ActiveEventLoop, appearance: Option<Appearance>) {
+        if let Some(appearance) = appearance {
+            self.follow_system(appearance);
         }
     }
 
@@ -1034,6 +1102,42 @@ impl AppHandler {
         }
     }
 
+    /// The system switched to `appearance`: repaint every window in the
+    /// matching theme, unless it is the one showing already or the
+    /// environment pinned the other.
+    fn follow_system(&mut self, appearance: Appearance) {
+        if !self.themes.follow(appearance) {
+            return;
+        }
+        self.needs_redraw = true;
+        self.mark_popups_dirty();
+        // X11 decorations follow the hint on each window, so pass it on.
+        #[cfg(all(unix, not(target_os = "macos")))]
+        {
+            let theme = self.window_theme();
+            let wins = self
+                .main_win
+                .iter()
+                .chain(self.popups.iter().map(|p| &p.win));
+            for win in wins {
+                win.set_theme(theme);
+            }
+        }
+    }
+
+    /// The theme to hand a window, which decides how the system draws its
+    /// title bar and frame. macOS and Windows match the system's own
+    /// appearance by themselves, given `None`, so only a pinned one is passed
+    /// on. An X11 window manager goes by a hint on each window instead, which
+    /// is set to whatever is showing.
+    fn window_theme(&self) -> Option<winit::window::Theme> {
+        let x11 = cfg!(all(unix, not(target_os = "macos")));
+        (x11 || !self.themes.follows_system()).then(|| match self.themes.appearance() {
+            Appearance::Light => winit::window::Theme::Light,
+            Appearance::Dark => winit::window::Theme::Dark,
+        })
+    }
+
     /// Whether an OS pointer grab is currently keeping a widget's drag alive
     /// past the window edge — a mouse button is held *and* a widget is
     /// capturing the pointer from that press.
@@ -1460,17 +1564,18 @@ impl AppHandler {
         painter.set_system_scale(system_scale);
         // A root that paints its own background covers the pattern anyway, so
         // only the letterbox around it is worth laying down — usually nothing.
+        let theme = self.themes.current();
         if self.root.paints_own_background() {
             painter.fill_pattern_around(
-                self.theme.background,
+                theme.background,
                 self.bg.pattern,
-                self.bg.color,
+                self.bg.ink(theme),
                 self.root.bounds(),
             );
         } else {
-            painter.fill_pattern(self.theme.background, self.bg.pattern, self.bg.color);
+            painter.fill_pattern(theme.background, self.bg.pattern, self.bg.ink(theme));
         }
-        self.root.paint(&mut painter, &self.theme);
+        self.root.paint(&mut painter, theme);
         surface_buf.present();
     }
 
@@ -1521,6 +1626,7 @@ impl AppHandler {
         .with_screen(screen)
         .with_display_dpi(display_dpi);
         painter.set_system_scale(system_scale);
+        let theme = self.themes.current();
         painter.set_clip_phys(0, 0, popup_phys_w, popup_phys_h);
         if transparent {
             // The window has a real alpha channel, so everything the panel
@@ -1531,15 +1637,15 @@ impl AppHandler {
             // which is both what makes a menu hanging off the window look
             // right and one less full render of the app per frame.
             painter.fill(Color::TRANSPARENT);
-            self.root.paint_overlay(&mut painter, &self.theme);
+            self.root.paint_overlay(&mut painter, theme);
         } else {
             // No alpha to work with: fake it by redrawing the app underneath
             // the panel, which is what the popup would be seeing through to.
             // Only pixels the window itself covers are right — where the popup
             // hangs off the main window there is nothing to redraw, and the
             // fill shows instead.
-            painter.fill(self.theme.background);
-            self.root.paint(&mut painter, &self.theme);
+            painter.fill(theme.background);
+            self.root.paint(&mut painter, theme);
         }
         painter.clear_clip();
         surface_buf.present();
@@ -1979,7 +2085,8 @@ impl AppHandler {
         let mut attrs = WindowAttributes::default()
             .with_resizable(false)
             .with_inner_size(size)
-            .with_visible(false);
+            .with_visible(false)
+            .with_theme(self.window_theme());
 
         match request.kind {
             PopupKind::Popup => {
@@ -2373,6 +2480,14 @@ pub(crate) fn ns_window(win: &Window) -> Option<objc2::rc::Retained<objc2_app_ki
 fn suppress_show_animation(win: &Window) {
     if let Some(window) = ns_window(win) {
         window.setAnimationBehavior(objc2_app_kit::NSWindowAnimationBehavior::None);
+    }
+}
+
+/// What winit's theme stands for in saudade's terms.
+fn appearance_of(theme: winit::window::Theme) -> Appearance {
+    match theme {
+        winit::window::Theme::Light => Appearance::Light,
+        winit::window::Theme::Dark => Appearance::Dark,
     }
 }
 

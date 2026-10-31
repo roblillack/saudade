@@ -77,12 +77,12 @@ pub fn window() -> (WindowConfig, impl Widget) {
                     let start_date = start.borrow().text();
                     let message = if is_return {
                         format!(
-                            "You have booked a return flight\nleaving {}\nand returning {}.",
+                            "You have booked a return flight leaving {} and returning {}.",
                             start_date,
                             back.borrow().text(),
                         )
                     } else {
-                        format!("You have booked a one-way flight\non {}.", start_date)
+                        format!("You have booked a one-way flight on {}.", start_date)
                     };
                     dialog.borrow_mut().show_info("Flight booked", message);
                     cx.request_paint();

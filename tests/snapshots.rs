@@ -8,13 +8,15 @@
 
 mod common;
 
-use common::{snapshot_at_all_scales, snapshot_framed_at_all_scales};
+use common::{
+    snapshot_at_all_scales, snapshot_framed_at_all_scales, snapshot_framed_themed_at_all_scales,
+};
 
 use saudade::{
-    Bevel, Button, Checkbox, Color, Column, Container, ContextMenu, Dialog, Dropdown, Event, Image,
-    Key, Label, List, ListIcon, ListItem, Menu, MenuBar, MenuItem, ModifierScheme, Modifiers,
-    NamedKey, Orientation, Point, ProgressBar, Rect, Row, ScrollBar, Slider, TextEditor, TextInput,
-    Widget, WindowChrome,
+    Bevel, Button, ButtonGroup, Checkbox, Color, Column, Container, ContextMenu, Dialog, Dropdown,
+    Event, GroupButton, Image, Key, Label, List, ListIcon, ListItem, Menu, MenuBar, MenuItem,
+    ModifierScheme, Modifiers, MouseButton, NamedKey, NumberInput, Orientation, Point, ProgressBar,
+    Rect, Row, ScrollBar, Slider, SpinButton, TextEditor, TextInput, Theme, Widget, WindowChrome,
 };
 
 // ---------------------------------------------------------------- Bevel
@@ -115,6 +117,91 @@ fn button_icon() {
                     Button::new(Rect::new(136, 8, 96, 24), "Upload")
                         .with_icon(ICON)
                         .with_enabled(false),
+                ),
+        )
+    });
+}
+
+// ---------------------------------------------------------------- ButtonGroup
+
+const PORTRAIT: saudade::SvgImage = saudade::include_svg!("examples/assets/icons/portrait.svg");
+const LANDSCAPE: saudade::SvgImage = saudade::include_svg!("examples/assets/icons/landscape.svg");
+
+fn orientations() -> [GroupButton; 2] {
+    [
+        GroupButton::new("Portrait").with_icon(PORTRAIT),
+        GroupButton::new("Landscape").with_icon(LANDSCAPE),
+    ]
+}
+
+/// Labels only, the middle one selected; an icon and a label each; icons only,
+/// the second selected.
+#[test]
+fn button_group() {
+    snapshot_at_all_scales("button_group", 216, 104, || {
+        Box::new(
+            Container::new(216, 104)
+                .with_background(Color::LIGHT_GRAY)
+                .add(
+                    ButtonGroup::horizontal(Rect::new(8, 8, 200, 24))
+                        .with_buttons(["Left", "Center", "Right"])
+                        .with_selected(1),
+                )
+                .add(
+                    ButtonGroup::horizontal(Rect::new(8, 40, 200, 24)).with_buttons(orientations()),
+                )
+                .add(
+                    ButtonGroup::horizontal(Rect::new(8, 72, 57, 24))
+                        .with_buttons([GroupButton::icon(PORTRAIT), GroupButton::icon(LANDSCAPE)])
+                        .with_selected(1),
+                ),
+        )
+    });
+}
+
+/// Focused, with the mouse held down on a button that isn't the selected one:
+/// pushed in, but not latched.
+#[test]
+fn button_group_focused() {
+    use saudade::mock::MockBackend;
+    snapshot_at_all_scales("button_group_focused", 216, 40, || {
+        let mut group = ButtonGroup::horizontal(Rect::new(8, 8, 200, 24))
+            .with_buttons(["Left", "Center", "Right"]);
+        group.set_focused(true);
+        MockBackend::new(216, 40).dispatch(&mut group, &left_press(170, 20));
+        Box::new(
+            Container::new(216, 40)
+                .with_background(Color::LIGHT_GRAY)
+                .add(group),
+        )
+    });
+}
+
+#[test]
+fn button_group_disabled() {
+    snapshot_at_all_scales("button_group_disabled", 216, 40, || {
+        Box::new(
+            Container::new(216, 40)
+                .with_background(Color::LIGHT_GRAY)
+                .add(
+                    ButtonGroup::horizontal(Rect::new(8, 8, 200, 24))
+                        .with_buttons(orientations())
+                        .with_enabled(false),
+                ),
+        )
+    });
+}
+
+#[test]
+fn button_group_vertical() {
+    snapshot_at_all_scales("button_group_vertical", 112, 88, || {
+        Box::new(
+            Container::new(112, 88)
+                .with_background(Color::LIGHT_GRAY)
+                .add(
+                    ButtonGroup::vertical(Rect::new(8, 8, 96, 70))
+                        .with_buttons(["Top", "Middle", "Bottom"])
+                        .with_selected(2),
                 ),
         )
     });
@@ -664,6 +751,26 @@ fn dialog_multiline() {
     });
 }
 
+/// A message too long for one line is word-wrapped to the box's width, and the
+/// box grows to fit the lines it takes — a path too long for a line of its own
+/// breaks between its components.
+#[test]
+fn dialog_wrapped() {
+    snapshot_at_all_scales("dialog_wrapped", 420, 240, || {
+        let mut dialog = Dialog::new();
+        dialog.show_error(
+            "Error",
+            "The document could not be saved, because the folder it belongs in \
+             has been moved or deleted: /home/alice/Documents/Correspondence/2026/Drafts\n\n\
+             Choose another folder and try again.",
+        );
+        let column = Column::new()
+            .with_background(Color::LIGHT_GRAY)
+            .add_overlay(dialog);
+        Box::new(column)
+    });
+}
+
 // ---------------------------------------------------------------- TextEditor
 
 /// TextEditor wraps an internal ScrollBar that's only sized via
@@ -1051,6 +1158,134 @@ fn text_input_selection() {
             Container::new(200, 32)
                 .with_background(Color::LIGHT_GRAY)
                 .add(input),
+        )
+    });
+}
+
+// ---------------------------------------------------------------- SpinButton
+
+fn left_press(x: i32, y: i32) -> Event {
+    Event::PointerDown {
+        pos: Point::new(x, y),
+        button: MouseButton::Left,
+        modifiers: Modifiers::default(),
+    }
+}
+
+/// A vertical pair, a horizontal one, and a disabled vertical one.
+#[test]
+fn spin_button() {
+    snapshot_at_all_scales("spin_button", 112, 40, || {
+        Box::new(
+            Container::new(112, 40)
+                .with_background(Color::LIGHT_GRAY)
+                .add(SpinButton::vertical(Rect::new(8, 8, 16, 24)))
+                .add(SpinButton::horizontal(Rect::new(32, 12, 32, 16)))
+                .add(SpinButton::vertical(Rect::new(72, 8, 16, 24)).with_enabled(false)),
+        )
+    });
+}
+
+/// The up arrow of the vertical pair and the right one of the horizontal pair
+/// held down: pushed in, their glyphs a pixel down and right.
+#[test]
+fn spin_button_pressed() {
+    use saudade::mock::MockBackend;
+    snapshot_at_all_scales("spin_button_pressed", 80, 40, || {
+        let backend = MockBackend::new(80, 40);
+        let mut vertical = SpinButton::vertical(Rect::new(8, 8, 16, 24));
+        backend.dispatch(&mut vertical, &left_press(16, 12));
+        let mut horizontal = SpinButton::horizontal(Rect::new(32, 12, 32, 16));
+        backend.dispatch(&mut horizontal, &left_press(56, 20));
+        Box::new(
+            Container::new(80, 40)
+                .with_background(Color::LIGHT_GRAY)
+                .add(vertical)
+                .add(horizontal),
+        )
+    });
+}
+
+// ---------------------------------------------------------------- NumberInput
+
+/// A whole number, and a negative one shown with two decimals.
+#[test]
+fn number_input() {
+    snapshot_at_all_scales("number_input", 200, 32, || {
+        Box::new(
+            Container::new(200, 32)
+                .with_background(Color::LIGHT_GRAY)
+                .add(
+                    NumberInput::new(Rect::new(8, 6, 80, 20))
+                        .with_range(0.0, 100.0)
+                        .with_value(42.0),
+                )
+                .add(
+                    NumberInput::new(Rect::new(104, 6, 88, 20))
+                        .with_range(-10.0, 10.0)
+                        .with_precision(2)
+                        .with_value(-3.5),
+                ),
+        )
+    });
+}
+
+/// Focused, caret on, with its lower arrow held down.
+#[test]
+fn number_input_focused() {
+    use saudade::mock::MockBackend;
+    snapshot_at_all_scales("number_input_focused", 104, 32, || {
+        let mut input = NumberInput::new(Rect::new(8, 6, 88, 20))
+            .with_step(0.5)
+            .with_precision(1)
+            .with_value(1.5);
+        input.set_focused(true);
+        MockBackend::new(104, 32).dispatch(&mut input, &left_press(88, 22));
+        Box::new(
+            Container::new(104, 32)
+                .with_background(Color::LIGHT_GRAY)
+                .add(input),
+        )
+    });
+}
+
+/// Units in grey at the right end: unfocused, and focused with the number
+/// selected, the selection stopping short of the unit. The unfocused one had
+/// the focus, and with it everything selected, before losing it again — which
+/// leaves no grey selection band behind.
+#[test]
+fn number_input_unit() {
+    snapshot_at_all_scales("number_input_unit", 200, 32, || {
+        let mut mm = NumberInput::new(Rect::new(8, 6, 88, 20))
+            .with_precision(1)
+            .with_value(25.0)
+            .with_unit("mm");
+        mm.set_focused(true);
+        mm.set_focused(false);
+        let mut percent = NumberInput::new(Rect::new(104, 6, 88, 20))
+            .with_value(100.0)
+            .with_unit("%");
+        percent.set_focused(true);
+        Box::new(
+            Container::new(200, 32)
+                .with_background(Color::LIGHT_GRAY)
+                .add(mm)
+                .add(percent),
+        )
+    });
+}
+
+#[test]
+fn number_input_disabled() {
+    snapshot_at_all_scales("number_input_disabled", 104, 32, || {
+        Box::new(
+            Container::new(104, 32)
+                .with_background(Color::LIGHT_GRAY)
+                .add(
+                    NumberInput::new(Rect::new(8, 6, 88, 20))
+                        .with_value(12.0)
+                        .with_enabled(false),
+                ),
         )
     });
 }
@@ -1595,4 +1830,39 @@ fn chrome_custom_desktop() {
         .with_desktop_background(Color::rgb(0x5A, 0x5A, 0x80))
         .with_margin(20);
     snapshot_framed_at_all_scales("chrome_custom_desktop", 200, 96, &chrome, chrome_content);
+}
+
+// --------------------------------------------------------- Dark theme
+
+/// The dark theme across the chrome every widget shares, in a framed window so
+/// the background hatch is in it too: the light outlines, the bevels lit from
+/// the top left, a selected row, a check, the progress fill, and a default and
+/// a disabled button.
+#[test]
+fn dark_theme_panel() {
+    let chrome = WindowChrome::fixed("Dark");
+    let theme = Theme::windows_31_dark();
+    snapshot_framed_themed_at_all_scales("dark_theme_panel", 240, 150, &chrome, &theme, || {
+        let mut list = laid_out_list(
+            Rect::new(16, 40, 120, 62),
+            vec![
+                ListItem::new("Anchovy"),
+                ListItem::new("Basil"),
+                ListItem::new("Capers"),
+            ],
+        );
+        list.set_selected(Some(1));
+        list.set_focused(true);
+        Box::new(
+            Container::new(240, 150)
+                .add(Label::new(Rect::new(16, 12, 50, 16), "Name:"))
+                .add(TextInput::new(Rect::new(70, 8, 154, 22)).with_text("Ada"))
+                .add(list)
+                .add(Checkbox::new(Rect::new(148, 42, 80, 16), "Crisp").checked(true))
+                .add(Checkbox::new(Rect::new(148, 62, 80, 16), "Off").with_enabled(false))
+                .add(ProgressBar::new(Rect::new(148, 84, 76, 16)).with_fraction(0.5))
+                .add(Button::new(Rect::new(16, 114, 96, 24), "OK").default(true))
+                .add(Button::new(Rect::new(128, 114, 96, 24), "Cancel").with_enabled(false)),
+        )
+    });
 }

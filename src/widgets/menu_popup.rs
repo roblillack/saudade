@@ -34,9 +34,6 @@ const ACCEL_GAP: i32 = 24;
 const ITEM_TEXT_INSET_Y: i32 = 1;
 pub(crate) const SEPARATOR_HEIGHT: i32 = 6;
 pub(crate) const SHADOW_SIZE: i32 = 2;
-/// L-shape drop shadow color: a dark gray with no alpha trickery so it
-/// renders crisply on every backend.
-const SHADOW_COLOR: Color = Color::DARK_GRAY;
 /// Footprint of the checkmark drawn in a checked item's left gutter. Kept a few
 /// pixels smaller than the label inset (`POPUP_PADDING_X - 4`) and centered in
 /// it, so the tick has breathing room on both sides and never crowds the text —
@@ -227,14 +224,16 @@ impl<'a> MenuPopup<'a> {
         hovered: Option<usize>,
     ) {
         // L-shape drop shadow drawn first so the popup overlays it on the
-        // top/left edges.
+        // top/left edges. A solid color with no alpha trickery, so it renders
+        // crisply on every backend.
+        let shadow = theme.drop_shadow();
         painter.fill_rect(
             Rect::new(rect.x + SHADOW_SIZE, rect.bottom(), rect.w, SHADOW_SIZE),
-            SHADOW_COLOR,
+            shadow,
         );
         painter.fill_rect(
             Rect::new(rect.right(), rect.y + SHADOW_SIZE, SHADOW_SIZE, rect.h),
-            SHADOW_COLOR,
+            shadow,
         );
 
         // White interior + thin black border. No raised bevel — Win 3.1

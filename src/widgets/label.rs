@@ -7,12 +7,12 @@ use crate::widget::Widget;
 ///
 /// A `Label` occupies a fixed rectangle. Text is laid out from the box's
 /// top-left corner and word-wrapped to the box width: explicit `\n`
-/// characters start a new line, and any line too wide for the box breaks at
-/// whitespace (a single word wider than the box overflows rather than being
-/// split mid-word). Anything that extends past the box — horizontally or
-/// vertically — is clipped to its bounds, so a label never paints outside
-/// the rectangle it was given. Color and size are inherited from the active
-/// [`Theme`] unless overridden.
+/// characters start a new line, and any line too wide for the box breaks
+/// between words — a single word wider than the box is broken too, rather
+/// than cut off (see [`Painter::wrap_text`]). Anything that still extends
+/// past the box — horizontally or vertically — is clipped to its bounds, so a
+/// label never paints outside the rectangle it was given. Color and size are
+/// inherited from the active [`Theme`] unless overridden.
 ///
 /// A label is transparent by default — handy now that windows can carry a
 /// background pattern — but [`with_background`](Label::with_background) fills
@@ -56,51 +56,20 @@ impl Label {
         self.background = Some(color);
         self
     }
+
+    /// How tall the text comes out wrapped to `width`: the height the label
+    /// needs to show all of it. A dialog sizes itself around its message with
+    /// this.
+    pub(crate) fn text_height(&self, painter: &Painter, theme: &Theme, width: i32) -> i32 {
+        let size = self.size.unwrap_or(theme.font_size);
+        painter.wrap_text(&self.text, size, width).len() as i32 * line_height(painter, size)
+    }
 }
 
-/// Break `text` into the lines that will actually be drawn: split on
-/// explicit newlines, then greedily word-wrap each paragraph to `max_width`
-/// logical pixels. `painter` is only used to measure candidate lines, so this
-/// stays correct at any DPI. A non-positive `max_width` (a degenerate box)
-/// skips wrapping — the clip rectangle hides the overflow anyway.
-fn layout_lines(painter: &Painter, text: &str, size: f32, max_width: i32) -> Vec<String> {
-    let mut lines = Vec::new();
-    for paragraph in text.split('\n') {
-        if max_width > 0 {
-            wrap_paragraph(painter, paragraph, size, max_width, &mut lines);
-        } else {
-            lines.push(paragraph.to_string());
-        }
-    }
-    lines
-}
-
-/// Greedily pack the words of `paragraph` into lines no wider than
-/// `max_width`, appending each finished line to `out`. An empty paragraph
-/// (e.g. from a blank line between two `\n`) still emits one empty line so
-/// vertical spacing is preserved.
-fn wrap_paragraph(
-    painter: &Painter,
-    paragraph: &str,
-    size: f32,
-    max_width: i32,
-    out: &mut Vec<String>,
-) {
-    let mut current = String::new();
-    for word in paragraph.split_whitespace() {
-        if current.is_empty() {
-            current.push_str(word);
-            continue;
-        }
-        let candidate = format!("{current} {word}");
-        if painter.measure_text(&candidate, size).w <= max_width {
-            current = candidate;
-        } else {
-            out.push(std::mem::take(&mut current));
-            current.push_str(word);
-        }
-    }
-    out.push(current);
+/// Em height with a little leading; identical for every line, so any sample
+/// string gives the same value.
+fn line_height(painter: &Painter, size: f32) -> i32 {
+    painter.measure_text("", size).h.max(1)
 }
 
 impl Widget for Label {
@@ -122,15 +91,11 @@ impl Widget for Label {
         }
         let size = self.size.unwrap_or(theme.font_size);
         let color = self.color.unwrap_or(theme.text);
-        // Em height with a little leading; identical for every line, so any
-        // sample string gives the same value.
-        let line_height = painter.measure_text("", size).h.max(1);
-
-        let lines = layout_lines(painter, &self.text, size, self.rect.w);
+        let line_height = line_height(painter, size);
 
         let saved = painter.push_clip(self.rect);
         let mut y = self.rect.y;
-        for line in &lines {
+        for line in painter.wrap_text(&self.text, size, self.rect.w) {
             painter.text(self.rect.x, y, line, size, color);
             y += line_height;
         }

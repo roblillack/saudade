@@ -10,9 +10,10 @@
 //!
 //! This demo wires a [`Slider`] and two rows of preset [`Button`]s to a shared
 //! "preview scale" factor, then hands it to a `ScalePreview` widget that draws
-//! a small panel of real widgets — a text input, a dropdown, a checkbox,
-//! buttons (one of them focused, for its dotted focus rectangle), a progress
-//! bar, a scrollbar — at that scale, in a canvas below the controls. The slider
+//! a small panel of real widgets — a text input, a number input with its spin
+//! buttons, a dropdown, a button group, a checkbox, buttons (one of them
+//! focused, for its dotted focus rectangle), a progress bar, a scrollbar — at
+//! that scale, in a canvas below the controls. The slider
 //! starts at the scale this window is really drawn at, so the panel opens
 //! looking exactly like the rest of the window — and follows it until the
 //! preview is dragged somewhere else, which matters on Wayland, where the
@@ -61,10 +62,14 @@ use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use saudade::{
-    App, Button, Checkbox, Color, Container, Dropdown, Event, EventCtx, Label, Painter,
-    PopupRequest, ProgressBar, Rect, SCROLLBAR_THICKNESS, ScrollBar, Size, Slider, TextInput,
-    Theme, Widget, WindowConfig,
+    App, Button, ButtonGroup, Checkbox, Container, Dropdown, Event, EventCtx, GroupButton, Label,
+    NumberInput, Painter, PopupRequest, ProgressBar, Rect, SCROLLBAR_THICKNESS, ScrollBar, Size,
+    Slider, SvgImage, TextInput, Theme, Widget, WindowConfig, include_svg,
 };
+
+// The page_layout example's page icons, for the button group in the panel.
+const PORTRAIT: SvgImage = include_svg!("examples/assets/icons/portrait.svg");
+const LANDSCAPE: SvgImage = include_svg!("examples/assets/icons/landscape.svg");
 
 /// Layout metrics. The controls occupy a fixed-height band at the top (down to
 /// `CANVAS_Y`) and need at least `MIN_W` to lay out; the toggle row and the
@@ -131,7 +136,7 @@ const PRESETS: [(&str, i32); 10] = [
 /// widgets sit a few pixels inside it (see [`build_sample`]), so the slack
 /// absorbs any rounding when the panel is clipped to the canvas.
 const SAMPLE_W: i32 = 150;
-const SAMPLE_H: i32 = 172;
+const SAMPLE_H: i32 = 224;
 /// The sample panel's extent as a [`Size`], for [`Painter::draw_resampled`].
 const SAMPLE: Size = Size {
     w: SAMPLE_W,
@@ -306,9 +311,7 @@ pub fn window() -> (WindowConfig, impl Widget) {
         ),
         (
             Rc::new(RefCell::new(
-                Label::new(max_tick_rect(init_w), "3.5x")
-                    .with_size(9.0)
-                    .with_color(Color::DARK_GRAY),
+                Label::new(max_tick_rect(init_w), "3.5x").with_size(9.0),
             )),
             max_tick_rect,
         ),
@@ -467,7 +470,7 @@ impl Widget for Root {
                 .borrow_mut()
                 .set_value((win_scale * 100.0).round() as i32);
         }
-        painter.fill_rect(self.bounds, Color::WHITE);
+        painter.fill_rect(self.bounds, theme.background);
         self.inner.paint(painter, theme);
     }
     fn paint_overlay(&mut self, painter: &mut Painter, theme: &Theme) {
@@ -570,29 +573,48 @@ impl ScalePreview {
 fn build_sample() -> Vec<Box<dyn Widget>> {
     // Parked mid-track with a thumb about a third of the track long, so both
     // the thumb and the track around it are visible at any scale.
-    let mut scrollbar = ScrollBar::vertical(Rect::new(128, 24, SCROLLBAR_THICKNESS, 140));
+    let mut scrollbar = ScrollBar::vertical(Rect::new(128, 24, SCROLLBAR_THICKNESS, 192));
     scrollbar.set_range(3, 6);
     scrollbar.set_value(2);
 
     // Focused rather than merely focusable: the panel is painted but never sent
     // events, so nothing would ever give it the focus, and the dotted rectangle
     // is the whole reason it is here.
-    let mut focused = Button::new(Rect::new(10, 124, 66, 22), "Focus");
+    let mut focused = Button::new(Rect::new(10, 176, 66, 22), "Focus");
     focused.set_focused(true);
 
     vec![
         Box::new(Label::new(Rect::new(10, 6, 114, 14), "Preview").with_size(11.0)),
         Box::new(TextInput::new(Rect::new(10, 24, 114, 18)).with_text("Type here")),
+        // Its arrows are two light buttons sharing a border, and their glyphs
+        // sit in halves shorter than the scrollbar's buttons. The unit is grey
+        // text set against them.
         Box::new(
-            Dropdown::new(Rect::new(10, 48, 114, 20))
+            NumberInput::new(Rect::new(10, 48, 114, 20))
+                .with_precision(2)
+                .with_unit("cm")
+                .with_value(2.5),
+        ),
+        Box::new(
+            Dropdown::new(Rect::new(10, 74, 114, 20))
                 .with_items(["Apple", "Banana", "Cherry"])
                 .with_selected(0),
         ),
-        Box::new(Checkbox::new(Rect::new(10, 76, 114, 14), "Crisp").checked(true)),
-        Box::new(Button::new(Rect::new(10, 98, 50, 22), "OK").default(true)),
-        Box::new(Button::new(Rect::new(66, 98, 56, 22), "Cancel")),
+        // The selected button's face is a one-pixel stipple, like the
+        // scrollbar's track, and the icons are baked to whole pixels at 1.0x.
+        Box::new(
+            ButtonGroup::horizontal(Rect::new(10, 100, 114, 22))
+                .with_buttons([
+                    GroupButton::new("Tall").with_icon(PORTRAIT),
+                    GroupButton::new("Wide").with_icon(LANDSCAPE),
+                ])
+                .with_selected(1),
+        ),
+        Box::new(Checkbox::new(Rect::new(10, 128, 114, 14), "Crisp").checked(true)),
+        Box::new(Button::new(Rect::new(10, 150, 50, 22), "OK").default(true)),
+        Box::new(Button::new(Rect::new(66, 150, 56, 22), "Cancel")),
         Box::new(focused),
-        Box::new(ProgressBar::new(Rect::new(10, 154, 114, 10)).with_fraction(0.66)),
+        Box::new(ProgressBar::new(Rect::new(10, 206, 114, 10)).with_fraction(0.66)),
         Box::new(scrollbar),
     ]
 }
@@ -611,9 +633,9 @@ impl Widget for ScalePreview {
         let logical_h = (painter.size().h as f32 / win_scale).round() as i32;
         let rect = canvas_rect(logical_w, logical_h);
 
-        // Canvas chrome: a white field with a sunken bevel, so the preview
-        // reads as an inset pane rather than free-floating widgets.
-        painter.fill_rect(rect, Color::WHITE);
+        // Canvas chrome: a field with a sunken bevel, so the preview reads as
+        // an inset pane rather than free-floating widgets.
+        painter.fill_rect(rect, theme.background);
         painter.sunken_bevel(rect, theme.highlight, theme.shadow);
 
         let content = rect.inset(2);
@@ -631,11 +653,13 @@ impl Widget for ScalePreview {
         // the pane.
         let saved = painter.push_clip(content);
         if self.fit.get() {
-            painter.draw_resampled(fit_area(content), SAMPLE, factor, Color::WHITE, draw);
+            let bg = theme.background;
+            painter.draw_resampled(fit_area(content), SAMPLE, factor, bg, draw);
         } else {
             let zoom = if self.zoom.get() { 2 } else { 1 };
             let (fw, fh) = footprint(factor, self.zoom.get(), win_scale);
-            painter.draw_scaled(centered(content, fw, fh), factor, zoom, Color::WHITE, draw);
+            let bg = theme.background;
+            painter.draw_scaled(centered(content, fw, fh), factor, zoom, bg, draw);
         }
         painter.restore_clip(saved);
     }

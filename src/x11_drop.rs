@@ -48,6 +48,7 @@ use x11rb::protocol::xproto::{
 use x11rb::rust_connection::RustConnection;
 use x11rb::wrapper::ConnectionExt as _;
 
+use crate::appearance::Appearance;
 use crate::event::DragData;
 use crate::mime_drop::Reading;
 
@@ -175,14 +176,17 @@ impl Shared {
 /// Make `win` take drags through a drop target of saudade's, whose thread
 /// wakes the event loop through `wake` when it has queued some. `None` where
 /// that can't be set up; winit's own target takes the drags then.
-pub(crate) fn register(win: &Window, wake: EventLoopProxy<()>) -> Option<Rc<Drags>> {
+pub(crate) fn register(
+    win: &Window,
+    wake: EventLoopProxy<Option<Appearance>>,
+) -> Option<Rc<Drags>> {
     let window = crate::x11::xid(win)?;
     let conn = crate::x11::connection()?;
     let drags = start(
         conn,
         window,
         Box::new(move || {
-            let _ = wake.send_event(());
+            let _ = wake.send_event(None);
         }),
     )?;
     // Without it a source that ignores the proxy still talks to winit, and the

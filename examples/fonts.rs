@@ -63,9 +63,11 @@ const ROW_PAD: i32 = 5;
 const INDENT: i32 = 10;
 /// What one press of Left / Right scrolls.
 const H_STEP: i32 = 24;
-/// The hairline ruling between cells — lighter than `theme.shadow`, which would
-/// read as chrome rather than as ruling.
-const GRID_LINE: Color = Color::rgb(0xD0, 0xD0, 0xD0);
+/// The hairline ruling between cells — fainter than `theme.shadow`, which would
+/// read as chrome rather than as ruling: #D0D0D0 on the light theme.
+fn grid_line(theme: &Theme) -> Color {
+    theme.background.mix(theme.text, 0.185)
+}
 
 fn main() {
     let (config, root) = window();
@@ -307,10 +309,10 @@ impl Widget for Specimen {
 
         painter.fill_rect(table, theme.face);
 
-        // The cells, on the white ground of a list field. Rows scrolled out of
-        // sight are skipped rather than clipped away glyph by glyph.
+        // The cells, on the ground of a list field. Rows scrolled out of sight
+        // are skipped rather than clipped away glyph by glyph.
         let saved = painter.push_clip(body);
-        painter.fill_rect(body, Color::WHITE);
+        painter.fill_rect(body, theme.background);
         let mut y = body.y - sy;
         for row in rows() {
             if let Row::Face(f, s) = row
@@ -319,7 +321,7 @@ impl Widget for Specimen {
             {
                 let rect = Rect::new(body.x - sx, y, m.content_w, m.row_h);
                 paint_face_row(painter, theme, &m, rect, FAMILIES[f].0, STYLES[s].0);
-                painter.h_line(body.x, rect.bottom() - 1, body.w, GRID_LINE);
+                painter.h_line(body.x, rect.bottom() - 1, body.w, grid_line(theme));
             }
             y += m.height(row);
         }
@@ -488,7 +490,7 @@ fn paint_face_row(
     let mut x = row.x;
     for (i, &size) in SIZES.iter().enumerate() {
         let w = m.cols[i];
-        painter.v_line(x + w - 1, row.y, row.h, GRID_LINE);
+        painter.v_line(x + w - 1, row.y, row.h, grid_line(theme));
         painter.text_styled(
             x + CELL_PAD,
             row.y + m.baseline - size.round() as i32,

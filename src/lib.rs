@@ -8,7 +8,8 @@
 //! * widgets are ordinary Rust values implementing [`Widget`]
 //! * events are typed (no integer message IDs)
 //! * widgets request repaint / window close via [`EventCtx`]
-//! * the default [`Theme`] paints chrome that matches Windows 3.1
+//! * the default [`Theme`] paints chrome that matches Windows 3.1 — in light
+//!   or dark, as the system's appearance says
 //!
 //! ## Minimal example
 //!
@@ -16,7 +17,6 @@
 //! use saudade::*;
 //!
 //! let root = Container::new(200, 80)
-//!     .with_background(Color::WHITE)
 //!     .add(Label::new(Rect::new(10, 10, 180, 16), "Hello, world!"))
 //!     .add(
 //!         Button::new(Rect::new(60, 40, 80, 24), "OK")
@@ -34,6 +34,7 @@ extern crate self as saudade;
 
 mod accel;
 mod app;
+mod appearance;
 mod background;
 pub mod chrome;
 #[cfg(target_os = "macos")]
@@ -50,6 +51,9 @@ mod macos_popup;
 mod mime_drop;
 pub mod mock;
 mod painter;
+// Only used off macOS, but built on every Unix so its tests run on a Mac too.
+#[cfg(unix)]
+mod portal;
 mod present;
 mod svg;
 mod theme;
@@ -68,6 +72,7 @@ mod win32_fullscreen;
 mod win32_layered;
 #[cfg(windows)]
 mod win32_popup;
+mod wrap;
 #[cfg(all(unix, not(target_os = "macos")))]
 mod x11;
 #[cfg(all(unix, not(target_os = "macos")))]
@@ -92,8 +97,8 @@ pub use svg::{FillRule, SvgImage, SvgPolygon};
 pub use theme::Theme;
 pub use widget::{PopupKind, PopupRequest, Widget};
 pub use widgets::{
-    Bevel, Button, Checkbox, Column, Container, ContextMenu, Dialog, DialogIcon, Dropdown,
-    FileDialog, FileFilter, FocusLabel, Image, Label, List, ListIcon, ListItem, Menu, MenuBar,
-    MenuItem, Modal, Orientation, ProgressBar, Row, SCROLLBAR_THICKNESS, ScrollBar, Slider,
-    TextEditor, TextInput,
+    Bevel, Button, ButtonGroup, Checkbox, Column, Container, ContextMenu, Dialog, DialogIcon,
+    Dropdown, FileDialog, FileFilter, FocusLabel, GroupButton, Image, Label, List, ListIcon,
+    ListItem, Menu, MenuBar, MenuItem, Modal, NumberInput, Orientation, ProgressBar, Row,
+    SCROLLBAR_THICKNESS, ScrollBar, Slider, SpinButton, TextEditor, TextInput,
 };

@@ -42,6 +42,7 @@ Reference apps live under `examples/`. Run any of them with
 | `picker`        | <img src="docs/screenshots/picker.png" alt="The picker example" width="300">               | Pick-an-item dialog: `List` + buttons + `Dialog`, with Tab/Shift+Tab focus cycling.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
 | `dialogs`       | <img src="docs/screenshots/dialogs.png" alt="The dialogs example" width="300">             | A launcher with one button per kind of dialog: message boxes (`Dialog::show_info` / `show_warning` / `show_error`, and `show` without an icon), a confirmation box (`Dialog::show_confirm`), and a custom `Modal` around an ordinary `Container` whose `Slider` previews its value in the launcher while open, commits on OK, and reverts on Cancel, Escape or the close button (`Widget::on_cancel`).                                                                                                                                                                                                                                                   |
 | `focus_form`    | <img src="docs/screenshots/focus_form.png" alt="The focus_form example" width="300">       | `FocusLabel` buddy labels: Alt+letter mnemonics jump focus to the next field.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| `page_layout`   | <img src="docs/screenshots/page_layout.png" alt="The page_layout example" width="300">     | A page layout dialog with a live preview of the page: a `Dropdown` for the paper size, a `ButtonGroup` of two buttons with an icon and a label each for the orientation, and `NumberInput`s for the margins (millimetres to one decimal, in half-millimetre steps), the scale and the number of copies, each limited to a range of its own.                                                                                                                                                                                                                                                                                                              |
 | `counter`       | <img src="docs/screenshots/counter.png" alt="The counter example" width="300">             | [7GUIs](https://eugenkiss.github.io/7guis/) task 1 — a `Label` field and a `Button`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 | `temperature`   | <img src="docs/screenshots/temperature.png" alt="The temperature example" width="300">     | 7GUIs task 2 — two `TextInput`s converting Celsius ↔ Fahrenheit live.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
 | `flight_booker` | <img src="docs/screenshots/flight_booker.png" alt="The flight_booker example" width="300"> | 7GUIs task 3 — a `Dropdown` picks the flight type and reactively enables / disables the return-date field and the Book `Button`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
@@ -49,19 +50,19 @@ Reference apps live under `examples/`. Run any of them with
 | `crud`          | <img src="docs/screenshots/crud.png" alt="The crud example" width="300">                   | 7GUIs task 5 — a `List` as a live, prefix-filtered database view with Create / Update / Delete `Button`s that enable themselves reactively.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
 | `circle_drawer` | <img src="docs/screenshots/circle_drawer.png" alt="The circle_drawer example" width="300"> | 7GUIs task 6 — a custom canvas (no circle primitive: midpoint outlines, span-filled disks) with hover selection, a `ContextMenu` right-click menu, a real modal dialog (`Modal`) hosting the diameter `Slider`, and snapshot undo/redo.                                                                                                                                                                                                                                                                                                                                                                                                                  |
 | `cells`         | <img src="docs/screenshots/cells.png" alt="The cells example" width="300">                 | 7GUIs task 7 — a scrollable A–Z / 0–99 spreadsheet `Grid` (built on `ScrollBar` + `TextInput`) with a formula engine: cell refs, `+ - * /`, ranges, `SUM`/`AVG`/…, reactive recompute and cycle detection.                                                                                                                                                                                                                                                                                                                                                                                                                                               |
-| `patterns`      | <img src="docs/screenshots/patterns.png" alt="The patterns example" width="300">           | Previews the window background patterns (`none`, `solid`, `dots`, `lines`, `diagonal`, `cross-stitch`): press `p` to cycle the pattern and `c` to cycle the color. Every app draws one behind its widgets — default `superlight` `diagonal`, overridable with `SAUDADE_WINDOW_PATTERN` / `SAUDADE_WINDOW_PATTERN_COLOR` (e.g. `SAUDADE_WINDOW_PATTERN=dots SAUDADE_WINDOW_PATTERN_COLOR=light`).                                                                                                                                                                                                                                                         |
+| `patterns`      | <img src="docs/screenshots/patterns.png" alt="The patterns example" width="300">           | Previews the window background patterns (`none`, `solid`, `dots`, `lines`, `diagonal`, `cross-stitch`): press `p` to cycle the pattern and `c` to cycle the color. Every app draws one behind its widgets — default `diagonal`, in `superlight` on the light theme and a shade just off the background on the dark one, overridable with `SAUDADE_WINDOW_PATTERN` / `SAUDADE_WINDOW_PATTERN_COLOR` (e.g. `SAUDADE_WINDOW_PATTERN=dots SAUDADE_WINDOW_PATTERN_COLOR=light`).                                                                                                                                                                              |
 | `fonts`         | <img src="docs/screenshots/fonts.png" alt="The fonts example" width="300">                 | A type specimen: all twelve faces — sans / serif / monospace, each in regular, bold, italic and bold-italic — drawn at nine sizes in one large scrolling table (`Painter::text_styled`, columns sized from `measure_text_styled`, size header and style column frozen). The column matching `Theme::font_size` is highlighted; a family the host has no font for says so in place of its four rows.                                                                                                                                                                                                                                                      |
-| `scaling`       | <img src="docs/screenshots/scaling.png" alt="The scaling example" width="300">             | Previews widgets at an arbitrary logical→physical scale via `Painter::draw_scaled`: a `Slider` and two rows of preset `Button`s walking a quarter ladder (1.0x / 1.25x / … / 3.0x, plus 3.5x) drive a "preview scale" — starting at the display's OS scale — that a small panel of real widgets (`TextInput`, `Dropdown`, `Checkbox`, `Button`s including a focused one for its dotted focus rectangle, `ProgressBar`) redraws at, plus a "zoom in 2x" `Checkbox` that magnifies the result. The window resizes itself (via `EventCtx::request_window_size`) to fit the preview at the chosen scale. The window's own (OS-owned) scale is never touched. |
+| `scaling`       | <img src="docs/screenshots/scaling.png" alt="The scaling example" width="300">             | Previews widgets at an arbitrary logical→physical scale via `Painter::draw_scaled`: a `Slider` and two rows of preset `Button`s walking a quarter ladder up to 3.5x drive a "preview scale" — starting at the display's OS scale — that a small panel of real widgets (`TextInput`, `NumberInput`, `Dropdown`, `ButtonGroup`, `Checkbox`, `Button`s including a focused one for its dotted focus rectangle, `ProgressBar`) redraws at, plus a "zoom in 2x" `Checkbox` that magnifies the result. The window resizes itself (via `EventCtx::request_window_size`) to fit the preview at the chosen scale. The window's own scale is never touched.        |
 | `credit_card`   | <img src="docs/screenshots/credit_card.png" alt="The credit_card example" width="300">     | Draws an ISO/IEC 7810 bank card (85.60 × 53.98 mm) at its real size, whatever scaling the display is set to: the card is painted in device pixels from `Painter::display_dpi`, while the window around it follows the scale factor. A readout compares how big a logical pixel came out on this display with the 1/72 in it aims for. Where the display reports no physical size (a projector, a virtual output) the card falls back to 72 logical pixels to the inch; X11 reports one through RandR and Wayland off `wl_output`, and under fractional scaling the density is the oversampled buffer's rather than the panel's, which is the figure the card has to be counted in.                                                                                                                                                                                                    |
 | `svg`           | <img src="docs/screenshots/svg.png" alt="The svg example" width="300">                     | Compares `include_svg!` (SVG baked to polygons at compile time, filled at runtime — no SVG crate in the binary) against `include_str!` + `resvg` (parse + rasterize at runtime). Draws six icons both ways for a side-by-side fidelity check and prints a micro-benchmark to the console (run with `--release`). Needs `resvg` only as a dev-dependency, for the comparison.                                                                                                                                                                                                                                                                             |
 | `chrome`        | <img src="docs/screenshots/chrome.png" alt="The chrome example" width="300">               | Renders an "about box" offscreen and wraps it in Canoe-style window chrome (title bar, frame, drop shadow on a teal desktop) via `MockBackend::render_framed`, writing one PNG per frame style (`Resizable` / `Fixed` / `Dialog`). Opens no window — it generates screenshots.                                                                                                                                                                                                                                                                                                                                                                           |
 
 ```console
 $ cargo run --example notepad        # or: filer, dnd, fullscreen, picker, dialogs,
-                                     #     focus_form, counter, temperature,
-                                     #     flight_booker, timer, crud, circle_drawer,
-                                     #     cells, patterns, fonts, scaling,
-                                     #     credit_card, svg
+                                     #     focus_form, page_layout, counter,
+                                     #     temperature, flight_booker, timer, crud,
+                                     #     circle_drawer, cells, patterns, fonts,
+                                     #     scaling, credit_card, svg
 ```
 
 The screenshots, the one at the top included, come from
@@ -83,7 +84,6 @@ use saudade::*;
 
 fn main() {
     let root = Container::new(220, 100)
-        .with_background(Color::WHITE)
         .with_border(Color::BLACK)
         .add(Label::new(Rect::new(20, 20, 180, 16), "Hello, saudade!"))
         .add(
@@ -137,22 +137,22 @@ to an object-oriented UI framework.
 
 ## Module map
 
-| Module     | Contents                                                                                                                                                                                                                                                        |
-| ---------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| geometry   | `Point`, `Size`, `Rect`, `Color`                                                                                                                                                                                                                                |
-| event      | `Event`, `DragData`, `DraggedFile`, `MouseButton`, `Key`, `NamedKey`, `Modifiers`, `Cursor`, `EventCtx`                                                                                                                                                                        |
-| accel      | `Accel`, `ModifierScheme` — menu shortcuts that read ⌘ on macOS and Ctrl elsewhere                                                                                                                                                                              |
-| theme      | `Theme`, default `Theme::windows_31()` palette                                                                                                                                                                                                                  |
-| background | `BackgroundPattern` — the pattern every window draws behind its widgets                                                                                                                                                                                         |
-| painter    | `Painter` — drawing primitives + Win 3.1 chrome helpers                                                                                                                                                                                                         |
-| svg        | `SvgImage`, `SvgPolygon`, `FillRule` + the `include_svg!` macro — compile-time vector icons                                                                                                                                                                     |
-| font       | `Font`, `FontSet`, `FontFamily`, `FontStyle` — system font lookup + glyph rasterization                                                                                                                                                                         |
-| widget     | `Widget` trait (paint / event / focus / overlay hooks)                                                                                                                                                                                                          |
-| widgets    | `Container`, `Column`, `Row`, `Label`, `FocusLabel`, `Button`, `Checkbox`, `Bevel`, `Image`, `MenuBar`, `Menu`, `MenuItem`, `ContextMenu`, `ScrollBar`, `Slider`, `ProgressBar`, `List`, `Dropdown`, `Modal`, `Dialog`, `FileDialog`, `TextInput`, `TextEditor` |
-| app        | `App`, `WindowConfig` — runtime entry point                                                                                                                                                                                                                     |
-| icon       | turns `WindowConfig::icon` into what each platform's title bar, taskbar or dock wants                                                                                                                                                                           |
-| mock       | `MockBackend`, `Snapshot`, `Desktop` — offscreen rendering to a pixel buffer / PNG                                                                                                                                                                              |
-| chrome     | `WindowChrome`, `WindowFrame` — Canoe-style title bar + frame for screenshots                                                                                                                                                                                   |
+| Module     | Contents                                                                                                                                                                                                                                                                                                    |
+| ---------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| geometry   | `Point`, `Size`, `Rect`, `Color`                                                                                                                                                                                                                                                                            |
+| event      | `Event`, `DragData`, `DraggedFile`, `MouseButton`, `Key`, `NamedKey`, `Modifiers`, `Cursor`, `EventCtx`                                                                                                                                                                                                     |
+| accel      | `Accel`, `ModifierScheme` — menu shortcuts that read ⌘ on macOS and Ctrl elsewhere                                                                                                                                                                                                                          |
+| theme      | `Theme`, default `Theme::windows_31()` palette and its dark-mode counterpart, `Theme::windows_31_dark()`                                                                                                                                                                                                    |
+| background | `BackgroundPattern` — the pattern every window draws behind its widgets                                                                                                                                                                                                                                     |
+| painter    | `Painter` — drawing primitives + Win 3.1 chrome helpers                                                                                                                                                                                                                                                     |
+| svg        | `SvgImage`, `SvgPolygon`, `FillRule` + the `include_svg!` macro — compile-time vector icons                                                                                                                                                                                                                 |
+| font       | `Font`, `FontSet`, `FontFamily`, `FontStyle` — system font lookup + glyph rasterization                                                                                                                                                                                                                     |
+| widget     | `Widget` trait (paint / event / focus / overlay hooks)                                                                                                                                                                                                                                                      |
+| widgets    | `Container`, `Column`, `Row`, `Label`, `FocusLabel`, `Button`, `ButtonGroup`, `Checkbox`, `Bevel`, `Image`, `MenuBar`, `Menu`, `MenuItem`, `ContextMenu`, `ScrollBar`, `Slider`, `SpinButton`, `ProgressBar`, `List`, `Dropdown`, `Modal`, `Dialog`, `FileDialog`, `TextInput`, `NumberInput`, `TextEditor` |
+| app        | `App`, `WindowConfig` — runtime entry point                                                                                                                                                                                                                                                                 |
+| icon       | turns `WindowConfig::icon` into what each platform's title bar, taskbar or dock wants                                                                                                                                                                                                                       |
+| mock       | `MockBackend`, `Snapshot`, `Desktop` — offscreen rendering to a pixel buffer / PNG                                                                                                                                                                                                                          |
+| chrome     | `WindowChrome`, `WindowFrame` — Canoe-style title bar + frame for screenshots                                                                                                                                                                                                                               |
 
 Everything user-facing is re-exported from the crate root; you generally
 just `use saudade::*;`.
@@ -460,7 +460,7 @@ pub struct Theme {
     pub face: Color,            // button / menu-bar face
     pub highlight: Color,       // light bevel edge
     pub shadow: Color,          // dark bevel edge
-    pub border: Color,          // 1-px outer black border
+    pub border: Color,          // 1-px outline (black on the light theme)
     pub text: Color,
     pub disabled_text: Color,
     pub highlight_bg: Color,    // selected-item bg (Win 3.1: navy)
@@ -474,6 +474,47 @@ The default is `Theme::windows_31()`: white workspace, light-gray button
 face, white top/left highlight, mid-gray bottom/right shadow, black outer
 border, navy/white selection, 11pt text. Pass an alternative via
 `App::with_theme(...)` if you want to skin the same widgets differently.
+
+### Dark mode
+
+Every app carries a second theme for dark mode, `Theme::windows_31_dark()`
+unless it brings its own, and paints with whichever matches the system's
+light or dark appearance — switching over live when the user flips it. The
+dark theme is the same chrome after dark: black outlines and bevels lit from
+the top left, on a charcoal workspace with dark-gray button faces and light
+text. As on the light theme, the outline is the darkest line of a raised
+control, below its shadow; the workspace stays light enough for a black
+outline to mark the edge of a field, a popup or a check box.
+
+```rust
+App::new(window_cfg, root)
+    .with_theme(light)        // light mode; Theme::windows_31() if not set
+    .with_dark_theme(dark)    // dark mode; Theme::windows_31_dark() if not set
+    .run();
+```
+
+`with_theme` sets the light theme only, so an app that customizes it will
+usually want a matching `with_dark_theme`; to keep one look whatever the
+system does, pass the same theme to both.
+
+Where the appearance comes from:
+
+| Platform      | Source                                                                                                                                                                 |
+| ------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| macOS         | the system appearance, through winit; the title bar follows by itself                                                                                                  |
+| Windows       | the "app mode" setting, through winit, which darkens the title bar to match                                                                                            |
+| X11 / Wayland | the freedesktop settings portal's `color-scheme` (what GNOME, KDE and friends set from their own light / dark switch), read over D-Bus — no portal running means light |
+
+`SAUDADE_THEME` overrides the system: `SAUDADE_THEME=dark` or
+`SAUDADE_THEME=light` paints every window in that theme (and asks the platform
+for a title bar to match), and `auto` — as good as unset — follows the system.
+Handy for trying an app in the other mode without flipping your desktop.
+
+Widgets that paint their own surfaces should take their colors from the
+`theme` they are handed rather than from `Color::WHITE` and friends, so they
+follow along; `Color::mix` derives a shade between two theme colors — a grid
+line a little off the background, say, that is darker on the light theme and
+lighter on the dark one.
 
 `button_style` is the face a push button sets its label in. It defaults to
 `FontStyle::Bold` — a button is the one thing on a panel you press, and the
@@ -518,7 +559,6 @@ which is exactly what `Container`'s children want.
 // The runtime auto-focuses the first focusable widget (the editor) at
 // startup, so the user can type immediately.
 let root = Column::new()
-    .with_background(Color::WHITE)
     .add_fixed(menu_bar, MENU_BAR_H)
     .add_fill(text_editor);
 ```
@@ -573,6 +613,11 @@ let mut root = Container::new(395, 305);
 root.push(Label::new(Rect::new(20, 20, 120, 16), "Hello"));
 ```
 
+Without a background a container is transparent, showing the window's own
+`theme.background` and pattern through. A background color is fixed, the same
+in light and dark mode — `Color::WHITE` stays white behind the dark theme's
+light text — so leave it off unless the panel should look the same in both.
+
 The runtime calls `Widget::focus_first` on the root once the window is
 ready, so a container that holds a `TextEditor` or `List` will hand it
 keyboard focus automatically. Override the trait method to choose a
@@ -594,9 +639,11 @@ Label::new(Rect::new(10, 50, 120, 16), "Red").with_color(Color::RED);
 
 Text is multi-line and word-wrapped to the box automatically — no wrap
 points to specify by hand. Explicit `\n` characters always start a new line,
-and any line too wide for the box breaks at whitespace (a single word wider
-than the box overflows rather than being split mid-word). Lines stack at the
-font's natural line height.
+and any line too wide for the box breaks between words, or after a hyphen or
+dash joining two. A single word wider than the box is broken too, after a `/`
+or `\` if it has one, so a long path splits between its components. Spaces
+inside a line are kept as typed. Lines stack at the font's natural line
+height.
 
 ```rust
 Label::new(Rect::new(10, 10, 200, 60),
@@ -669,6 +716,50 @@ const UP: SvgImage = include_svg!("assets/icons/up.svg");
 Button::new(Rect::new(8, 8, 80, 24), "Up").with_icon(UP);
 Button::new(Rect::new(96, 8, 32, 24), "").with_icon(UP); // icon only
 ```
+
+### `ButtonGroup`
+
+A row (or column) of buttons joined into one control, of which one is
+selected at a time: a radio choice made of push buttons, for a page's
+orientation, a paragraph's alignment, a view mode. Each button shows a label,
+an icon, or both — a `GroupButton`, or just a `&str` for a label alone:
+
+```rust
+const PORTRAIT: SvgImage = include_svg!("examples/assets/icons/portrait.svg");
+const LANDSCAPE: SvgImage = include_svg!("examples/assets/icons/landscape.svg");
+
+let orientation = ButtonGroup::horizontal(Rect::new(104, 48, 184, 24))
+    .with_buttons([
+        GroupButton::new("Portrait").with_icon(PORTRAIT), // icon and label
+        GroupButton::new("Landscape").with_icon(LANDSCAPE),
+    ])
+    .on_change(|cx, index| {
+        // fires when the user selects a different button
+        cx.request_paint();
+    });
+
+let align = ButtonGroup::vertical(Rect::new(8, 8, 80, 70))
+    .with_buttons(["Left", "Center", "Right"])      // labels only
+    .with_selected(1);
+let view = ButtonGroup::horizontal(Rect::new(8, 8, 57, 24))
+    .with_buttons([GroupButton::icon(PORTRAIT), GroupButton::icon(LANDSCAPE)]);
+```
+
+The buttons share the group's rect evenly, and the borders between them. They
+wear the scrollbar arrows' lighter chrome, square-cornered so they join into
+one frame, and set their faces like a `Button`'s: in `theme.button_style`, the
+icon tinted with the label. The selected button stays pushed in, its face
+stippled with white the way a latched toolbar button's is. The first button
+starts out selected; `set_selected` picks another without firing `on_change`.
+
+| Input           | Effect                                           |
+| --------------- | ------------------------------------------------ |
+| click a button  | select it (on release, as a `Button` fires)      |
+| ← / ↑ and → / ↓ | select the previous / next button, while focused |
+| Home / End      | select the first / last button, while focused    |
+
+The group takes the focus as a whole, drawing the dotted focus rectangle inside
+the selected button, so a `FocusLabel` in front of it can jump there.
 
 ### `Checkbox`
 
@@ -976,6 +1067,35 @@ gauge or label bound to it updates as the user moves the thumb. Use
 `set_on_change` to install the handler after construction (when the slider is
 held behind an `Rc<RefCell<…>>`).
 
+### `SpinButton`
+
+A pair of arrow buttons that step something up or down: an up arrow over a down
+arrow, or a left arrow beside a right one. It holds no value of its own — it
+reports steps and leaves what a step means to its owner: a number, a date, the
+next entry of a list. For a number typed into a field, `NumberInput` builds one
+in already.
+
+```rust
+let paper = SpinButton::vertical(Rect::new(272, 16, 16, 24))
+    .on_step(|cx, steps| {
+        // +1 for the up / right arrow, -1 for the down / left one
+        cx.request_paint();
+    });
+let orientation = SpinButton::horizontal(Rect::new(256, 48, 32, 24));
+```
+
+| Input       | Effect                                              |
+| ----------- | --------------------------------------------------- |
+| click arrow | one step                                            |
+| hold arrow  | repeat the step, at the scrollbar arrows' pace      |
+| mouse wheel | one step per notch: up (or a swipe right) counts up |
+
+A quick turn of the wheel can bring several steps in one call, so scale by
+`steps` rather than assume ±1. Like `ScrollBar`, it takes no keyboard focus.
+To set one flush against a field of your own, as `NumberInput` does, let the
+field run two pixels on under the arrows: their border then is the field's right
+edge.
+
 ### `ProgressBar`
 
 A sunken white field that fills from the left with a solid grey bar in
@@ -1039,6 +1159,64 @@ field leaves Enter alone, so it reaches the container's default `Button`
 wedge at the bottom of the field marks where the caret will be once the
 focus comes back. As on `TextEditor`, `cut`, `copy`, `paste`, and
 `select_all` are there to call from menu items.
+
+### `NumberInput`
+
+A `TextInput` for a number, with a `SpinButton` pair along its right edge to
+step it. The number lies in a range, is shown with a fixed number of decimals —
+its precision — and moves by a step. A unit can show inside the field:
+
+```rust
+let margin = NumberInput::new(Rect::new(72, 120, 72, 24))
+    .with_range(0.0, 50.0)              // inclusive; unlimited by default
+    .with_step(0.5)                     // what one arrow click adds (default 1)
+    .with_precision(1)                  // decimals shown (default 0) — set it
+    .with_value(25.0)                   // before the value, which it rounds
+    .with_unit("mm")                    // grey, next to the arrows (default none)
+    .on_change(|cx, mm| {
+        // fires whenever the user changes the value
+        cx.request_paint();
+    });
+
+let mm: f64 = margin.value();
+```
+
+The field takes only text that reads as such a number, or as the start of one:
+digits, a `-` in front if the range reaches below zero, and a decimal point
+followed by no more digits than the precision allows. A keystroke or a paste
+that would leave anything else is dropped. A comma typed stands in for the
+decimal point, since that is what the keypad's decimal key types on many
+layouts. The unit is only shown: the number keeps clear of it, but it can't be
+typed over or selected, and the value doesn't include it.
+
+Taking the focus selects the whole number — whether by Tab, a `FocusLabel`'s
+mnemonic, or a click in the text — so typing replaces it right away; a click in
+a field that already has the focus places the caret. Unlike a `TextInput`, the
+field shows neither a caret nor a selection while it doesn't have the focus.
+
+The value follows the text as it is typed: whenever the text reads as a number,
+the value is that number clamped to the range, and `on_change` fires. Enter, or
+leaving the field, rewrites the text to show the value at its precision —
+`250` becomes `100` in a field that stops at 100, and a field left empty shows
+its value again.
+
+The arrows, keys and wheel move the value from one multiple of the step to the
+next: with a step of 0.5, up from 1.3 goes to 1.5 and down to 1.0, and on from
+there by 0.5. A step lands on the precision too, so ten steps of 0.1 make
+exactly 1.
+
+| Input             | Effect                                               |
+| ----------------- | ---------------------------------------------------- |
+| click arrow       | step up / down                                       |
+| hold arrow        | repeat the step, at the scrollbar arrows' pace       |
+| ↑ / ↓             | step up / down                                       |
+| PageUp / PageDown | ten steps up / down                                  |
+| mouse wheel       | one step per notch, over the arrows or while focused |
+| anything else     | edits the text as in a `TextInput`                   |
+
+`on_change` never fires for `set_value`, `set_range`, `set_step` or
+`set_precision`, so inputs that update each other don't loop. The value is an
+`f64`; with no decimals, cast it to the integer type you need.
 
 ### `TextEditor`
 
@@ -1287,11 +1465,15 @@ dialog.borrow_mut().show_error("Error", "The file could not be opened.");
 dialog.borrow_mut().show("Notice", "No icon on this one.", DialogIcon::None);
 ```
 
-The box keeps the classic width and grows only in height, so break long
-messages into lines with `\n` yourself — it does not word-wrap. `with_size`
-pins the box to a size of your choosing instead. OK, Enter, Space, Escape,
-and the window's close button all dismiss it, and `on_dismiss` runs
-whichever it was: the `picker` example closes its main window from there.
+The box keeps the classic width, word-wraps the message to it the way a
+`Label` wraps, and grows in height to fit the lines that takes — a `\n` is
+only needed to start a new paragraph. `with_size` pins the box to a size of
+your choosing instead; the message then wraps to that width and is cut off
+above the buttons if it doesn't fit. As its size depends on the font, the
+box measures itself on the first paint after it is shown, and its window
+opens then. OK, Enter, Space, Escape, and the window's close button all
+dismiss it, and `on_dismiss` runs whichever it was: the `picker` example
+closes its main window from there.
 
 `show_confirm` asks before something consequential: a warning icon, the
 message, and two buttons — Cancel, and one labeled as you choose, which
@@ -1300,7 +1482,7 @@ runs the handler.
 ```rust
 dialog.borrow_mut().show_confirm(
     "Delete file?",
-    "This permanently deletes the file.\nThis cannot be undone.",
+    "This permanently deletes the file. This cannot be undone.",
     "Delete",
     |cx| { /* delete it */ cx.request_paint(); },
 );
@@ -1376,8 +1558,9 @@ and File → Save As.
 
 ### Disabled controls
 
-Every interactive widget — `Button`, `Checkbox`, `TextInput`, `TextEditor`,
-`Slider`, `List`, and `Dropdown` — carries an enabled flag. Construct with
+Every interactive widget — `Button`, `ButtonGroup`, `Checkbox`, `TextInput`,
+`NumberInput`, `TextEditor`, `Slider`, `SpinButton`, `List`, and `Dropdown` —
+carries an enabled flag. Construct with
 `.with_enabled(false)` or flip it at runtime with `set_enabled(bool)` (read it
 back with `is_enabled()`). A disabled control paints greyed (an engraved label
 on a button, greyed text elsewhere), refuses keyboard focus, and ignores every
@@ -1501,7 +1684,13 @@ p.text(x, y, "Hello", 11.0, Color::BLACK);
 p.text_centered(rect, "OK", 11.0, Color::BLACK);
 
 let size = p.measure_text("Hello", 11.0);   // returns Size in logical px
+let lines = p.wrap_text(long_text, 11.0, 200); // lines no wider than 200 px
 ```
+
+`wrap_text` breaks text into lines the way a `Label` does: at every `\n`,
+then between words to fit the width, breaking a word only when it is too
+wide for a line of its own. The lines borrow from the text, ready to hand
+to `text` one below the other.
 
 `Painter::font()` returns the loaded font, if any. If no system font
 could be loaded, text calls become no-ops; layout code that depends on
@@ -1541,8 +1730,11 @@ power.draw(painter, Rect::new(8, 8, 32, 32));
 
 `SvgImage` is `Copy`, so it also drops straight into widgets that take an icon:
 `ListItem::with_svg_icon(POWER)` puts a crisp baked mark on a list row (the
-`filer` example and the `FileDialog` use shared `assets/icons/{folder,file,up}.svg`
+`filer` example and the `FileDialog` use shared `assets/icons/{folder,file}.svg`
 this way), the alternative to the raster `ListIcon` for hand-drawn pixels.
+`ListItem::with_svg_glyph` draws a one-color mark in the row's text color
+instead — white on the selection band, light on the dark theme — which is how
+the same two show `assets/icons/up.svg` for the `..` row.
 
 The geometry is resolution-independent, so the same constant fills crisply
 at any size or scale factor. The supported SVG subset is the practical one —
@@ -1674,7 +1866,8 @@ draw call.
 
 ```rust
 App::new(window_cfg, root_widget)
-   .with_theme(Theme::windows_31())   // optional
+   .with_theme(Theme::windows_31())   // optional; the light-mode theme
+   .with_dark_theme(Theme::windows_31_dark()) // optional; see "Dark mode"
    .with_ui_scale(2.0)                // optional; see "How big a logical pixel is"
    .run();                            // blocks until window closes
 ```
