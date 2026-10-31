@@ -10,6 +10,8 @@ While pre-1.0, the minor version is bumped for breaking changes.
 
 ## [Unreleased] - ReleaseDate
 
+## [0.8.0] - 2026-10-31
+
 ### Added
 
 - Dark mode! Every app now paints with one of two themes, whichever matches
@@ -760,7 +762,8 @@ FontStyle::Regular)`, and get caret offsets with the new
 Initial release.
 
 <!-- next-url -->
-[Unreleased]: https://github.com/roblillack/saudade/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/roblillack/saudade/compare/v0.8.0...HEAD
+[0.8.0]: https://github.com/roblillack/saudade/compare/v0.7.0...v0.8.0
 
 [0.7.0]: https://github.com/roblillack/saudade/compare/v0.6.1...v0.7.0
 [0.6.1]: https://github.com/roblillack/saudade/compare/v0.6.0...v0.6.1
