@@ -46,6 +46,8 @@ mod icon;
 mod macos_layer;
 #[cfg(target_os = "macos")]
 mod macos_popup;
+#[cfg(all(unix, not(target_os = "macos")))]
+mod mime_drop;
 pub mod mock;
 mod painter;
 mod present;
@@ -68,6 +70,8 @@ mod win32_layered;
 mod win32_popup;
 #[cfg(all(unix, not(target_os = "macos")))]
 mod x11;
+#[cfg(all(unix, not(target_os = "macos")))]
+mod x11_drop;
 
 pub use accel::{Accel, AccelMods, ModifierScheme};
 pub use app::{App, WindowConfig};

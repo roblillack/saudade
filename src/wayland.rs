@@ -10,7 +10,9 @@
 //! real popups with a positioner anchored to the parent — the same behavior
 //! Chrome/Firefox have on Wayland.
 
+use std::cell::Cell;
 use std::path::PathBuf;
+use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -78,6 +80,7 @@ use crate::event::{
 };
 use crate::font::{Font, FontSet};
 use crate::geometry::{Color, Point, Rect, Size};
+use crate::mime_drop::{self, Reading, URI_LIST};
 use crate::painter::Painter;
 use crate::svg::SvgImage;
 use crate::theme::Theme;
@@ -1013,7 +1016,7 @@ impl State {
 
         // Offer only the uri-list, copy-only (we never want a move to make the
         // source side delete the user's files).
-        let source = mgr.create_drag_and_drop_source(&self.qh, [URI_LIST_MIME], DndAction::Copy);
+        let source = mgr.create_drag_and_drop_source(&self.qh, [URI_LIST], DndAction::Copy);
         source.start_drag(dd, &origin, icon.as_ref().map(|i| &i.surface), serial);
         self.drag_payload = paths_to_uri_list(&data.paths).into_bytes();
         self.drag_source = Some(source);
@@ -1627,18 +1630,86 @@ impl State {
 
     /// Tell an incoming drag offer whether we'll take it. Accepting asks for a
     /// *copy* (never move — we must not make the source delete the user's file)
-    /// and names the uri-list; rejecting clears the action and mime so the
-    /// source sees "no drop" over us. Flushed right away so the source's cursor
-    /// updates without waiting for the next loop turn.
+    /// and names the form a drop reads first (see [`mime_drop`]); rejecting
+    /// clears the action and mime so the source sees "no drop" over us. Flushed
+    /// right away so the source's cursor updates without waiting for the next
+    /// loop turn.
     fn apply_drag_offer(&self, offer: &DragOffer, accepted: bool, conn: &Connection) {
         if accepted {
+            let form = offer.with_mime_types(|types| mime_drop::first(types).map(str::to_string));
             offer.set_actions(DndAction::Copy, DndAction::Copy);
-            offer.accept_mime_type(offer.serial, Some(URI_LIST_MIME.to_string()));
+            offer.accept_mime_type(offer.serial, form);
         } else {
             offer.set_actions(DndAction::empty(), DndAction::empty());
             offer.accept_mime_type(offer.serial, None);
         }
         let _ = conn.flush();
+    }
+
+    /// Read the next form of the dropped `offer` (see [`Reading`]), or, with
+    /// none left, end the drag and hand the widgets what it carried. Each form
+    /// is read *asynchronously* off the pipe the source writes it to, via
+    /// calloop — a blocking read here would freeze the UI if the source were
+    /// slow to write — and the next one asked for once it is in.
+    fn read_drop(&mut self, offer: DragOffer, mut reading: Reading, pos: Point) {
+        let Some(form) = reading.next() else {
+            offer.finish();
+            offer.destroy();
+            self.dispatch(Event::Drop {
+                pos,
+                data: reading.finish(),
+            });
+            self.mark_popups_dirty();
+            return;
+        };
+        // A form the source can't hand over is one fewer to read.
+        let Ok(read_pipe) = offer.receive(form.clone()) else {
+            return self.read_drop(offer, reading, pos);
+        };
+        // Shared with the reader, which takes it once the form is in; left
+        // here if the reader can't be registered.
+        let pending = Rc::new(Cell::new(Some((offer, reading))));
+        let theirs = pending.clone();
+        let mut buf: Vec<u8> = Vec::new();
+        let inserted =
+            self.loop_handle
+                .insert_source(read_pipe, move |_event, file, state: &mut State| {
+                    use std::io::Read;
+                    // SAFETY: we only read from the fd; calloop owns and closes it.
+                    let f: &mut std::fs::File = unsafe { file.get_mut() };
+                    let mut chunk = [0u8; 64 * 1024];
+                    match f.read(&mut chunk) {
+                        // EOF: the source finished writing the form.
+                        Ok(0) => {}
+                        Ok(n) => {
+                            buf.extend_from_slice(&chunk[..n]);
+                            return PostAction::Continue;
+                        }
+                        Err(ref e)
+                            if matches!(
+                                e.kind(),
+                                std::io::ErrorKind::Interrupted | std::io::ErrorKind::WouldBlock
+                            ) =>
+                        {
+                            // Spurious wakeup / signal — wait for the next.
+                            return PostAction::Continue;
+                        }
+                        // A broken pipe: nothing of this form.
+                        Err(_) => buf.clear(),
+                    }
+                    if let Some((offer, mut reading)) = theirs.take() {
+                        reading.take(&form, std::mem::take(&mut buf));
+                        state.read_drop(offer, reading, pos);
+                    }
+                    PostAction::Remove
+                });
+        if inserted.is_err()
+            && let Some((offer, reading)) = pending.take()
+        {
+            // Couldn't watch the pipe: skip the form rather than leave the UI
+            // stuck mid-drag.
+            self.read_drop(offer, reading, pos);
+        }
     }
 
     /// Create this seat's data device (once) so drag offers start arriving. A
@@ -2246,10 +2317,10 @@ impl DataDeviceHandler for State {
         };
         let Some(offer) = offer else { return };
 
-        // We only handle file drags. Reject anything without `text/uri-list`
+        // Reject a drag that carries nothing a drop reads (see `mime_drop`)
         // outright so the compositor shows "can't drop here" over us.
-        let has_uri = offer.with_mime_types(|mimes| mimes.iter().any(|m| m == URI_LIST_MIME));
-        if !has_uri {
+        let readable = offer.with_mime_types(|types| mime_drop::first(types).is_some());
+        if !readable {
             offer.accept_mime_type(offer.serial, None);
             return;
         }
@@ -2326,12 +2397,11 @@ impl DataDeviceHandler for State {
 
     fn drop_performed(
         &mut self,
-        conn: &Connection,
+        _conn: &Connection,
         _qh: &QueueHandle<Self>,
         _data_device: &WlDataDevice,
     ) {
         let Some(drag) = self.drag.take() else { return };
-        let pos = drag.pos;
         let offer = match self.data_device.as_ref() {
             Some(dd) => dd.data().drag_offer(),
             None => None,
@@ -2340,82 +2410,16 @@ impl DataDeviceHandler for State {
             // No payload offer (e.g. an internal drag): still report the drop so
             // a target can clear its highlight.
             self.dispatch(Event::Drop {
-                pos,
+                pos: drag.pos,
                 data: DragData::default(),
             });
             self.mark_popups_dirty();
             return;
         };
-
         // The drop is the protocol-guaranteed point at which the data is
-        // readable. Ask for the uri-list and read it *asynchronously* off the
-        // returned pipe via calloop — a blocking read here would freeze the UI
-        // if the source were slow to write.
-        let read_pipe = match offer.receive(URI_LIST_MIME.to_string()) {
-            Ok(p) => p,
-            Err(_) => {
-                offer.finish();
-                offer.destroy();
-                self.dispatch(Event::Drop {
-                    pos,
-                    data: DragData::default(),
-                });
-                self.mark_popups_dirty();
-                return;
-            }
-        };
-        let _ = conn.flush();
-
-        // Read the uri-list asynchronously off the pipe; `offer` is moved into
-        // the reader closure and finished/destroyed once we hit EOF.
-        let mut buf: Vec<u8> = Vec::new();
-        let inserted =
-            self.loop_handle
-                .insert_source(read_pipe, move |_event, file, state: &mut State| {
-                    use std::io::Read;
-                    // SAFETY: we only read from the fd; calloop owns and closes it.
-                    let f: &mut std::fs::File = unsafe { file.get_mut() };
-                    let mut chunk = [0u8; 4096];
-                    match f.read(&mut chunk) {
-                        Ok(0) => {
-                            // EOF: the source finished writing the uri-list.
-                            let text = String::from_utf8_lossy(&buf);
-                            let data = parse_uri_list(text.as_ref());
-                            offer.finish();
-                            offer.destroy();
-                            state.dispatch(Event::Drop { pos, data });
-                            state.mark_popups_dirty();
-                            PostAction::Remove
-                        }
-                        Ok(n) => {
-                            buf.extend_from_slice(&chunk[..n]);
-                            PostAction::Continue
-                        }
-                        Err(ref e)
-                            if matches!(
-                                e.kind(),
-                                std::io::ErrorKind::Interrupted | std::io::ErrorKind::WouldBlock
-                            ) =>
-                        {
-                            // Spurious wakeup / signal — wait for the next.
-                            PostAction::Continue
-                        }
-                        Err(_) => {
-                            offer.finish();
-                            offer.destroy();
-                            PostAction::Remove
-                        }
-                    }
-                });
-        if inserted.is_err() {
-            // Couldn't register the reader; report an empty drop so the UI
-            // doesn't get stuck mid-drag.
-            self.dispatch(Event::Drop {
-                pos,
-                data: DragData::default(),
-            });
-            self.mark_popups_dirty();
-        }
+        // readable.
+        let reading = Reading::new(offer.with_mime_types(<[String]>::to_vec));
+        self.read_drop(offer, reading, drag.pos);
     }
 }
 
@@ -2485,7 +2489,7 @@ impl DataSourceHandler for State {
             .drag_source
             .as_ref()
             .is_some_and(|s| s.inner() == source);
-        if !ours || mime != URI_LIST_MIME {
+        if !ours || mime != URI_LIST {
             return;
         }
         use std::io::Write;
@@ -2628,69 +2632,11 @@ fn sanitize(s: &str) -> String {
         .collect()
 }
 
-/// The MIME type that carries a newline-separated list of dragged file URIs.
-/// It's the de-facto standard every file manager (Nautilus, Dolphin, Thunar, …)
-/// offers for dragged files.
-const URI_LIST_MIME: &str = "text/uri-list";
-
-/// Parse an RFC 2483 `text/uri-list` payload into the local file paths it
-/// references and the other addresses it carries, such as a link dragged out
-/// of a web browser. Blank lines and comments (`#…`) are skipped.
-fn parse_uri_list(text: &str) -> DragData {
-    let mut data = DragData::default();
-    let uris = text
-        .lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty() && !line.starts_with('#'));
-    for uri in uris {
-        match file_uri_to_path(uri) {
-            Some(path) => data.paths.push(path),
-            None if !uri.starts_with("file:") => data.urls.push(uri.to_string()),
-            None => {}
-        }
-    }
-    data
-}
-
-/// Turn a single `file://[host]/path` URI into a [`PathBuf`], percent-decoding
-/// the path. Returns `None` for URIs that aren't `file:` (we can't open a
-/// remote resource as a path).
-fn file_uri_to_path(uri: &str) -> Option<PathBuf> {
-    let rest = uri.strip_prefix("file://")?;
-    // Drop an optional authority (host) component: the path starts at the
-    // first '/'. `file:///path` → empty authority, path "/path";
-    // `file://host/path` → authority "host", path "/path".
-    let path = &rest[rest.find('/')?..];
-    Some(PathBuf::from(percent_decode(path)))
-}
-
-/// Decode `%XX` escapes in a URI path into raw bytes, then read the result as
-/// UTF-8 (lossily — non-UTF-8 paths are rare and not worth refusing the drop).
-fn percent_decode(s: &str) -> String {
-    let bytes = s.as_bytes();
-    let mut out = Vec::with_capacity(bytes.len());
-    let mut i = 0;
-    while i < bytes.len() {
-        if bytes[i] == b'%' && i + 2 < bytes.len() {
-            let hi = (bytes[i + 1] as char).to_digit(16);
-            let lo = (bytes[i + 2] as char).to_digit(16);
-            if let (Some(h), Some(l)) = (hi, lo) {
-                out.push((h * 16 + l) as u8);
-                i += 3;
-                continue;
-            }
-        }
-        out.push(bytes[i]);
-        i += 1;
-    }
-    String::from_utf8_lossy(&out).into_owned()
-}
-
 /// Serialize file paths into an RFC 2483 `text/uri-list` payload — the inverse
-/// of [`parse_uri_list`] — for handing to a drop target. Each path becomes one
-/// CRLF-terminated `file://` URI with its bytes percent-encoded. Relative paths
-/// are skipped: a `file:` URI must be absolute, and a widget hands us absolute
-/// paths anyway.
+/// of [`mime_drop::parse_uri_list`] — for handing to a drop target. Each path
+/// becomes one CRLF-terminated `file://` URI with its bytes percent-encoded.
+/// Relative paths are skipped: a `file:` URI must be absolute, and a widget
+/// hands us absolute paths anyway.
 fn paths_to_uri_list(paths: &[PathBuf]) -> String {
     use std::os::unix::ffi::OsStrExt;
     let mut out = String::new();
@@ -2708,7 +2654,7 @@ fn paths_to_uri_list(paths: &[PathBuf]) -> String {
 /// Percent-encode a path for a `file:` URI: keep the RFC 3986 unreserved set
 /// (`A–Z a–z 0–9 - . _ ~`) and the path separator `/` verbatim, escape every
 /// other byte as `%XX`. Operates on raw bytes so non-UTF-8 paths round-trip
-/// through [`percent_decode`] unchanged.
+/// through the parser's decoding unchanged.
 fn percent_encode_path(bytes: &[u8]) -> String {
     const HEX: &[u8; 16] = b"0123456789ABCDEF";
     let mut out = String::with_capacity(bytes.len());
@@ -3108,55 +3054,11 @@ fn _unused(_b: Buffer, _arc: Arc<()>) {}
 #[cfg(test)]
 mod tests {
     use super::{
-        UI_EPSILON, file_uri_to_path, parse_uri_list, paths_to_uri_list, percent_decode,
-        percent_encode_path, requantize, surface_offset, surface_units, ui_for,
+        UI_EPSILON, paths_to_uri_list, percent_encode_path, requantize, surface_offset,
+        surface_units, ui_for,
     };
+    use crate::mime_drop::parse_uri_list;
     use std::path::PathBuf;
-
-    #[test]
-    fn parses_a_uri_list_into_paths() {
-        // Real file managers terminate lines with CRLF and may include a
-        // leading comment line; both must be tolerated.
-        let payload = "#comment\r\nfile:///home/rob/a.txt\r\nfile:///tmp/b.png\r\n";
-        assert_eq!(
-            parse_uri_list(payload).paths,
-            vec![
-                PathBuf::from("/home/rob/a.txt"),
-                PathBuf::from("/tmp/b.png"),
-            ]
-        );
-    }
-
-    #[test]
-    fn percent_escapes_are_decoded() {
-        assert_eq!(
-            file_uri_to_path("file:///tmp/a%20b%2Bc.txt"),
-            Some(PathBuf::from("/tmp/a b+c.txt"))
-        );
-        assert_eq!(percent_decode("%41%42"), "AB");
-        // A stray, truncated escape is left verbatim rather than panicking.
-        assert_eq!(percent_decode("100%"), "100%");
-    }
-
-    #[test]
-    fn drops_authority_and_non_file_uris() {
-        assert_eq!(
-            file_uri_to_path("file://localhost/etc/hosts"),
-            Some(PathBuf::from("/etc/hosts"))
-        );
-        assert_eq!(file_uri_to_path("https://example.com/x"), None);
-        assert!(parse_uri_list("https://example.com/x\n\n").paths.is_empty());
-    }
-
-    #[test]
-    fn keeps_web_addresses_apart_from_files() {
-        // A link or an image dragged out of a web browser.
-        let data = parse_uri_list("https://example.com/a.png\r\nfile:///tmp/b.png\r\n");
-        assert_eq!(data.urls, ["https://example.com/a.png"]);
-        assert_eq!(data.paths, [PathBuf::from("/tmp/b.png")]);
-        // A `file:` URI that names no path is neither.
-        assert!(parse_uri_list("file:relative").is_empty());
-    }
 
     #[test]
     fn serializes_paths_to_a_crlf_uri_list() {

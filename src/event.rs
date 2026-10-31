@@ -137,17 +137,17 @@ impl Modifiers {
 ///
 /// A drag carries one thing in up to three forms, each in its own field: files
 /// by their path, files by their contents, and addresses. An image dragged out
-/// of a web browser on Windows comes as its contents *and* its address, a link
-/// as its address. What each backend can read:
+/// of a web browser comes as its contents *and* its address, a link as its
+/// address. What each backend can read:
 ///
-/// | Backend    | `paths` | `files` | `urls` |
-/// |------------|---------|---------|--------|
-/// | Windows    | ✓       | ✓       | ✓      |
-/// | Wayland    | ✓       | –       | ✓      |
-/// | macOS, X11 | ✓       | –       | –      |
+/// | Backend               | `paths` | `files` | `urls` |
+/// |-----------------------|---------|---------|--------|
+/// | Windows, Wayland, X11 | ✓       | ✓       | ✓      |
+/// | macOS                 | ✓       | –       | –      |
 ///
-/// On macOS and X11, saudade sees what winit reports, and that is file paths
-/// only.
+/// On macOS, saudade sees what winit reports, and that is file paths only. So
+/// does it on X11 for a drag from a program that doesn't look for saudade's
+/// own drop target there: GTK, Qt, Firefox and Chromium all do.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct DragData {
     /// File-system paths being dragged. Empty when the drag carries no files
@@ -155,7 +155,10 @@ pub struct DragData {
     pub paths: Vec<PathBuf>,
     /// Files the drag carries by their contents, having no path: an image
     /// dragged out of a web browser, an attachment out of a mail program
-    /// (Windows' "virtual files"). Read in full when the drop happens.
+    /// (Windows' "virtual files"). Read in full when the drop happens, and
+    /// only when the drag has no `paths`, which are the same files then. On
+    /// Wayland and X11, this is an image the source offers by its type
+    /// (`image/png` first) or raw bytes (`application/octet-stream`).
     pub files: Vec<DraggedFile>,
     /// Addresses the drag carries that aren't local files: a link, or an
     /// image, dragged out of a web browser. As the source gave them —
@@ -169,6 +172,10 @@ pub struct DragData {
 pub struct DraggedFile {
     /// The file's name, as the source suggests it. Without a directory, but
     /// not necessarily safe to use as a path: check it before saving to it.
+    /// On Wayland and X11 a source rarely suggests one, and the name is what
+    /// the drag's address ends in, else `image` or `file`, with the extension
+    /// of the image type the contents were read as: a browser hands an image
+    /// over as a PNG whatever it was.
     pub name: String,
     pub contents: Vec<u8>,
 }
@@ -254,17 +261,17 @@ pub enum Event {
     /// [`Event::Drop`] — not here — because the platforms only let us read it
     /// reliably once the user actually drops (reading mid-hover can block on a
     /// source that withholds the data until then). `pos` is the pointer
-    /// location in logical pixels; on Wayland and Windows it is exact, on macOS
-    /// and X11 it is best-effort — winit reports no cursor coordinates during a
+    /// location in logical pixels; on Wayland, Windows and X11 it is exact, on
+    /// macOS it is best-effort — winit reports no cursor coordinates during a
     /// file drag, so it reflects the last in-window pointer position.
     DragEnter {
         pos: Point,
     },
     /// The drag moved to `pos` while still inside the window. Routed to the
     /// widget under the cursor, so dragging across widgets hands the highlight
-    /// from one drop target to the next. The Wayland and Windows backends
-    /// track the pointer during a drag and emit this; on macOS and X11 a drag
-    /// goes straight from [`Event::DragEnter`] to [`Event::Drop`].
+    /// from one drop target to the next. The Wayland, Windows and X11 backends
+    /// track the pointer during a drag and emit this; on macOS a drag goes
+    /// straight from [`Event::DragEnter`] to [`Event::Drop`].
     DragMove {
         pos: Point,
     },
@@ -425,9 +432,9 @@ pub struct EventCtx {
     pub(crate) drag_request: Option<DragData>,
     /// Set when a widget calls [`Self::accept_drop`] while handling an incoming
     /// [`Event::DragEnter`] / [`Event::DragMove`] to say it will take a drop at
-    /// this position. The Wayland backend reads it after dispatch to accept or
-    /// reject the drag offer, so the source app learns whether this is a valid
-    /// drop target.
+    /// this position. The Wayland backend, and saudade's own drop targets on
+    /// Windows and X11, read it after dispatch to accept or reject the drag, so
+    /// the source app learns whether this is a valid drop target.
     pub(crate) accepts_drop: bool,
     /// Set by a widget that has fully handled a key press and wants the runtime
     /// to drop the rest of it — see [`Self::swallow_key_until_release`].
@@ -692,14 +699,14 @@ impl EventCtx {
     /// it. Re-evaluated on every move, so a target can accept only over its hot
     /// region and decline elsewhere in the same window.
     ///
-    /// On Wayland this is what tells the source app the spot is a valid target
-    /// (its drag cursor / feedback reflects it) and is the prerequisite for a
-    /// later [`Event::Drop`] landing here. On Windows the drag cursor follows it
-    /// a move behind, as the OS asks before the widgets can be told, and a drop
-    /// where no widget accepted ends the drag with [`Event::DragLeave`]. On
-    /// macOS and X11 the OS has already committed to offering the drop, so this
-    /// is advisory there — [`Event::Drop`] arrives regardless — but calling it
-    /// keeps drop targets portable.
+    /// On Wayland and X11 this is what tells the source app the spot is a valid
+    /// target (its drag cursor / feedback reflects it) and is the prerequisite
+    /// for a later [`Event::Drop`] landing here. On Windows the drag cursor
+    /// follows it a move behind, as the OS asks before the widgets can be told,
+    /// and a drop where no widget accepted ends the drag with
+    /// [`Event::DragLeave`]. On macOS the OS has already committed to offering
+    /// the drop, so this is advisory there — [`Event::Drop`] arrives regardless
+    /// — but calling it keeps drop targets portable.
     pub fn accept_drop(&mut self) {
         self.accepts_drop = true;
     }

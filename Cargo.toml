@@ -81,8 +81,9 @@ wayland-client = "0.31"
 wayland-protocols = { version = "0.32", features = ["client", "staging"] }
 arboard = { version = "3", default-features = false, features = ["wayland-data-control"] }
 # X11: the two hints that make a window a dialog of another, and a display's
-# physical size, none of which winit can say or tell (see `src/x11.rs`). Already
-# in the tree through winit's own `x11` feature, RandR included.
+# physical size, none of which winit can say or tell (see `src/x11.rs`). And an
+# XDND drop target that reads more than file paths (see `src/x11_drop.rs`).
+# Already in the tree through winit's own `x11` feature, RandR included.
 x11rb = { version = "0.13", features = ["randr"] }
 
 # macOS/Windows: arboard with its native (Cocoa / Win32) clipboard backend.

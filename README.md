@@ -201,7 +201,7 @@ pub enum Event {
     PointerLeave,
     Scroll       { pos: Point, delta_x: f32, delta_y: f32 },
     DragEnter    { pos: Point },              // a drag entered the window
-    DragMove     { pos: Point },              // …and moved (Wayland, Windows)
+    DragMove     { pos: Point },              // …and moved (not macOS)
     DragLeave,                                // …and left without dropping
     Drop         { pos: Point, data: DragData }, // it was dropped
     KeyDown      { key: Key, modifiers: Modifiers },
@@ -212,8 +212,8 @@ pub enum Event {
 
 pub struct DragData {
     pub paths: Vec<PathBuf>,        // files, by their path
-    pub files: Vec<DraggedFile>,    // files, by their contents (Windows)
-    pub urls: Vec<String>,          // links (Wayland, Windows)
+    pub files: Vec<DraggedFile>,    // files, by their contents (not macOS)
+    pub urls: Vec<String>,          // links (not macOS)
 }
 
 pub struct DraggedFile { pub name: String, pub contents: Vec<u8> }
@@ -271,7 +271,7 @@ events everything else uses:
 | Event       | When                                           | Carries            |
 | ----------- | ---------------------------------------------- | ------------------ |
 | `DragEnter` | a drag entered the window                      | `pos`              |
-| `DragMove`  | the drag moved (Wayland, Windows)              | `pos`              |
+| `DragMove`  | the drag moved (not on macOS)                  | `pos`              |
 | `DragLeave` | the drag left / was cancelled without dropping | —                  |
 | `Drop`      | it was released                                | `pos` + `DragData` |
 
@@ -302,11 +302,11 @@ fn event(&mut self, event: &Event, ctx: &mut EventCtx) {
 }
 ```
 
-(On Wayland `accept_drop` accepts the drag offer per position. On Windows the
-drag cursor follows it too, a move behind, as the OS asks before the widgets
-can be: a drop where no widget accepted the drag ends it with `DragLeave`. On
-macOS and X11 the OS has already committed to the drop, so it's advisory there
-but keeps drop targets portable.)
+(On Wayland and X11 `accept_drop` accepts the drag per position, and the
+source's cursor says so. On Windows the drag cursor follows it too, a move
+behind, as the OS asks before the widgets can be: a drop where no widget
+accepted the drag ends it with `DragLeave`. On macOS the OS has already
+committed to the drop, so it's advisory there but keeps drop targets portable.)
 
 The **payload only arrives with `Drop`**, never with `DragEnter` / `DragMove`:
 the platforms only let us read a drag's contents reliably once the user actually
@@ -314,23 +314,27 @@ drops (reading mid-hover can block on a source that withholds the data), so the
 enter/move events are a presence-and-position signal and `Drop` delivers the
 files.
 
-Two per-backend caveats:
+Three per-backend caveats:
 
-- **Position.** On Wayland and Windows the drag position is exact and
+- **Position.** On Wayland, Windows and X11 the drag position is exact and
   `DragMove` tracks the pointer continuously, so per-widget routing during a
-  drag works. On macOS and X11 winit reports no cursor position during a file
-  drag — `DragEnter` / `Drop` use the last in-window pointer location and there
-  is no `DragMove`, so treat the whole window as one drop zone there.
+  drag works. On macOS winit reports no cursor position during a file drag —
+  `DragEnter` / `Drop` use the last in-window pointer location and there is no
+  `DragMove`, so treat the whole window as one drop zone there.
 - **What a drop carries.** `DragData` holds a drag in up to three forms: local
-  file `paths`, `files` by their contents (Windows' "virtual files": an image
-  dragged out of a web browser, an attachment out of a mail program), and
-  `urls` (a link, or the address of a dragged image). Windows reads all three,
-  through saudade's own OLE drop target; Wayland reads paths and links from
-  `text/uri-list`; on macOS and X11 a drop resolves to file paths only,
-  winit's `HoveredFile` / `DroppedFile`.
-- **Copy only.** saudade always takes the _copy_ action (or _link_, where a
-  Windows source offers nothing else), never move, so a drop never makes the
-  source delete the user's file.
+  file `paths`, `files` by their contents (an image dragged out of a web
+  browser, an attachment out of a mail program), and `urls` (a link, or the
+  address of a dragged image). Windows reads all three through saudade's own
+  OLE drop target. Wayland and X11 read paths and links from `text/uri-list`
+  (or a browser's `text/x-moz-url` / `_NETSCAPE_URL`), and, for a drag with no
+  paths, a file's contents from an image type or `application/octet-stream`;
+  X11 does so through saudade's own XDND drop target, which the main window
+  names as its `XdndProxy`. A source that ignores the proxy (GTK, Qt, Firefox
+  and Chromium all heed it) goes to winit's, which reads file paths only, as
+  does macOS: winit's `HoveredFile` / `DroppedFile`.
+- **Copy only.** saudade always takes the _copy_ action (or _link_, where an
+  X11 source asks for it or a Windows source offers nothing else), never move,
+  so a drop never makes the source delete the user's file.
 
 See `examples/dnd.rs` (`cargo run --example dnd`) for a working drop zone.
 

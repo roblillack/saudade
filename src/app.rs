@@ -7,6 +7,8 @@ use winit::dpi::{LogicalSize, PhysicalPosition, PhysicalSize};
 use winit::event::{
     ElementState, InnerSizeWriter, MouseButton as WinitMouseButton, MouseScrollDelta, WindowEvent,
 };
+#[cfg(all(unix, not(target_os = "macos")))]
+use winit::event_loop::EventLoopProxy;
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{Key as WKey, ModifiersKeyState, NamedKey as WNamedKey};
 use winit::monitor::MonitorHandle;
@@ -39,6 +41,12 @@ use crate::present::{Alpha, Surface};
 use crate::svg::SvgImage;
 use crate::theme::Theme;
 use crate::widget::{PopupKind, PopupRequest, Widget};
+// The main window's own drop target, where saudade has one: see
+// `AppHandler::flush_os_drags`.
+#[cfg(windows)]
+use crate::win32_drop as os_drop;
+#[cfg(all(unix, not(target_os = "macos")))]
+use crate::x11_drop as os_drop;
 
 pub struct WindowConfig {
     pub title: String,
@@ -182,6 +190,10 @@ impl App {
         event_loop.set_control_flow(ControlFlow::Wait);
 
         let mut handler = AppHandler::new(self);
+        #[cfg(all(unix, not(target_os = "macos")))]
+        {
+            handler.drop_waker = Some(event_loop.create_proxy());
+        }
         event_loop
             .run_app(&mut handler)
             .expect("saudade: event loop error");
@@ -308,11 +320,15 @@ struct AppHandler {
     /// `true` once we've emitted `DragEnter` for the current hover, so we don't
     /// re-announce it every idle iteration while the drag lingers.
     drag_active: bool,
-    /// Windows: the main window's own drop target, which reads more of a drag
-    /// than winit's and where it is (see [`crate::win32_drop`]). Its drags are
-    /// taken up in `about_to_wait`, like winit's file drags.
-    #[cfg(windows)]
-    os_drags: Option<Rc<crate::win32_drop::Drags>>,
+    /// Windows and X11: the main window's own drop target, which reads more of
+    /// a drag than winit's and where it is (see `win32_drop` and `x11_drop`).
+    /// Its drags are taken up in `about_to_wait`, like winit's file drags.
+    #[cfg(any(windows, all(unix, not(target_os = "macos"))))]
+    os_drags: Option<Rc<os_drop::Drags>>,
+    /// X11: what the drop target's thread wakes the event loop with, to have
+    /// its drags taken up. Handed to it as the main window is created.
+    #[cfg(all(unix, not(target_os = "macos")))]
+    drop_waker: Option<EventLoopProxy<()>>,
     /// Tracks a key press a widget asked to swallow until release (via
     /// [`EventCtx::swallow_key_until_release`]).
     swallow: KeySwallow,
@@ -436,8 +452,10 @@ impl AppHandler {
             drag_hovered: Vec::new(),
             drag_dropped: Vec::new(),
             drag_active: false,
-            #[cfg(windows)]
+            #[cfg(any(windows, all(unix, not(target_os = "macos"))))]
             os_drags: None,
+            #[cfg(all(unix, not(target_os = "macos")))]
+            drop_waker: None,
             swallow: KeySwallow::default(),
         }
     }
@@ -485,6 +503,12 @@ impl ApplicationHandler for AppHandler {
             }
             crate::win32_dpi::watch_dpi_changes(&win);
             crate::win32_popup::dismiss_popups_on_frame_click(&win);
+        }
+        // X11: saudade's drop target alongside winit's, which reads only file
+        // paths. Sources that look for it take it over winit's.
+        #[cfg(all(unix, not(target_os = "macos")))]
+        if let Some(wake) = self.drop_waker.take() {
+            self.os_drags = crate::x11_drop::register(&win, wake);
         }
         if let Some(image) = self.window_config.icon.as_ref() {
             crate::icon::set_window_icon(&win, image);
@@ -544,7 +568,7 @@ impl ApplicationHandler for AppHandler {
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
         self.flush_file_drag(event_loop);
-        #[cfg(windows)]
+        #[cfg(any(windows, all(unix, not(target_os = "macos"))))]
         self.flush_os_drags(event_loop);
         // Once the moves and resizes of this burst have all landed — a
         // Win+Shift+Arrow move between displays is several of them.
@@ -1061,19 +1085,20 @@ impl AppHandler {
         // A drop target may have called `accept_drop`, but the OS has already
         // committed to offering the file drag on the winit backends — we can't
         // refuse it the way Wayland can — so the flag is advisory here and the
-        // `Drop` is delivered regardless. Windows' own drop target is the
-        // exception: `flush_os_drags` reads the flag off the returned context.
+        // `Drop` is delivered regardless. saudade's own drop targets on Windows
+        // and X11 are the exception: `flush_os_drags` reads the flag off the
+        // returned context.
         let _ = ctx.accepts_drop;
         ctx
     }
 
-    /// Dispatch the drags saudade's own drop target queued (see
-    /// [`crate::win32_drop`]), with the positions it reported, and tell it
-    /// whether a widget took each one. A drop where none did ends the drag
-    /// instead, as on Wayland.
-    #[cfg(windows)]
+    /// Dispatch the drags saudade's own drop target queued (see `win32_drop`
+    /// and `x11_drop`), with the positions it reported, and tell it whether a
+    /// widget took each one. A drop where none did ends the drag instead, as on
+    /// Wayland.
+    #[cfg(any(windows, all(unix, not(target_os = "macos"))))]
     fn flush_os_drags(&mut self, event_loop: &ActiveEventLoop) {
-        use crate::win32_drop::Drag;
+        use os_drop::Drag;
         let Some(drags) = self.os_drags.clone() else {
             return;
         };
