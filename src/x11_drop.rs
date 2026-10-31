@@ -14,9 +14,13 @@
 //! window of saudade's own that, on the connection [`crate::x11`] opens. A
 //! thread of its own takes the messages up as they come in, queues the drags
 //! for the runtime the way `win32_drop`'s target does, and wakes winit's loop
-//! to dispatch them in `about_to_wait`. GTK, Qt, Firefox and Chromium look for
-//! a proxy; a source that doesn't still talks to winit, and the files it drags
-//! arrive as before.
+//! to dispatch them in `about_to_wait`.
+//!
+//! GTK, Qt, Firefox and Chromium look for a proxy. Others don't, notably XWayland
+//! compositors handing on a drag from a Wayland program: wlroots sends straight
+//! to the window under the pointer. Those messages go to winit's connection all
+//! the same, so [`catch_messages`] hooks into how Xlib decodes them there and
+//! passes them on to the proxy before winit sees them.
 //!
 //! A source waits for the answer to one position before it sends the next, so
 //! unlike on Windows the answer can wait for the widgets: the runtime gives it
@@ -25,13 +29,16 @@
 //!
 //! [`Event::DragMove`]: crate::Event::DragMove
 
+use std::ffi::c_int;
 use std::rc::Rc;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::thread;
 
 use winit::dpi::PhysicalPosition;
 use winit::event_loop::EventLoopProxy;
+use winit::raw_window_handle::{HasDisplayHandle, RawDisplayHandle};
 use winit::window::Window;
+use x11_dl::xlib;
 use x11rb::connection::Connection as _;
 use x11rb::protocol::Event as XEvent;
 use x11rb::protocol::xproto::{
@@ -88,6 +95,8 @@ pub(crate) struct Drags(Arc<Shared>);
 struct Shared {
     conn: &'static RustConnection,
     atoms: Atoms,
+    /// The window XDND messages come to.
+    proxy: XWindow,
     queue: Mutex<Vec<Drag>>,
     answer: Mutex<Answer>,
 }
@@ -169,13 +178,95 @@ impl Shared {
 pub(crate) fn register(win: &Window, wake: EventLoopProxy<()>) -> Option<Rc<Drags>> {
     let window = crate::x11::xid(win)?;
     let conn = crate::x11::connection()?;
-    start(
+    let drags = start(
         conn,
         window,
         Box::new(move || {
             let _ = wake.send_event(());
         }),
-    )
+    )?;
+    // Without it a source that ignores the proxy still talks to winit, and the
+    // files it drags arrive as they would have.
+    if let Ok(handle) = win.display_handle()
+        && let RawDisplayHandle::Xlib(handle) = handle.as_raw()
+        && let Some(display) = handle.display
+    {
+        catch_messages(display.as_ptr().cast(), window, drags.0.clone());
+    }
+    Some(drags)
+}
+
+/// What [`catch_message`] goes by, as Xlib calls it with no data of ours.
+struct Catch {
+    /// How Xlib decodes a client message otherwise.
+    decode: unsafe extern "C" fn(*mut xlib::Display, *mut xlib::XEvent, *mut xlib::xEvent) -> c_int,
+    /// winit's window, which sources that ignore the proxy send to.
+    window: XWindow,
+    shared: Arc<Shared>,
+}
+
+static CATCH: OnceLock<Catch> = OnceLock::new();
+
+/// Have the client messages `display` receives go through [`catch_message`].
+/// To be called on the thread that reads `display`'s events, so that none comes
+/// in before [`CATCH`] is set.
+fn catch_messages(display: *mut xlib::Display, window: XWindow, shared: Arc<Shared>) {
+    let Ok(lib) = xlib::Xlib::open() else {
+        return;
+    };
+    // SAFETY: `display` is a live connection, and `catch_message` is what
+    // `XESetWireToEvent` asks for.
+    let decode =
+        unsafe { (lib.XESetWireToEvent)(display, xlib::ClientMessage, Some(catch_message)) };
+    if let Some(decode) = decode {
+        let _ = CATCH.set(Catch {
+            decode,
+            window,
+            shared,
+        });
+    }
+}
+
+/// Xlib decoding a client message off the wire: an XDND message about the
+/// window goes on to the proxy rather than into Xlib's queue, by way of the X
+/// server, which keeps it in order with the ones that were sent there.
+///
+/// Runs with Xlib's lock held, so it must not call Xlib, but the connection it
+/// sends on isn't Xlib's.
+unsafe extern "C" fn catch_message(
+    display: *mut xlib::Display,
+    event: *mut xlib::XEvent,
+    wire: *mut xlib::xEvent,
+) -> c_int {
+    let Some(catch) = CATCH.get() else {
+        return 0;
+    };
+    // SAFETY: Xlib's arguments, passed on to what it would have called.
+    let queue = unsafe { (catch.decode)(display, event, wire) };
+    if queue == 0 {
+        return queue;
+    }
+    // SAFETY: decoded just above, as the client message it came in as.
+    let msg = unsafe { (*event).client_message };
+    let shared = &catch.shared;
+    let atoms = shared.atoms;
+    let kind = msg.message_type as Atom;
+    let xdnd = [
+        atoms.XdndEnter,
+        atoms.XdndPosition,
+        atoms.XdndLeave,
+        atoms.XdndDrop,
+    ];
+    if msg.format != 32 || msg.window as XWindow != catch.window || !xdnd.contains(&kind) {
+        return queue;
+    }
+    let data = std::array::from_fn(|i| msg.data.get_long(i) as u32);
+    let message = ClientMessageEvent::new(32, catch.window, kind, data);
+    let _ = shared
+        .conn
+        .send_event(false, shared.proxy, EventMask::NO_EVENT, message);
+    let _ = shared.conn.flush();
+    0
 }
 
 fn start(
@@ -224,6 +315,7 @@ fn start(
     let shared = Arc::new(Shared {
         conn,
         atoms,
+        proxy,
         queue: Mutex::default(),
         answer: Mutex::default(),
     });
@@ -661,6 +753,10 @@ mod tests {
         SelectionRequestEvent,
     };
 
+    /// Held by a test that drops something: `XdndSelection` is the X server's
+    /// one, whichever window owns it.
+    static SELECTION: Mutex<()> = Mutex::new(());
+
     /// The first event on `conn` that `wanted` picks, failing after a while.
     fn next<T>(conn: &RustConnection, mut wanted: impl FnMut(XEvent) -> Option<T>) -> T {
         let deadline = Instant::now() + Duration::from_secs(5);
@@ -907,6 +1003,7 @@ mod tests {
 
     #[test]
     fn reads_an_image_dragged_out_of_a_browser() {
+        let _selection = SELECTION.lock().unwrap_or_else(|e| e.into_inner());
         let Some((_app, window, drags, wakes)) = window() else {
             return;
         };
@@ -968,6 +1065,91 @@ mod tests {
             }
             other => panic!("{other:?}"),
         }
+    }
+
+    /// A source that ignores the proxy, as a compositor handing on a Wayland
+    /// drag does, sending to a window on an Xlib connection, as winit's is.
+    #[test]
+    fn catches_what_a_source_sends_the_window_itself() {
+        let _selection = SELECTION.lock().unwrap_or_else(|e| e.into_inner());
+        let lib = xlib::Xlib::open().unwrap();
+        // SAFETY: only this thread uses the display, until the one below does.
+        let (display, window) = unsafe {
+            let display = (lib.XOpenDisplay)(std::ptr::null());
+            if display.is_null() {
+                return;
+            }
+            let root = (lib.XDefaultRootWindow)(display);
+            let window = (lib.XCreateSimpleWindow)(display, root, 10, 20, 100, 100, 0, 0, 0);
+            (lib.XSync)(display, 0);
+            (display, window as XWindow)
+        };
+        let (conn, _) = x11rb::connect(None).unwrap();
+        let conn: &'static RustConnection = Box::leak(Box::new(conn));
+        let (woke, wakes) = mpsc::channel();
+        let drags = start(
+            conn,
+            window,
+            Box::new(move || {
+                let _ = woke.send(());
+            }),
+        )
+        .unwrap();
+        catch_messages(display, window, drags.0.clone());
+
+        // winit's side: reads the display and keeps what reaches its queue.
+        let (kept, reached) = mpsc::channel();
+        let address = display as usize;
+        thread::spawn(move || {
+            let lib = xlib::Xlib::open().unwrap();
+            let display = address as *mut xlib::Display;
+            loop {
+                // SAFETY: the display is this thread's from here on, and an
+                // event of type `ClientMessage` is a client message.
+                let msg = unsafe {
+                    let mut event: xlib::XEvent = std::mem::zeroed();
+                    (lib.XNextEvent)(display, &mut event);
+                    (event.get_type() == xlib::ClientMessage).then_some(event.client_message)
+                };
+                if let Some(msg) = msg {
+                    let _ = kept.send(msg.message_type as Atom);
+                }
+            }
+        });
+
+        let mut source = Source::new(window);
+        source.proxy = window;
+        let copy = source.atoms.XdndActionCopy;
+        source
+            .conn
+            .set_selection_owner(
+                source.window,
+                source.atoms.XdndSelection,
+                x11rb::CURRENT_TIME,
+            )
+            .unwrap();
+        // Nothing winit would take: it reads `text/uri-list` only.
+        source.enter(&["image/png"]);
+        source.position(15, 30, copy);
+        let queued = woken(&drags, &wakes);
+        assert!(matches!(queued[..], [Drag::Enter(p)] if (p.x, p.y) == (5.0, 10.0)));
+        drags.set_accepted(Some(true));
+        assert_eq!(source.status(), (true, copy));
+        source.send(source.atoms.XdndDrop, [0; 5]);
+        let forms = [("image/png", b"not really a PNG".to_vec())];
+        assert_eq!(source.serve(&forms, 1000), (true, copy));
+        match &woken(&drags, &wakes)[..] {
+            [Drag::Drop(p, data)] => {
+                assert_eq!((p.x, p.y), (5.0, 10.0));
+                assert_eq!(data.files[0].contents, forms[0].1);
+            }
+            other => panic!("{other:?}"),
+        }
+
+        // Every other message is still winit's, and no XDND one got to it.
+        let other = source.atom("SAUDADE_NOT_XDND");
+        source.send(other, [0; 5]);
+        assert_eq!(reached.recv_timeout(Duration::from_secs(5)), Ok(other));
     }
 
     #[test]

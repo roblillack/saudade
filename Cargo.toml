@@ -85,6 +85,9 @@ arboard = { version = "3", default-features = false, features = ["wayland-data-c
 # XDND drop target that reads more than file paths (see `src/x11_drop.rs`).
 # Already in the tree through winit's own `x11` feature, RandR included.
 x11rb = { version = "0.13", features = ["randr"] }
+# The drop target's way onto winit's own Xlib connection, for the XDND messages
+# of a source that ignores its proxy. Already in the tree through winit too.
+x11-dl = "2.21"
 
 # macOS/Windows: arboard with its native (Cocoa / Win32) clipboard backend.
 # default-features = false drops the unused `image-data` feature (and the heavy

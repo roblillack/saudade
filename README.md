@@ -329,9 +329,10 @@ Three per-backend caveats:
   (or a browser's `text/x-moz-url` / `_NETSCAPE_URL`), and, for a drag with no
   paths, a file's contents from an image type or `application/octet-stream`;
   X11 does so through saudade's own XDND drop target, which the main window
-  names as its `XdndProxy`. A source that ignores the proxy (GTK, Qt, Firefox
-  and Chromium all heed it) goes to winit's, which reads file paths only, as
-  does macOS: winit's `HoveredFile` / `DroppedFile`.
+  names as its `XdndProxy`, and which also takes the messages of a source that
+  ignores the proxy (an XWayland compositor handing on a Wayland drag) off
+  winit's connection. macOS reads file paths only: winit's `HoveredFile` /
+  `DroppedFile`.
 - **Copy only.** saudade always takes the _copy_ action (or _link_, where an
   X11 source asks for it or a Windows source offers nothing else), never move,
   so a drop never makes the source delete the user's file.

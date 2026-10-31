@@ -504,8 +504,8 @@ impl ApplicationHandler for AppHandler {
             crate::win32_dpi::watch_dpi_changes(&win);
             crate::win32_popup::dismiss_popups_on_frame_click(&win);
         }
-        // X11: saudade's drop target alongside winit's, which reads only file
-        // paths. Sources that look for it take it over winit's.
+        // X11: saudade's drop target in place of winit's, which reads only file
+        // paths.
         #[cfg(all(unix, not(target_os = "macos")))]
         if let Some(wake) = self.drop_waker.take() {
             self.os_drags = crate::x11_drop::register(&win, wake);
