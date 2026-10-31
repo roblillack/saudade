@@ -50,7 +50,7 @@ Reference apps live under `examples/`. Run any of them with
 | `crud`          | <img src="docs/screenshots/crud.png" alt="The crud example" width="300">                   | 7GUIs task 5 — a `List` as a live, prefix-filtered database view with Create / Update / Delete `Button`s that enable themselves reactively.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
 | `circle_drawer` | <img src="docs/screenshots/circle_drawer.png" alt="The circle_drawer example" width="300"> | 7GUIs task 6 — a custom canvas (no circle primitive: midpoint outlines, span-filled disks) with hover selection, a `ContextMenu` right-click menu, a real modal dialog (`Modal`) hosting the diameter `Slider`, and snapshot undo/redo.                                                                                                                                                                                                                                                                                                                                                                                                                  |
 | `cells`         | <img src="docs/screenshots/cells.png" alt="The cells example" width="300">                 | 7GUIs task 7 — a scrollable A–Z / 0–99 spreadsheet `Grid` (built on `ScrollBar` + `TextInput`) with a formula engine: cell refs, `+ - * /`, ranges, `SUM`/`AVG`/…, reactive recompute and cycle detection.                                                                                                                                                                                                                                                                                                                                                                                                                                               |
-| `patterns`      | <img src="docs/screenshots/patterns.png" alt="The patterns example" width="300">           | Previews the window background patterns (`none`, `solid`, `dots`, `lines`, `diagonal`, `cross-stitch`): press `p` to cycle the pattern and `c` to cycle the color. Every app draws one behind its widgets — default `superlight` `diagonal`, overridable with `SAUDADE_WINDOW_PATTERN` / `SAUDADE_WINDOW_PATTERN_COLOR` (e.g. `SAUDADE_WINDOW_PATTERN=dots SAUDADE_WINDOW_PATTERN_COLOR=light`).                                                                                                                                                                                                                                                         |
+| `patterns`      | <img src="docs/screenshots/patterns.png" alt="The patterns example" width="300">           | Previews the window background patterns (`none`, `solid`, `dots`, `lines`, `diagonal`, `cross-stitch`): press `p` to cycle the pattern and `c` to cycle the color. Every app draws one behind its widgets — default `diagonal`, in `superlight` on the light theme and a shade just off the background on the dark one, overridable with `SAUDADE_WINDOW_PATTERN` / `SAUDADE_WINDOW_PATTERN_COLOR` (e.g. `SAUDADE_WINDOW_PATTERN=dots SAUDADE_WINDOW_PATTERN_COLOR=light`).                                                                                                                                                                              |
 | `fonts`         | <img src="docs/screenshots/fonts.png" alt="The fonts example" width="300">                 | A type specimen: all twelve faces — sans / serif / monospace, each in regular, bold, italic and bold-italic — drawn at nine sizes in one large scrolling table (`Painter::text_styled`, columns sized from `measure_text_styled`, size header and style column frozen). The column matching `Theme::font_size` is highlighted; a family the host has no font for says so in place of its four rows.                                                                                                                                                                                                                                                      |
 | `scaling`       | <img src="docs/screenshots/scaling.png" alt="The scaling example" width="300">             | Previews widgets at an arbitrary logical→physical scale via `Painter::draw_scaled`: a `Slider` and two rows of preset `Button`s walking a quarter ladder up to 3.5x drive a "preview scale" — starting at the display's OS scale — that a small panel of real widgets (`TextInput`, `NumberInput`, `Dropdown`, `ButtonGroup`, `Checkbox`, `Button`s including a focused one for its dotted focus rectangle, `ProgressBar`) redraws at, plus a "zoom in 2x" `Checkbox` that magnifies the result. The window resizes itself (via `EventCtx::request_window_size`) to fit the preview at the chosen scale. The window's own scale is never touched.        |
 | `credit_card`   | <img src="docs/screenshots/credit_card.png" alt="The credit_card example" width="300">     | Draws an ISO/IEC 7810 bank card (85.60 × 53.98 mm) at its real size, whatever scaling the display is set to: the card is painted in device pixels from `Painter::display_dpi`, while the window around it follows the scale factor. A readout compares how big a logical pixel came out on this display with the 1/72 in it aims for. Where the display reports no physical size (a projector, a virtual output) the card falls back to 72 logical pixels to the inch; X11 reports one through RandR and Wayland off `wl_output`, and under fractional scaling the density is the oversampled buffer's rather than the panel's, which is the figure the card has to be counted in.                                                                                                                                                                                                    |
@@ -84,7 +84,6 @@ use saudade::*;
 
 fn main() {
     let root = Container::new(220, 100)
-        .with_background(Color::WHITE)
         .with_border(Color::BLACK)
         .add(Label::new(Rect::new(20, 20, 180, 16), "Hello, saudade!"))
         .add(
@@ -143,7 +142,7 @@ to an object-oriented UI framework.
 | geometry   | `Point`, `Size`, `Rect`, `Color`                                                                                                                                                                                                                                                                            |
 | event      | `Event`, `DragData`, `MouseButton`, `Key`, `NamedKey`, `Modifiers`, `Cursor`, `EventCtx`                                                                                                                                                                                                                    |
 | accel      | `Accel`, `ModifierScheme` — menu shortcuts that read ⌘ on macOS and Ctrl elsewhere                                                                                                                                                                                                                          |
-| theme      | `Theme`, default `Theme::windows_31()` palette                                                                                                                                                                                                                                                              |
+| theme      | `Theme`, default `Theme::windows_31()` palette and its dark-mode counterpart, `Theme::windows_31_dark()`                                                                                                                                                                                                    |
 | background | `BackgroundPattern` — the pattern every window draws behind its widgets                                                                                                                                                                                                                                     |
 | painter    | `Painter` — drawing primitives + Win 3.1 chrome helpers                                                                                                                                                                                                                                                     |
 | svg        | `SvgImage`, `SvgPolygon`, `FillRule` + the `include_svg!` macro — compile-time vector icons                                                                                                                                                                                                                 |
@@ -440,7 +439,7 @@ pub struct Theme {
     pub face: Color,            // button / menu-bar face
     pub highlight: Color,       // light bevel edge
     pub shadow: Color,          // dark bevel edge
-    pub border: Color,          // 1-px outer black border
+    pub border: Color,          // 1-px outline (black on the light theme)
     pub text: Color,
     pub disabled_text: Color,
     pub highlight_bg: Color,    // selected-item bg (Win 3.1: navy)
@@ -454,6 +453,47 @@ The default is `Theme::windows_31()`: white workspace, light-gray button
 face, white top/left highlight, mid-gray bottom/right shadow, black outer
 border, navy/white selection, 11pt text. Pass an alternative via
 `App::with_theme(...)` if you want to skin the same widgets differently.
+
+### Dark mode
+
+Every app carries a second theme for dark mode, `Theme::windows_31_dark()`
+unless it brings its own, and paints with whichever matches the system's
+light or dark appearance — switching over live when the user flips it. The
+dark theme is the same chrome after dark: black outlines and bevels lit from
+the top left, on a charcoal workspace with dark-gray button faces and light
+text. As on the light theme, the outline is the darkest line of a raised
+control, below its shadow; the workspace stays light enough for a black
+outline to mark the edge of a field, a popup or a check box.
+
+```rust
+App::new(window_cfg, root)
+    .with_theme(light)        // light mode; Theme::windows_31() if not set
+    .with_dark_theme(dark)    // dark mode; Theme::windows_31_dark() if not set
+    .run();
+```
+
+`with_theme` sets the light theme only, so an app that customizes it will
+usually want a matching `with_dark_theme`; to keep one look whatever the
+system does, pass the same theme to both.
+
+Where the appearance comes from:
+
+| Platform      | Source                                                                                                                                                                 |
+| ------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| macOS         | the system appearance, through winit; the title bar follows by itself                                                                                                  |
+| Windows       | the "app mode" setting, through winit, which darkens the title bar to match                                                                                            |
+| X11 / Wayland | the freedesktop settings portal's `color-scheme` (what GNOME, KDE and friends set from their own light / dark switch), read over D-Bus — no portal running means light |
+
+`SAUDADE_THEME` overrides the system: `SAUDADE_THEME=dark` or
+`SAUDADE_THEME=light` paints every window in that theme (and asks the platform
+for a title bar to match), and `auto` — as good as unset — follows the system.
+Handy for trying an app in the other mode without flipping your desktop.
+
+Widgets that paint their own surfaces should take their colors from the
+`theme` they are handed rather than from `Color::WHITE` and friends, so they
+follow along; `Color::mix` derives a shade between two theme colors — a grid
+line a little off the background, say, that is darker on the light theme and
+lighter on the dark one.
 
 `button_style` is the face a push button sets its label in. It defaults to
 `FontStyle::Bold` — a button is the one thing on a panel you press, and the
@@ -498,7 +538,6 @@ which is exactly what `Container`'s children want.
 // The runtime auto-focuses the first focusable widget (the editor) at
 // startup, so the user can type immediately.
 let root = Column::new()
-    .with_background(Color::WHITE)
     .add_fixed(menu_bar, MENU_BAR_H)
     .add_fill(text_editor);
 ```
@@ -552,6 +591,11 @@ let root = Container::new(395, 305)        // size in logical pixels
 let mut root = Container::new(395, 305);
 root.push(Label::new(Rect::new(20, 20, 120, 16), "Hello"));
 ```
+
+Without a background a container is transparent, showing the window's own
+`theme.background` and pattern through. A background color is fixed, the same
+in light and dark mode — `Color::WHITE` stays white behind the dark theme's
+light text — so leave it off unless the panel should look the same in both.
 
 The runtime calls `Widget::focus_first` on the root once the window is
 ready, so a container that holds a `TextEditor` or `List` will hand it
@@ -1665,8 +1709,11 @@ power.draw(painter, Rect::new(8, 8, 32, 32));
 
 `SvgImage` is `Copy`, so it also drops straight into widgets that take an icon:
 `ListItem::with_svg_icon(POWER)` puts a crisp baked mark on a list row (the
-`filer` example and the `FileDialog` use shared `assets/icons/{folder,file,up}.svg`
+`filer` example and the `FileDialog` use shared `assets/icons/{folder,file}.svg`
 this way), the alternative to the raster `ListIcon` for hand-drawn pixels.
+`ListItem::with_svg_glyph` draws a one-color mark in the row's text color
+instead — white on the selection band, light on the dark theme — which is how
+the same two show `assets/icons/up.svg` for the `..` row.
 
 The geometry is resolution-independent, so the same constant fills crisply
 at any size or scale factor. The supported SVG subset is the practical one —
@@ -1798,7 +1845,8 @@ draw call.
 
 ```rust
 App::new(window_cfg, root_widget)
-   .with_theme(Theme::windows_31())   // optional
+   .with_theme(Theme::windows_31())   // optional; the light-mode theme
+   .with_dark_theme(Theme::windows_31_dark()) // optional; see "Dark mode"
    .with_ui_scale(2.0)                // optional; see "How big a logical pixel is"
    .run();                            // blocks until window closes
 ```

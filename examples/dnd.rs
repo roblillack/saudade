@@ -9,7 +9,7 @@
 
 use std::path::PathBuf;
 
-use saudade::{App, Color, Column, Event, EventCtx, Painter, Rect, Theme, Widget, WindowConfig};
+use saudade::{App, Column, Event, EventCtx, Painter, Rect, Theme, Widget, WindowConfig};
 
 const W: i32 = 460;
 const H: i32 = 320;
@@ -22,9 +22,7 @@ fn main() {
 /// The window and the widget tree inside it, kept apart from `main` so
 /// `examples/screenshots.rs` can render the same window offscreen.
 pub fn window() -> (WindowConfig, impl Widget) {
-    let root = Column::new()
-        .with_background(Color::WHITE)
-        .add_fill(DropZone::new());
+    let root = Column::new().add_fill(DropZone::new());
 
     (WindowConfig::new("Drag & Drop", W, H).resizable(true), root)
 }
@@ -57,11 +55,13 @@ impl Widget for DropZone {
     }
 
     fn paint(&mut self, p: &mut Painter, theme: &Theme) {
+        // A plain ground around the panel, masking the window's pattern.
+        p.fill_rect(self.bounds, theme.background);
         let area = self.bounds.inset(8);
         let (fill, fg) = if self.hovering {
             (theme.highlight_bg, theme.highlight_text)
         } else {
-            (Color::WHITE, theme.text)
+            (theme.background, theme.text)
         };
         p.fill_rect(area, fill);
         p.sunken_bevel(area, theme.highlight, theme.shadow);

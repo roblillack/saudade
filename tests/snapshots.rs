@@ -8,13 +8,15 @@
 
 mod common;
 
-use common::{snapshot_at_all_scales, snapshot_framed_at_all_scales};
+use common::{
+    snapshot_at_all_scales, snapshot_framed_at_all_scales, snapshot_framed_themed_at_all_scales,
+};
 
 use saudade::{
     Bevel, Button, ButtonGroup, Checkbox, Color, Column, Container, ContextMenu, Dialog, Dropdown,
     Event, GroupButton, Image, Key, Label, List, ListIcon, ListItem, Menu, MenuBar, MenuItem,
     ModifierScheme, Modifiers, MouseButton, NamedKey, NumberInput, Orientation, Point, ProgressBar,
-    Rect, Row, ScrollBar, Slider, SpinButton, TextEditor, TextInput, Widget, WindowChrome,
+    Rect, Row, ScrollBar, Slider, SpinButton, TextEditor, TextInput, Theme, Widget, WindowChrome,
 };
 
 // ---------------------------------------------------------------- Bevel
@@ -1828,4 +1830,39 @@ fn chrome_custom_desktop() {
         .with_desktop_background(Color::rgb(0x5A, 0x5A, 0x80))
         .with_margin(20);
     snapshot_framed_at_all_scales("chrome_custom_desktop", 200, 96, &chrome, chrome_content);
+}
+
+// --------------------------------------------------------- Dark theme
+
+/// The dark theme across the chrome every widget shares, in a framed window so
+/// the background hatch is in it too: the light outlines, the bevels lit from
+/// the top left, a selected row, a check, the progress fill, and a default and
+/// a disabled button.
+#[test]
+fn dark_theme_panel() {
+    let chrome = WindowChrome::fixed("Dark");
+    let theme = Theme::windows_31_dark();
+    snapshot_framed_themed_at_all_scales("dark_theme_panel", 240, 150, &chrome, &theme, || {
+        let mut list = laid_out_list(
+            Rect::new(16, 40, 120, 62),
+            vec![
+                ListItem::new("Anchovy"),
+                ListItem::new("Basil"),
+                ListItem::new("Capers"),
+            ],
+        );
+        list.set_selected(Some(1));
+        list.set_focused(true);
+        Box::new(
+            Container::new(240, 150)
+                .add(Label::new(Rect::new(16, 12, 50, 16), "Name:"))
+                .add(TextInput::new(Rect::new(70, 8, 154, 22)).with_text("Ada"))
+                .add(list)
+                .add(Checkbox::new(Rect::new(148, 42, 80, 16), "Crisp").checked(true))
+                .add(Checkbox::new(Rect::new(148, 62, 80, 16), "Off").with_enabled(false))
+                .add(ProgressBar::new(Rect::new(148, 84, 76, 16)).with_fraction(0.5))
+                .add(Button::new(Rect::new(16, 114, 96, 24), "OK").default(true))
+                .add(Button::new(Rect::new(128, 114, 96, 24), "Cancel").with_enabled(false)),
+        )
+    });
 }

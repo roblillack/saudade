@@ -1,5 +1,5 @@
 use crate::event::{Event, EventCtx, Key, MouseButton, NamedKey};
-use crate::geometry::{Color, Point, Rect};
+use crate::geometry::{Point, Rect};
 use crate::include_svg;
 use crate::painter::Painter;
 use crate::svg::SvgImage;
@@ -17,9 +17,6 @@ const POPUP_PAD_Y: i32 = 2;
 const TEXT_PAD_X: i32 = 5;
 /// L-shape drop-shadow size, mirroring [`MenuBar`](crate::widgets::MenuBar).
 const SHADOW_SIZE: i32 = 2;
-/// L-shape drop shadow color: a dark gray that renders crisply on every
-/// backend (same value the menu popups use).
-const SHADOW_COLOR: Color = Color::DARK_GRAY;
 /// Most rows the open popup shows before it scrolls. Beyond this the list caps
 /// its height and grows a vertical scrollbar instead of a popup taller than the
 /// screen — so a 100-layout list stays usable.
@@ -415,10 +412,11 @@ impl Widget for Dropdown {
     }
 
     fn paint(&mut self, painter: &mut Painter, theme: &Theme) {
-        // Sunken field — white when live, light-gray when disabled — with a
-        // 1-px black outer border, matching TextInput's chrome.
+        // Sunken field — the background when live, the face when disabled
+        // (white and light gray on the light theme) — with a 1-px outer
+        // border, matching TextInput's chrome.
         let bg = if self.enabled {
-            Color::WHITE
+            theme.background
         } else {
             theme.face
         };
@@ -477,15 +475,16 @@ impl Widget for Dropdown {
         self.layout_popup();
         let popup = self.popup_rect();
 
-        // L-shape drop shadow first, then the white panel overlays its top /
-        // left edges.
+        // L-shape drop shadow first (the same color the menu popups cast),
+        // then the panel overlays its top / left edges.
+        let shadow = theme.drop_shadow();
         painter.fill_rect(
             Rect::new(popup.x + SHADOW_SIZE, popup.bottom(), popup.w, SHADOW_SIZE),
-            SHADOW_COLOR,
+            shadow,
         );
         painter.fill_rect(
             Rect::new(popup.right(), popup.y + SHADOW_SIZE, SHADOW_SIZE, popup.h),
-            SHADOW_COLOR,
+            shadow,
         );
 
         painter.fill_rect(popup, theme.background);

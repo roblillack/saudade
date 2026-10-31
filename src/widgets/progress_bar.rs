@@ -77,8 +77,11 @@ impl Widget for ProgressBar {
         let fill_w = ((inner.w as f32) * self.fraction).round() as i32;
         if fill_w > 0 {
             // Neutral grey, not the selection navy: a progress bar is never
-            // "focused" the way a highlighted list row or text field is.
-            painter.fill_rect(Rect::new(inner.x, inner.y, fill_w, inner.h), theme.shadow);
+            // "focused" the way a highlighted list row or text field is. Half
+            // way from the field to the text, so it stands out from either on
+            // any theme — the mid-grey of Win 3.1 on the light one.
+            let fill = theme.background.mix(theme.text, 0.5);
+            painter.fill_rect(Rect::new(inner.x, inner.y, fill_w, inner.h), fill);
         }
 
         if self.show_percentage {
@@ -88,9 +91,9 @@ impl Widget for ProgressBar {
             let m = painter.measure_text(&text, size);
             let tx = inner.x + ((inner.w - m.w) / 2).max(0);
             let ty = inner.y + ((inner.h - m.h) / 2).max(0);
-            // One pass in the normal text color: black reads cleanly over both
-            // the white (empty) and mid-grey (filled) halves, so there's no
-            // need to invert the caption across the fill edge.
+            // One pass in the normal text color: it reads cleanly over both
+            // the empty and the mid-grey filled half, so there's no need to
+            // invert the caption across the fill edge.
             painter.text(tx, ty, &text, size, theme.text);
         }
     }

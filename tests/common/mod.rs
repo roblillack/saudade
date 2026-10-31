@@ -24,7 +24,7 @@
 use std::path::{Path, PathBuf};
 
 use saudade::mock::{MockBackend, Snapshot};
-use saudade::{Font, Widget, WindowChrome};
+use saudade::{Font, Theme, Widget, WindowChrome};
 
 pub fn sans_font() -> Font {
     Font::from_sans_bytes(include_bytes!("../fonts/DejaVuSans.ttf").to_vec())
@@ -68,6 +68,21 @@ pub fn snapshot_framed_at_all_scales<F>(
     width: i32,
     height: i32,
     chrome: &WindowChrome,
+    build: F,
+) where
+    F: FnMut() -> Box<dyn Widget>,
+{
+    snapshot_framed_themed_at_all_scales(name, width, height, chrome, &Theme::default(), build);
+}
+
+/// [`snapshot_framed_at_all_scales`] painting with `theme` rather than the
+/// default — for the dark theme, mostly.
+pub fn snapshot_framed_themed_at_all_scales<F>(
+    name: &str,
+    width: i32,
+    height: i32,
+    chrome: &WindowChrome,
+    theme: &Theme,
     mut build: F,
 ) where
     F: FnMut() -> Box<dyn Widget>,
@@ -75,6 +90,7 @@ pub fn snapshot_framed_at_all_scales<F>(
     for &scale in SCALES {
         let backend = MockBackend::new(width, height)
             .with_scale(scale)
+            .with_theme(theme.clone())
             .with_sans_font(sans_font())
             .with_mono_font(mono_font());
         let snap = backend.render_framed(build().as_mut(), chrome);

@@ -45,7 +45,12 @@ const HEAD_W: i32 = 34;
 const HEAD_H: i32 = 18;
 
 const DOUBLE_CLICK: Duration = Duration::from_millis(400);
-const GRID_LINE: Color = Color::rgb(0xD0, 0xD0, 0xD0);
+
+/// The hairline ruling between cells: a light gray (#D0D0D0) on the light
+/// theme, and as faint a line on the dark one.
+fn grid_line(theme: &Theme) -> Color {
+    theme.background.mix(theme.text, 0.185)
+}
 
 fn main() {
     let (config, root) = window();
@@ -819,9 +824,9 @@ impl Widget for Grid {
                 }
                 let cell = (col as u8, row as u8);
                 let rect = Rect::new(vp.x + vc * COL_W, vp.y + vr * ROW_H, COL_W, ROW_H);
-                painter.fill_rect(rect, Color::WHITE);
-                painter.h_line(rect.x, rect.bottom() - 1, rect.w, GRID_LINE);
-                painter.v_line(rect.right() - 1, rect.y, rect.h, GRID_LINE);
+                painter.fill_rect(rect, theme.background);
+                painter.h_line(rect.x, rect.bottom() - 1, rect.w, grid_line(theme));
+                painter.v_line(rect.right() - 1, rect.y, rect.h, grid_line(theme));
 
                 if self.editing != Some(cell) {
                     let text = self.sheet.display(cell);
