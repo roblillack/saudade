@@ -10,6 +10,12 @@ While pre-1.0, the minor version is bumped for breaking changes.
 
 ## [Unreleased] - ReleaseDate
 
+### Fixed
+
+- Windows: opening a `MenuBar` menu with its Alt shortcut while the pointer
+  rests over another menu's label no longer opens that other menu instead.
+  (#92)
+
 ## [0.8.0] - 2026-10-31
 
 ### Added
