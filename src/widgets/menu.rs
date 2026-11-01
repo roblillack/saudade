@@ -192,6 +192,10 @@ pub struct MenuBar {
     /// After the first release without a fire, we drop back into click
     /// mode where a separate click fires an item.
     drag_armed: bool,
+    /// Where the last pointer event the bar was handed put the pointer. Kept
+    /// across a `PointerLeave`, so a leave and re-entry at the very same spot
+    /// doesn't count as a move either — see the `PointerMove` arm.
+    last_pointer: Option<Point>,
     cache: Cache,
 }
 
@@ -204,6 +208,7 @@ impl MenuBar {
             open: None,
             hovered_item: None,
             drag_armed: false,
+            last_pointer: None,
             cache: Cache::default(),
         }
     }
@@ -395,6 +400,19 @@ impl Widget for MenuBar {
     }
 
     fn event(&mut self, event: &Event, ctx: &mut EventCtx) {
+        // A move that leaves the pointer where it was is no move at all, and
+        // must not hover anything. Windows reports the pointer leaving and
+        // re-entering the window as a menu's popup appears, and the runtime
+        // answers the re-entry with a move to the spot the pointer rests on.
+        // Taken for a hover, that slid a menu opened with Alt+F over to the
+        // label the pointer happened to rest on (Help, say), and dropped the
+        // first item's highlight.
+        if let Some(pos) = event.position() {
+            let stayed = self.last_pointer.replace(pos) == Some(pos);
+            if stayed && matches!(event, Event::PointerMove { .. }) {
+                return;
+            }
+        }
         match event {
             Event::PointerDown {
                 pos,
@@ -705,6 +723,7 @@ impl MenuBar {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::font::FontSet;
     use std::cell::Cell;
     use std::rc::Rc;
 
@@ -1034,5 +1053,78 @@ mod tests {
             ctx.is_consumed(),
             "and that mnemonic keystroke is swallowed"
         );
+    }
+
+    /// A File / Help bar, painted once so its labels have rects to hit. With no
+    /// fonts loaded a label is only its padding wide: File spans x 0..12, Help
+    /// 12..24.
+    fn painted_file_help_bar() -> MenuBar {
+        let mut bar = MenuBar::new(Rect::new(0, 0, 200, 20))
+            .add_menu(Menu::new("&File", vec![MenuItem::action("&New", |_| {})]))
+            .add_menu(Menu::new("&Help", vec![MenuItem::action("&About", |_| {})]));
+        let mut pixels = vec![0u32; 200 * 20];
+        let mut painter = Painter::new(&mut pixels, 200, 20, 1.0, 0, 0, FontSet::default());
+        bar.paint(&mut painter, &Theme::default());
+        bar
+    }
+
+    fn pointer_move(x: i32, y: i32) -> Event {
+        Event::PointerMove {
+            pos: Point::new(x, y),
+        }
+    }
+
+    #[test]
+    fn keyboard_opened_menu_stays_put_under_a_resting_pointer() {
+        let mut bar = painted_file_help_bar();
+        // The pointer rests over Help …
+        bar.event(&pointer_move(18, 10), &mut EventCtx::new());
+        // … as Alt+F opens File.
+        let alt = Modifiers {
+            alt: true,
+            ..Modifiers::default()
+        };
+        bar.event(
+            &Event::KeyDown {
+                key: Key::Char('f'),
+                modifiers: alt,
+            },
+            &mut EventCtx::new(),
+        );
+        assert_eq!(bar.open, Some(0));
+        // The popup appearing makes Windows report the pointer leaving and
+        // coming back, which the runtime answers with a move to where it rests.
+        bar.event(&Event::PointerLeave, &mut EventCtx::new());
+        bar.event(&pointer_move(18, 10), &mut EventCtx::new());
+        assert_eq!(
+            bar.open,
+            Some(0),
+            "File stays open: the pointer never moved"
+        );
+        assert_eq!(
+            bar.hovered_item,
+            Some(0),
+            "and its first item keeps the keyboard highlight"
+        );
+        // Actually moving the pointer over Help still slides the menu there.
+        bar.event(&pointer_move(19, 10), &mut EventCtx::new());
+        assert_eq!(bar.open, Some(1));
+    }
+
+    #[test]
+    fn a_press_where_the_pointer_already_is_still_counts() {
+        // Only moves are filtered: a click at the spot the pointer last moved to
+        // opens the menu under it as usual.
+        let mut bar = painted_file_help_bar();
+        bar.event(&pointer_move(18, 10), &mut EventCtx::new());
+        bar.event(
+            &Event::PointerDown {
+                pos: Point::new(18, 10),
+                button: MouseButton::Left,
+                modifiers: Modifiers::default(),
+            },
+            &mut EventCtx::new(),
+        );
+        assert_eq!(bar.open, Some(1));
     }
 }
