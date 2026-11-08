@@ -10,6 +10,18 @@ While pre-1.0, the minor version is bumped for breaking changes.
 
 ## [Unreleased] - ReleaseDate
 
+### Added
+
+- `WindowConfig::app_id` names the program to the desktop: it becomes the
+  Wayland app_id and both halves of the X11 `WM_CLASS`, which docks, task bars
+  and compositors match to the program's `<app_id>.desktop` file for its name
+  and icon. Left unset, both stay the executable's file name.
+
+### Changed
+
+- `WindowConfig` has a new public field, `app_id`, so code that builds one as
+  a struct literal must now set it; `WindowConfig::new` is unaffected.
+
 ### Fixed
 
 - Wayland: the window's app_id is now the executable's file name, as X11

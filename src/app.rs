@@ -62,6 +62,9 @@ pub struct WindowConfig {
     pub icon: Option<SvgImage>,
     /// Open the window fullscreen — see [`fullscreen`](Self::fullscreen).
     pub fullscreen: bool,
+    /// The name the desktop knows the program by — see [`app_id`](Self::app_id).
+    /// `None` takes the executable's file name.
+    pub app_id: Option<String>,
 }
 
 impl WindowConfig {
@@ -73,6 +76,7 @@ impl WindowConfig {
             min_size: None,
             icon: None,
             fullscreen: false,
+            app_id: None,
         }
     }
 
@@ -119,6 +123,27 @@ impl WindowConfig {
     /// is still the size the window takes when it leaves fullscreen.
     pub fn fullscreen(mut self, fullscreen: bool) -> Self {
         self.fullscreen = fullscreen;
+        self
+    }
+
+    /// The name the desktop knows this program by: the app_id of its Wayland
+    /// toplevel, and both halves of its X11 `WM_CLASS`. Docks, task bars and
+    /// compositors look for the desktop-entry file of the same name —
+    /// `<app_id>.desktop` — to learn the program's name and icon, so give it
+    /// the basename of the `.desktop` file the program installs.
+    ///
+    /// ```no_run
+    /// # use saudade::*;
+    /// // Installed as share/applications/notepad.desktop
+    /// WindowConfig::new("Notepad", 520, 340).app_id("notepad");
+    /// ```
+    ///
+    /// Without one, both take the file name the executable was started by
+    /// (`argv[0]`), which is often the right name already. The window's title
+    /// stands in should that be missing. It has no effect on Windows or macOS,
+    /// which identify a program by other means.
+    pub fn app_id(mut self, app_id: impl Into<String>) -> Self {
+        self.app_id = Some(app_id.into());
         self
     }
 }
@@ -533,6 +558,12 @@ impl ApplicationHandler<Option<Appearance>> for AppHandler {
             .with_theme(self.window_theme());
         if let Some(min) = self.window_config.min_size {
             attrs = attrs.with_min_inner_size(self.to_platform(min));
+        }
+        // X11: the app_id as both halves of `WM_CLASS`, which is what a window
+        // manager matches against `StartupWMClass` and desktop-entry names.
+        #[cfg(all(unix, not(target_os = "macos")))]
+        if let Some(app_id) = &self.window_config.app_id {
+            attrs = attrs.with_name(app_id, app_id);
         }
         // Windows: saudade's drop target in place of winit's, which reads only
         // file paths. A window takes one target, so winit's is turned off.

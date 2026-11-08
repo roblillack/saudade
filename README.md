@@ -1822,10 +1822,11 @@ pub struct WindowConfig {
     pub min_size: Option<Size>,   // logical pixels; resizable windows only
     pub icon: Option<SvgImage>,   // see "Application icon"
     pub fullscreen: bool,         // open filling the display; see "Fullscreen"
+    pub app_id: Option<String>,   // the desktop-entry name; see "Application icon"
 }
 
 WindowConfig::new("About Retrofetch", 395, 305);
-WindowConfig::new("Notepad", 520, 340).resizable(true).icon(ICON);
+WindowConfig::new("Notepad", 520, 340).resizable(true).icon(ICON).app_id("notepad");
 WindowConfig::new("Kiosk", 640, 480).fullscreen(true); // 640×480 once it leaves
 ```
 
@@ -1864,10 +1865,18 @@ program that hasn't been *installed* gets a placeholder no matter what
 it asks for here.
 
 That file is found by name: a compositor or dock looks for
-`<app_id>.desktop`. saudade gives the Wayland app_id and both halves of
-the X11 `WM_CLASS` the file name the executable was started by
-(`argv[0]`), so a `notepad` binary installed with a `notepad.desktop`
-finds its icon without further ado.
+`<app_id>.desktop`. `WindowConfig::app_id` sets the name, so give it the
+basename of the desktop file the program installs:
+
+```rust
+// Installed as share/applications/notepad.desktop, with Icon=notepad
+WindowConfig::new("Notepad", 520, 340).icon(ICON).app_id("notepad");
+```
+
+It sets the Wayland app_id and both halves of the X11 `WM_CLASS`. Left
+unset, both take the file name the executable was started by (`argv[0]`),
+so a `notepad` binary installed with a `notepad.desktop` needs nothing
+more; the window's title stands in should that name be missing.
 
 Dialog windows get the icon too, so one doesn't sit next to the main
 window wearing the system default. Draw the artwork to read at the small
