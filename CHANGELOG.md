@@ -10,6 +10,15 @@ While pre-1.0, the minor version is bumped for breaking changes.
 
 ## [Unreleased] - ReleaseDate
 
+### Fixed
+
+- Wayland: the window's app_id is now the executable's file name, as X11
+  already had for `WM_CLASS`, in place of `saudade.` and its title made lower
+  case with anything but ASCII letters and digits turned into `-`. Docks, task
+  bars and compositors look for `<app_id>.desktop` to find a program's name and
+  icon, so a binary installed beside a `.desktop` file of its own name now
+  finds its icon there.
+
 ## [0.8.1] - 2026-11-01
 
 ### Fixed

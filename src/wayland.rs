@@ -190,7 +190,7 @@ pub(crate) fn run(app: App) {
     let surface = compositor.create_surface(&qh);
     let window = xdg_shell.create_window(surface, WindowDecorations::RequestServer, &qh);
     window.set_title(&window_cfg.title);
-    window.set_app_id(format!("saudade.{}", sanitize(&window_cfg.title)));
+    window.set_app_id(default_app_id(&window_cfg.title));
     // Subscribe the main surface to fractional-scale notifications, if the
     // compositor supports them. The returned object is kept alive in `State`
     // so the `preferred_scale` events keep arriving.
@@ -2653,16 +2653,18 @@ fn surface_offset(logical: i32, ui: f32) -> i32 {
     (logical as f32 * ui).round() as i32
 }
 
-fn sanitize(s: &str) -> String {
-    s.chars()
-        .map(|c| {
-            if c.is_ascii_alphanumeric() {
-                c.to_ascii_lowercase()
-            } else {
-                '-'
-            }
-        })
-        .collect()
+/// The app_id of the main window: the file name the executable was started
+/// by, as winit takes it for `WM_CLASS` on X11, so the two agree — and usually
+/// match the `.desktop` file the program is installed with. The title stands
+/// in when `argv[0]` is missing or not UTF-8.
+fn default_app_id(title: &str) -> String {
+    std::env::args_os()
+        .next()
+        .as_ref()
+        .and_then(|path| std::path::Path::new(path).file_name())
+        .and_then(|name| name.to_str())
+        .map(str::to_owned)
+        .unwrap_or_else(|| title.to_owned())
 }
 
 /// Serialize file paths into an RFC 2483 `text/uri-list` payload — the inverse
