@@ -1863,6 +1863,12 @@ and shows whatever icon the matching desktop-entry file names, so a
 program that hasn't been *installed* gets a placeholder no matter what
 it asks for here.
 
+That file is found by name: a compositor or dock looks for
+`<app_id>.desktop`. saudade gives the Wayland app_id and both halves of
+the X11 `WM_CLASS` the file name the executable was started by
+(`argv[0]`), so a `notepad` binary installed with a `notepad.desktop`
+finds its icon without further ado.
+
 Dialog windows get the icon too, so one doesn't sit next to the main
 window wearing the system default. Draw the artwork to read at the small
 end of that table: what looks like detail at 512 is mud at 16.
