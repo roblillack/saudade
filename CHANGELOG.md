@@ -15,10 +15,10 @@ While pre-1.0, the minor version is bumped for breaking changes.
 - `WindowConfig::app_id` names the program to the desktop: it becomes the
   Wayland app_id and both halves of the X11 `WM_CLASS`, which docks, task bars
   and compositors match to the program's `<app_id>.desktop` file for its name
-  and icon. Left unset, both stay the executable's file name.
+  and icon. Left unset, both stay the executable's file name. (#94)
 - `EventCtx::set_window_title` changes the main window's title while the
   program runs, say to name the document it shows; `MockBackend::window_title`
-  reads it back in a test.
+  reads it back in a test. (#94)
 
 ### Changed
 
