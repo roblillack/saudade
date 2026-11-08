@@ -110,7 +110,7 @@ or list it directly in your `Cargo.toml`:
 ```toml
 # Cargo.toml
 [dependencies]
-saudade = "0.8.1"
+saudade = "0.8.2"
 ```
 
 Saudade needs Rust 1.88 or newer. On macOS and Windows that is all it needs.

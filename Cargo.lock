@@ -1538,7 +1538,7 @@ dependencies = [
 
 [[package]]
 name = "saudade"
-version = "0.8.1"
+version = "0.8.2"
 dependencies = [
  "arboard",
  "block2 0.6.2",

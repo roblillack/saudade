@@ -10,6 +10,8 @@ While pre-1.0, the minor version is bumped for breaking changes.
 
 ## [Unreleased] - ReleaseDate
 
+## [0.8.2] - 2026-11-08
+
 ### Fixed
 
 - Wayland: the window's app_id is now the executable's file name, as X11
@@ -779,7 +781,8 @@ FontStyle::Regular)`, and get caret offsets with the new
 Initial release.
 
 <!-- next-url -->
-[Unreleased]: https://github.com/roblillack/saudade/compare/v0.8.1...HEAD
+[Unreleased]: https://github.com/roblillack/saudade/compare/v0.8.2...HEAD
+[0.8.2]: https://github.com/roblillack/saudade/compare/v0.8.1...v0.8.2
 [0.8.1]: https://github.com/roblillack/saudade/compare/v0.8.0...v0.8.1
 [0.8.0]: https://github.com/roblillack/saudade/compare/v0.7.0...v0.8.0
 
