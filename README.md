@@ -380,6 +380,7 @@ impl EventCtx {
     pub fn set_fullscreen(&mut self, on: bool);  // fill the display, or not
     pub fn toggle_fullscreen(&mut self);
     pub fn is_fullscreen(&self) -> bool;
+    pub fn set_window_title(&mut self, title: impl Into<String>); // retitle the window
     pub fn set_cursor(&mut self, cursor: Cursor); // pointer shape, on PointerMove
 }
 ```
@@ -425,6 +426,22 @@ the window manager's or compositor's job, and the new size arrives through
 with, and `MockBackend` honors requests on the spot (`is_fullscreen()`,
 `with_fullscreen()`, and `DispatchOutcome::fullscreen_request`), so they can be
 tested offscreen.
+
+#### Window title
+
+`set_window_title` gives the main window a new title — in its title bar,
+task bar entry and window switcher — in place of the one
+`WindowConfig::title` opened it with, say to name the document it shows:
+
+```rust
+MenuItem::action("&Save", move |cx| {
+    save(&path);
+    cx.set_window_title(format!("{} - Notepad", path.display()));
+})
+```
+
+Dialog windows keep the title they were opened with. `MockBackend` keeps
+the latest request, for `window_title()` to read back in a test.
 
 #### Mouse cursor
 
@@ -1822,10 +1839,11 @@ pub struct WindowConfig {
     pub min_size: Option<Size>,   // logical pixels; resizable windows only
     pub icon: Option<SvgImage>,   // see "Application icon"
     pub fullscreen: bool,         // open filling the display; see "Fullscreen"
+    pub app_id: Option<String>,   // the desktop-entry name; see "Application icon"
 }
 
 WindowConfig::new("About Retrofetch", 395, 305);
-WindowConfig::new("Notepad", 520, 340).resizable(true).icon(ICON);
+WindowConfig::new("Notepad", 520, 340).resizable(true).icon(ICON).app_id("notepad");
 WindowConfig::new("Kiosk", 640, 480).fullscreen(true); // 640×480 once it leaves
 ```
 
@@ -1864,10 +1882,18 @@ program that hasn't been *installed* gets a placeholder no matter what
 it asks for here.
 
 That file is found by name: a compositor or dock looks for
-`<app_id>.desktop`. saudade gives the Wayland app_id and both halves of
-the X11 `WM_CLASS` the file name the executable was started by
-(`argv[0]`), so a `notepad` binary installed with a `notepad.desktop`
-finds its icon without further ado.
+`<app_id>.desktop`. `WindowConfig::app_id` sets the name, so give it the
+basename of the desktop file the program installs:
+
+```rust
+// Installed as share/applications/notepad.desktop, with Icon=notepad
+WindowConfig::new("Notepad", 520, 340).icon(ICON).app_id("notepad");
+```
+
+It sets the Wayland app_id and both halves of the X11 `WM_CLASS`. Left
+unset, both take the file name the executable was started by (`argv[0]`),
+so a `notepad` binary installed with a `notepad.desktop` needs nothing
+more; the window's title stands in should that name be missing.
 
 Dialog windows get the icon too, so one doesn't sit next to the main
 window wearing the system default. Draw the artwork to read at the small

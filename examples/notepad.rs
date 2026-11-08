@@ -1,7 +1,7 @@
 use std::cell::RefCell;
 use std::env;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
 use saudade::{
@@ -80,6 +80,7 @@ pub fn window(initial_path: PathBuf) -> (WindowConfig, impl Widget) {
                             if let Ok(content) = fs::read_to_string(chosen) {
                                 editor.borrow_mut().set_text(&content);
                                 *path.borrow_mut() = chosen.to_path_buf();
+                                cx.set_window_title(title_for(chosen));
                                 cx.request_paint();
                             }
                         });
@@ -109,6 +110,7 @@ pub fn window(initial_path: PathBuf) -> (WindowConfig, impl Widget) {
                         file_dialog.borrow_mut().show_save(suggested, move |cx, chosen| {
                             if fs::write(chosen, editor.borrow().text()).is_ok() {
                                 *path.borrow_mut() = chosen.to_path_buf();
+                                cx.set_window_title(title_for(chosen));
                             }
                             cx.request_paint();
                         });
@@ -200,6 +202,13 @@ pub fn window(initial_path: PathBuf) -> (WindowConfig, impl Widget) {
             .icon(ICON),
         root,
     )
+}
+
+/// The window title once a file has been opened or saved under a new name:
+/// the file's name, then the program's, as Notepad has it.
+fn title_for(path: &Path) -> String {
+    let name = path.file_name().unwrap_or(path.as_os_str());
+    format!("{} - Notepad", name.to_string_lossy())
 }
 
 /// Point the file dialog at the directory holding the current document, so it

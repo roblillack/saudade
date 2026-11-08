@@ -190,7 +190,12 @@ pub(crate) fn run(app: App) {
     let surface = compositor.create_surface(&qh);
     let window = xdg_shell.create_window(surface, WindowDecorations::RequestServer, &qh);
     window.set_title(&window_cfg.title);
-    window.set_app_id(default_app_id(&window_cfg.title));
+    window.set_app_id(
+        window_cfg
+            .app_id
+            .clone()
+            .unwrap_or_else(|| default_app_id(&window_cfg.title)),
+    );
     // Subscribe the main surface to fractional-scale notifications, if the
     // compositor supports them. The returned object is kept alive in `State`
     // so the `preferred_scale` events keep arriving.
@@ -1007,6 +1012,11 @@ impl State {
         }
         if let Some(fullscreen) = ctx.fullscreen_request {
             self.apply_fullscreen(fullscreen);
+        }
+        if let Some(title) = ctx.title_request.take() {
+            // Not double-buffered state: the compositor takes it on receipt,
+            // with no commit needed.
+            self.window.set_title(title);
         }
         if let Some(data) = ctx.drag_request.take() {
             self.begin_drag(data);
@@ -2653,7 +2663,7 @@ fn surface_offset(logical: i32, ui: f32) -> i32 {
     (logical as f32 * ui).round() as i32
 }
 
-/// The app_id of the main window: the file name the executable was started
+/// The app_id of a program that names none: the file name the executable was started
 /// by, as winit takes it for `WM_CLASS` on X11, so the two agree — and usually
 /// match the `.desktop` file the program is installed with. The title stands
 /// in when `argv[0]` is missing or not UTF-8.

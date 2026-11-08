@@ -56,6 +56,9 @@ pub struct MockBackend {
     /// mock honors [`EventCtx::set_fullscreen`] on the spot. A `Cell` because
     /// [`Self::dispatch`] takes `&self`.
     fullscreen: std::cell::Cell<bool>,
+    /// The title a widget last gave the window with
+    /// [`EventCtx::set_window_title`] — see [`Self::window_title`].
+    title: std::cell::RefCell<Option<String>>,
 }
 
 /// Which backdrop the content pass fills behind the widget tree, mirroring the
@@ -90,6 +93,7 @@ impl MockBackend {
             screen: None,
             display_dpi: None,
             fullscreen: std::cell::Cell::new(false),
+            title: std::cell::RefCell::new(None),
         }
     }
 
@@ -106,6 +110,13 @@ impl MockBackend {
     /// from [`Self::dispatch`].
     pub fn is_fullscreen(&self) -> bool {
         self.fullscreen.get()
+    }
+
+    /// The title a widget last gave the pretend window through
+    /// [`EventCtx::set_window_title`] while handling an event from
+    /// [`Self::dispatch`], or `None` if none has.
+    pub fn window_title(&self) -> Option<String> {
+        self.title.borrow().clone()
     }
 
     /// Pretend the window sits on a display whose usable area is `area`, in the
@@ -193,6 +204,9 @@ impl MockBackend {
         root.event(event, &mut ctx);
         if let Some(fullscreen) = ctx.fullscreen_request {
             self.fullscreen.set(fullscreen);
+        }
+        if let Some(title) = ctx.title_request.take() {
+            *self.title.borrow_mut() = Some(title);
         }
         DispatchOutcome {
             paint_requested: ctx.paint_requested,
