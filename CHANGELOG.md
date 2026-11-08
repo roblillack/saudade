@@ -17,7 +17,7 @@ While pre-1.0, the minor version is bumped for breaking changes.
   case with anything but ASCII letters and digits turned into `-`. Docks, task
   bars and compositors look for `<app_id>.desktop` to find a program's name and
   icon, so a binary installed beside a `.desktop` file of its own name now
-  finds its icon there.
+  finds its icon there. (#93)
 
 ## [0.8.1] - 2026-11-01
 
