@@ -1023,6 +1023,11 @@ impl State {
         if let Some(fullscreen) = ctx.fullscreen_request {
             self.apply_fullscreen(fullscreen);
         }
+        if let Some(title) = ctx.title_request.take() {
+            // Not double-buffered state: the compositor takes it on receipt,
+            // with no commit needed.
+            self.window.set_title(title);
+        }
         if let Some((data, actions)) = ctx.drag_request.take() {
             self.begin_drag(data, &actions);
         }
