@@ -1210,6 +1210,9 @@ impl AppHandler {
         if let Some(fullscreen) = ctx.fullscreen_request {
             self.apply_fullscreen(fullscreen);
         }
+        if let Some(title) = ctx.title_request.take() {
+            self.apply_title(title);
+        }
         if ctx.drag_request.is_some() {
             // A widget asked to start an outbound drag. winit exposes no API to
             // initiate a drag-and-drop operation on any of its platforms
@@ -1310,6 +1313,15 @@ impl AppHandler {
         self.main_win
             .as_ref()
             .is_some_and(|w| w.fullscreen().is_some())
+    }
+
+    /// Give the main window a new title, at a widget's request (see
+    /// [`EventCtx::set_window_title`]).
+    fn apply_title(&mut self, title: String) {
+        if let Some(win) = self.main_win.as_ref() {
+            win.set_title(&title);
+        }
+        self.window_config.title = title;
     }
 
     /// Put the main window into borderless fullscreen on the display it is on,

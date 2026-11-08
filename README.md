@@ -380,6 +380,7 @@ impl EventCtx {
     pub fn set_fullscreen(&mut self, on: bool);  // fill the display, or not
     pub fn toggle_fullscreen(&mut self);
     pub fn is_fullscreen(&self) -> bool;
+    pub fn set_window_title(&mut self, title: impl Into<String>); // retitle the window
     pub fn set_cursor(&mut self, cursor: Cursor); // pointer shape, on PointerMove
 }
 ```
@@ -425,6 +426,22 @@ the window manager's or compositor's job, and the new size arrives through
 with, and `MockBackend` honors requests on the spot (`is_fullscreen()`,
 `with_fullscreen()`, and `DispatchOutcome::fullscreen_request`), so they can be
 tested offscreen.
+
+#### Window title
+
+`set_window_title` gives the main window a new title — in its title bar,
+task bar entry and window switcher — in place of the one
+`WindowConfig::title` opened it with, say to name the document it shows:
+
+```rust
+MenuItem::action("&Save", move |cx| {
+    save(&path);
+    cx.set_window_title(format!("{} - Notepad", path.display()));
+})
+```
+
+Dialog windows keep the title they were opened with. `MockBackend` keeps
+the latest request, for `window_title()` to read back in a test.
 
 #### Mouse cursor
 

@@ -461,6 +461,10 @@ pub struct EventCtx {
     /// [`Self::toggle_fullscreen`]): the state the window should be in once the
     /// dispatch is over. Applied by the runtime alongside the other requests.
     pub(crate) fullscreen_request: Option<bool>,
+    /// Set when a widget calls [`Self::set_window_title`]: the title the main
+    /// window should carry once the dispatch is over. Applied by the runtime
+    /// alongside the other requests.
+    pub(crate) title_request: Option<String>,
 }
 
 impl EventCtx {
@@ -481,6 +485,7 @@ impl EventCtx {
             cursor_request: None,
             fullscreen: false,
             fullscreen_request: None,
+            title_request: None,
         }
     }
 
@@ -674,6 +679,26 @@ impl EventCtx {
     /// after a change the answer is the state being switched *to*.
     pub fn is_fullscreen(&self) -> bool {
         self.fullscreen_request.unwrap_or(self.fullscreen)
+    }
+
+    /// Ask the runtime to change the main window's title to `title` — the
+    /// text in its title bar, task bar entry and window switcher — applied
+    /// after the current event finishes dispatching. Handy for a window that
+    /// names the document it shows, or marks it as modified:
+    ///
+    /// ```no_run
+    /// # use saudade::*;
+    /// # fn f(ctx: &mut EventCtx, name: &str, modified: bool) {
+    /// let mark = if modified { "*" } else { "" };
+    /// ctx.set_window_title(format!("{mark}{name} - Notepad"));
+    /// # }
+    /// ```
+    ///
+    /// It starts out as [`WindowConfig::title`](crate::WindowConfig::title).
+    /// Dialog windows keep the title they were opened with. If several widgets
+    /// ask during one dispatch, the last one wins.
+    pub fn set_window_title(&mut self, title: impl Into<String>) {
+        self.title_request = Some(title.into());
     }
 
     /// Begin dragging `data` out of this window as an OS drag-and-drop
