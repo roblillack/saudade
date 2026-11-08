@@ -18,6 +18,10 @@ While pre-1.0, the minor version is bumped for breaking changes.
   offer, and a drop target pick, copy, move or ask (negotiated with the
   compositor on Wayland); `EventCtx::is_dragging_out()` tells a widget's own
   drag from another application's. (#98)
+- `WindowConfig::app_id` names the program to the desktop: it becomes the
+  Wayland app_id and both halves of the X11 `WM_CLASS`, which docks, task bars
+  and compositors match to the program's `<app_id>.desktop` file for its name
+  and icon. Left unset, both stay the executable's file name.
 
 ### Changed
 
@@ -25,6 +29,8 @@ While pre-1.0, the minor version is bumped for breaking changes.
   faces are parsed on first use, cutting font memory from some 90 MB to about
   the size of the font files. Installed fonts are found through an index in the
   user's cache directory, so start-up no longer rescans every font file. (#97)
+- `WindowConfig` has a new public field, `app_id`, so code that builds one as
+  a struct literal must now set it; `WindowConfig::new` is unaffected.
 
 ## [0.8.2] - 2026-11-08
 
