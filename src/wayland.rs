@@ -76,7 +76,7 @@ use crate::app::{App, KeySwallow};
 use crate::appearance::{Appearance, Themes};
 use crate::background::BackgroundState;
 use crate::event::{
-    Cursor, DragData, Event, EventCtx, Key, Modifiers, MouseButton, NamedKey,
+    Cursor, DragData, DropAction, Event, EventCtx, Key, Modifiers, MouseButton, NamedKey,
     SCROLL_PIXELS_PER_LINE, WHEEL_LINES_PER_DETENT,
 };
 use crate::font::{Font, FontSet};
@@ -613,10 +613,11 @@ struct DragSession {
     anchor: Point,
     /// Last reported position in widget-tree logical coordinates.
     pos: Point,
-    /// Whether a widget under the cursor opted in to the drop on the last
-    /// `DragEnter`/`DragMove`. Tracked so we only re-tell the offer when the
-    /// answer actually changes as the drag moves within the window.
-    accepted: bool,
+    /// What the widget under the cursor said a drop would do on the last
+    /// `DragEnter`/`DragMove`, `None` if it wouldn't take one. Tracked so we
+    /// only re-tell the offer when the answer actually changes as the drag
+    /// moves within the window.
+    accepted: Option<DropAction>,
 }
 
 /// Whether the spot under the cursor will accept the drop. River (and other
@@ -990,12 +991,13 @@ impl State {
 
     /// Dispatch `event` into the widget tree and apply the requests it left on
     /// the [`EventCtx`], returning that context so the caller can read the
-    /// requests it didn't act on: `accepts_drop` for the incoming-drag events
+    /// requests it didn't act on: `accepted_drop` for the incoming-drag events
     /// (turned into accept/reject on the drag offer) and `swallow_key` for the
     /// keyboard path. Most callers ignore the result.
     fn dispatch(&mut self, event: Event) -> EventCtx {
         let mut ctx = EventCtx::with_fullscreen(self.fullscreen);
         ctx.modifiers = self.modifiers;
+        ctx.dragging_out = self.drag_source.is_some();
         self.root.event(&event, &mut ctx);
         if ctx.paint_requested {
             self.needs_redraw = true;
@@ -1016,20 +1018,20 @@ impl State {
         if let Some(fullscreen) = ctx.fullscreen_request {
             self.apply_fullscreen(fullscreen);
         }
-        if let Some(data) = ctx.drag_request.take() {
-            self.begin_drag(data);
+        if let Some((data, actions)) = ctx.drag_request.take() {
+            self.begin_drag(data, &actions);
         }
         ctx
     }
 
-    /// Start an outbound drag carrying `data`'s file paths, in response to a
-    /// widget's [`EventCtx::start_drag`]. Needs the data-device plumbing plus
-    /// the latest pointer press (its serial + surface): Wayland only lets a
-    /// client begin a drag off the implicit grab a button press established, so
-    /// this is expected to be called while that button is still held. Bails
-    /// quietly if any of that is missing or the payload has no paths — there's
-    /// nothing the user could have grabbed.
-    fn begin_drag(&mut self, data: DragData) {
+    /// Start an outbound drag carrying `data`'s file paths, its drop doing one
+    /// of `actions`, in response to a widget's [`EventCtx::start_drag`]. Needs
+    /// the data-device plumbing plus the latest pointer press (its serial +
+    /// surface): Wayland only lets a client begin a drag off the implicit grab
+    /// a button press established, so this is expected to be called while that
+    /// button is still held. Bails quietly if any of that is missing or the
+    /// payload has no paths — there's nothing the user could have grabbed.
+    fn begin_drag(&mut self, data: DragData, actions: &[DropAction]) {
         let (Some(mgr), Some(dd), Some(serial)) = (
             self.data_device_manager.as_ref(),
             self.data_device.as_ref(),
@@ -1052,9 +1054,13 @@ impl State {
         // `&self`); `None` if we couldn't allocate it — the drag still works.
         let icon = self.create_drag_icon(&data);
 
-        // Offer only the uri-list, copy-only (we never want a move to make the
-        // source side delete the user's files).
-        let source = mgr.create_drag_and_drop_source(&self.qh, [URI_LIST], DndAction::Copy);
+        // Offer only the uri-list, and the actions the widget asked for. A
+        // move is the target's to carry out: we never delete anything when a
+        // drop ends in one.
+        let actions = actions
+            .iter()
+            .fold(DndAction::empty(), |all, a| all | dnd_action(*a));
+        let source = mgr.create_drag_and_drop_source(&self.qh, [URI_LIST], actions);
         source.start_drag(dd, &origin, icon.as_ref().map(|i| &i.surface), serial);
         self.drag_payload = paths_to_uri_list(&data.paths).into_bytes();
         self.drag_source = Some(source);
@@ -1670,16 +1676,41 @@ impl State {
             .unwrap_or(Point::new(0, 0))
     }
 
-    /// Tell an incoming drag offer whether we'll take it. Accepting asks for a
-    /// *copy* (never move — we must not make the source delete the user's file)
-    /// and names the form a drop reads first (see [`mime_drop`]); rejecting
-    /// clears the action and mime so the source sees "no drop" over us. Flushed
-    /// right away so the source's cursor updates without waiting for the next
-    /// loop turn.
-    fn apply_drag_offer(&self, offer: &DragOffer, accepted: bool, conn: &Connection) {
-        if accepted {
+    /// Dispatch a [`DragMove`](Event::DragMove) where the incoming drag now
+    /// is — after it moved, or the modifiers changed what a drop there would
+    /// do — and re-tell the offer if the answer changed: a drag can cross
+    /// from a drop zone to plain content within one window.
+    fn drag_moved(&mut self, conn: &Connection) {
+        let Some(pos) = self.drag.as_ref().map(|d| d.pos) else {
+            return;
+        };
+        let accepted = self.dispatch(Event::DragMove { pos }).accepted_drop;
+        let changed = self.drag.as_ref().is_some_and(|d| d.accepted != accepted);
+        if let Some(drag) = self.drag.as_mut() {
+            drag.accepted = accepted;
+        }
+        if changed
+            && let Some(offer) = self
+                .data_device
+                .as_ref()
+                .and_then(|dd| dd.data().drag_offer())
+        {
+            self.apply_drag_offer(&offer, accepted, conn);
+        }
+        self.mark_popups_dirty();
+    }
+
+    /// Tell an incoming drag offer whether we'll take it. Accepting asks for
+    /// the action the widget named, falling back to a copy where the source
+    /// doesn't offer it, and names the form a drop reads first (see
+    /// [`mime_drop`]); rejecting clears the action and mime so the source sees
+    /// "no drop" over us. Flushed right away so the source's cursor updates
+    /// without waiting for the next loop turn.
+    fn apply_drag_offer(&self, offer: &DragOffer, accepted: Option<DropAction>, conn: &Connection) {
+        if let Some(action) = accepted {
             let form = offer.with_mime_types(|types| mime_drop::first(types).map(str::to_string));
-            offer.set_actions(DndAction::Copy, DndAction::Copy);
+            let preferred = dnd_action(action);
+            offer.set_actions(DndAction::Copy | preferred, preferred);
             offer.accept_mime_type(offer.serial, form);
         } else {
             offer.set_actions(DndAction::empty(), DndAction::empty());
@@ -2139,7 +2170,7 @@ impl KeyboardHandler for State {
     }
     fn update_modifiers(
         &mut self,
-        _: &Connection,
+        conn: &Connection,
         _: &QueueHandle<Self>,
         _: &wl_keyboard::WlKeyboard,
         _: u32,
@@ -2156,10 +2187,12 @@ impl KeyboardHandler for State {
             alt_graph: false,
             logo: modifiers.logo,
         };
-        // Shown under the pointer at once, as a move would.
+        // Shown under the pointer at once, as a move would — and to a drag
+        // over the window, whose drop they may turn from a move to a copy.
         if modifiers != self.modifiers {
             self.modifiers = modifiers;
             self.rehover();
+            self.drag_moved(conn);
         }
     }
 }
@@ -2406,13 +2439,13 @@ impl DataDeviceHandler for State {
         self.drag = Some(DragSession {
             anchor,
             pos,
-            accepted: false,
+            accepted: None,
         });
         // Offer the drag to the widget tree first; only accept it if a widget
         // opts in via `EventCtx::accept_drop`. Accepting unconditionally would
         // tell the source every window is a drop target, even ones with no drop
         // zone — so the source's cursor would wrongly read "copy" over us.
-        let accepted = self.dispatch(Event::DragEnter { pos }).accepts_drop;
+        let accepted = self.dispatch(Event::DragEnter { pos }).accepted_drop;
         if let Some(d) = self.drag.as_mut() {
             d.accepted = accepted;
         }
@@ -2442,23 +2475,7 @@ impl DataDeviceHandler for State {
         if let Some(drag) = self.drag.as_mut() {
             drag.pos = pos;
         }
-        // Re-evaluate acceptance for the new position — a drag can cross from a
-        // drop zone to plain content within one window — and only re-tell the
-        // offer when the answer flipped.
-        let accepted = self.dispatch(Event::DragMove { pos }).accepts_drop;
-        let changed = self.drag.as_ref().is_some_and(|d| d.accepted != accepted);
-        if let Some(drag) = self.drag.as_mut() {
-            drag.accepted = accepted;
-        }
-        if changed
-            && let Some(offer) = self
-                .data_device
-                .as_ref()
-                .and_then(|dd| dd.data().drag_offer())
-        {
-            self.apply_drag_offer(&offer, accepted, conn);
-        }
-        self.mark_popups_dirty();
+        self.drag_moved(conn);
     }
 
     fn selection(
@@ -2492,6 +2509,12 @@ impl DataDeviceHandler for State {
             self.mark_popups_dirty();
             return;
         };
+        // A drop the compositor left on "ask" isn't settled: the target is to
+        // name what it did. The widget does its own thing with it once it
+        // has the data; to the source, that's a copy.
+        if offer.selected_action == DndAction::Ask {
+            offer.set_actions(DndAction::Copy, DndAction::Copy);
+        }
         // The drop is the protocol-guaranteed point at which the data is
         // readable.
         let reading = Reading::new(offer.with_mime_types(<[String]>::to_vec));
@@ -2507,7 +2530,8 @@ impl DataOfferHandler for State {
         offer: &mut DragOffer,
         _actions: DndAction,
     ) {
-        // We only ever copy dropped files in — never move or link.
+        // A copy until the widget under the drag says what a drop there
+        // would do, on enter.
         offer.set_actions(DndAction::Copy, DndAction::Copy);
     }
 
@@ -2603,7 +2627,7 @@ impl DataSourceHandler for State {
         {
             return;
         }
-        let valid = action.contains(DndAction::Copy) || action.contains(DndAction::Move);
+        let valid = !action.is_empty();
         // The badge is the feedback that actually shows on wlroots; the cursor
         // shape is the bonus for compositors that honor it mid-drag.
         self.update_drag_feedback(if valid {
@@ -2613,6 +2637,8 @@ impl DataSourceHandler for State {
         });
         let shape = if action.contains(DndAction::Move) {
             Shape::Move
+        } else if action.contains(DndAction::Ask) {
+            Shape::ContextMenu
         } else if valid {
             Shape::Copy
         } else {
@@ -2825,6 +2851,15 @@ fn drag_icon_label(paths: &[PathBuf]) -> String {
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_else(|| one.display().to_string()),
         many => format!("{} items", many.len()),
+    }
+}
+
+/// The data device's name for `action`.
+fn dnd_action(action: DropAction) -> DndAction {
+    match action {
+        DropAction::Copy => DndAction::Copy,
+        DropAction::Move => DndAction::Move,
+        DropAction::Ask => DndAction::Ask,
     }
 }
 

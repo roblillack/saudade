@@ -140,7 +140,7 @@ to an object-oriented UI framework.
 | Module     | Contents                                                                                                                                                                                                                                                                                                    |
 | ---------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | geometry   | `Point`, `Size`, `Rect`, `Color`                                                                                                                                                                                                                                                                            |
-| event      | `Event`, `DragData`, `DraggedFile`, `MouseButton`, `Key`, `NamedKey`, `Modifiers`, `Cursor`, `EventCtx`                                                                                                                                                                                                     |
+| event      | `Event`, `DragData`, `DraggedFile`, `DropAction`, `MouseButton`, `Key`, `NamedKey`, `Modifiers`, `Cursor`, `EventCtx`                                                                                                                                                                                       |
 | accel      | `Accel`, `ModifierScheme` — menu shortcuts that read ⌘ on macOS and Ctrl elsewhere                                                                                                                                                                                                                          |
 | theme      | `Theme`, default `Theme::windows_31()` palette and its dark-mode counterpart, `Theme::windows_31_dark()`                                                                                                                                                                                                    |
 | background | `BackgroundPattern` — the pattern every window draws behind its widgets                                                                                                                                                                                                                                     |
@@ -333,9 +333,11 @@ Three per-backend caveats:
   ignores the proxy (an XWayland compositor handing on a Wayland drag) off
   winit's connection. macOS reads file paths only: winit's `HoveredFile` /
   `DroppedFile`.
-- **Copy only.** saudade always takes the _copy_ action (or _link_, where an
-  X11 source asks for it or a Windows source offers nothing else), never move,
-  so a drop never makes the source delete the user's file.
+- **Copy, unless asked otherwise.** `accept_drop` takes the _copy_ action (or
+  _link_, where an X11 source asks for it or a Windows source offers nothing
+  else), so a drop never makes the source delete the user's file. On Wayland,
+  `ctx.accept_drop_as(DropAction::Move)` (or `Ask`) names another action
+  instead, where the source offers it; the source's drag cursor shows it.
 
 See `examples/dnd.rs` (`cargo run --example dnd`) for a working drop zone.
 
@@ -362,6 +364,17 @@ its platforms (macOS, Windows, X11), so `start_drag` is a no-op there. The drag
 offers `text/uri-list` and copies (never moves) the files. Receiving drops, by
 contrast, works on every backend. See `examples/filer.rs` (`cargo run --example
 filer`) — drag an entry out of the window onto another app.
+
+`ctx.start_drag_offering(data, &[DropAction::Move, DropAction::Ask])` starts a
+drag whose drop may also move the files — another file manager then may — or
+do something of the target's own, the target choosing; copy is always offered.
+The drag carries on over the window that started it as `DragEnter` /
+`DragMove` / `Drop`, so a file manager can start it the moment a press has
+moved far enough, as GTK and Qt programs do, and take it back when it is let
+go in its own window: there `ctx.is_dragging_out()` tells it the drag is its
+own, and `ctx.accept_drop_as` what the drop would do. The runtime re-sends
+`DragMove` when the modifiers change, so a held Ctrl can turn a move into a
+copy without the mouse moving.
 
 ### `EventCtx`
 

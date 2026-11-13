@@ -1176,7 +1176,7 @@ impl AppHandler {
         // `Drop` is delivered regardless. saudade's own drop targets on Windows
         // and X11 are the exception: `flush_os_drags` reads the flag off the
         // returned context.
-        let _ = ctx.accepts_drop;
+        let _ = ctx.accepted_drop;
         ctx
     }
 
@@ -1197,11 +1197,11 @@ impl AppHandler {
             match drag {
                 Drag::Enter(p) => {
                     let ctx = self.dispatch(&Event::DragEnter { pos: at(p) }, event_loop);
-                    drags.set_accepted(Some(ctx.accepts_drop));
+                    drags.set_accepted(Some(ctx.accepted_drop.is_some()));
                 }
                 Drag::Move(p) => {
                     let ctx = self.dispatch(&Event::DragMove { pos: at(p) }, event_loop);
-                    drags.set_accepted(Some(ctx.accepts_drop));
+                    drags.set_accepted(Some(ctx.accepted_drop.is_some()));
                 }
                 Drag::Leave => {
                     drags.set_accepted(None);

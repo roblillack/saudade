@@ -24,7 +24,7 @@
 
 use crate::background::{BackgroundPattern, BackgroundState};
 use crate::chrome::{self, WindowChrome};
-use crate::event::{Event, EventCtx, Modifiers};
+use crate::event::{DropAction, Event, EventCtx, Modifiers};
 use crate::font::{Font, FontSet};
 use crate::geometry::{Color, Point, Rect, Size};
 use crate::painter::Painter;
@@ -59,6 +59,9 @@ pub struct MockBackend {
     /// The modifier keys dispatches report through [`EventCtx::modifiers`] —
     /// see [`Self::set_modifiers`].
     modifiers: std::cell::Cell<Modifiers>,
+    /// Whether a drag the window started is going on — see
+    /// [`Self::set_dragging_out`].
+    dragging_out: std::cell::Cell<bool>,
 }
 
 /// Which backdrop the content pass fills behind the widget tree, mirroring the
@@ -94,6 +97,7 @@ impl MockBackend {
             display_dpi: None,
             fullscreen: std::cell::Cell::new(false),
             modifiers: std::cell::Cell::new(Modifiers::default()),
+            dragging_out: std::cell::Cell::new(false),
         }
     }
 
@@ -118,6 +122,12 @@ impl MockBackend {
     /// modifiers they're built with.)
     pub fn set_modifiers(&self, modifiers: Modifiers) {
         self.modifiers.set(modifiers);
+    }
+
+    /// Pretend a drag the window started is going on (or not, the default):
+    /// widgets see it through [`EventCtx::is_dragging_out`].
+    pub fn set_dragging_out(&self, dragging: bool) {
+        self.dragging_out.set(dragging);
     }
 
     /// Pretend the window sits on a display whose usable area is `area`, in the
@@ -203,6 +213,7 @@ impl MockBackend {
     pub fn dispatch(&self, root: &mut dyn Widget, event: &Event) -> DispatchOutcome {
         let mut ctx = EventCtx::with_fullscreen(self.fullscreen.get());
         ctx.modifiers = self.modifiers.get();
+        ctx.dragging_out = self.dragging_out.get();
         root.event(event, &mut ctx);
         if let Some(fullscreen) = ctx.fullscreen_request {
             self.fullscreen.set(fullscreen);
@@ -211,6 +222,7 @@ impl MockBackend {
             paint_requested: ctx.paint_requested,
             close_requested: ctx.close_requested,
             fullscreen_request: ctx.fullscreen_request,
+            accepted_drop: ctx.accepted_drop,
         }
     }
 
@@ -574,6 +586,9 @@ pub struct DispatchOutcome {
     pub close_requested: bool,
     /// What a widget asked for with [`EventCtx::set_fullscreen`], if anything.
     pub fullscreen_request: Option<bool>,
+    /// What a drop would do, as a widget said with [`EventCtx::accept_drop`]
+    /// or [`EventCtx::accept_drop_as`]; `None` if none would take it.
+    pub accepted_drop: Option<DropAction>,
 }
 
 /// Result of [`MockBackend::render`]. Holds a physical-pixel ARGB32
