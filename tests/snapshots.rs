@@ -844,6 +844,67 @@ fn text_editor_scrolls() {
     });
 }
 
+/// A line wider than the field stops at the field's edge.
+#[test]
+fn text_editor_long_line() {
+    snapshot_at_all_scales("text_editor_long_line", 200, 120, || {
+        let editor = laid_out_editor(
+            Rect::new(8, 8, 184, 104),
+            "short\nthe quick brown fox jumped over the lazy dog\nshort again",
+        );
+        Box::new(
+            Container::new(200, 120)
+                .with_background(Color::LIGHT_GRAY)
+                .add(editor),
+        )
+    });
+}
+
+fn editor_with_both_scrollbars() -> TextEditor {
+    let rect = Rect::new(8, 8, 184, 104);
+    let mut lines = vec!["the quick brown fox jumped over the lazy dog".to_string()];
+    for n in 2..=12 {
+        lines.push(format!("line {n:>2}"));
+    }
+    let mut editor = TextEditor::new(rect)
+        .with_horizontal_scrollbar(true)
+        .with_text(&lines.join("\n"));
+    editor.layout(rect);
+    editor
+}
+
+/// Both scrollbars and the blank square in the corner between them.
+#[test]
+fn text_editor_horizontal_scrollbar() {
+    snapshot_at_all_scales("text_editor_horizontal_scrollbar", 200, 120, || {
+        Box::new(
+            Container::new(200, 120)
+                .with_background(Color::LIGHT_GRAY)
+                .add(editor_with_both_scrollbars()),
+        )
+    });
+}
+
+/// With the caret at the end of the long first line the view has followed it:
+/// the text is cut off at the left bevel and both thumbs sit off their start.
+#[test]
+fn text_editor_scrolled_sideways() {
+    snapshot_at_all_scales("text_editor_scrolled_sideways", 200, 120, || {
+        let mut editor = editor_with_both_scrollbars();
+        editor.set_focused(true);
+        let key = Event::KeyDown {
+            key: Key::Named(NamedKey::End),
+            modifiers: Modifiers::default(),
+        };
+        saudade::mock::MockBackend::new(200, 120).dispatch(&mut editor, &key);
+        Box::new(
+            Container::new(200, 120)
+                .with_background(Color::LIGHT_GRAY)
+                .add(editor),
+        )
+    });
+}
+
 // ---------------------------------------------------------------- List
 
 /// A small icon used in list-snapshot tests so we exercise icon rendering

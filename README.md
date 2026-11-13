@@ -1280,9 +1280,22 @@ exactly 1.
 A minimal multi-line text editor: sunken white field, monospace text,
 vertical cursor, selection, cut/copy/paste against the OS clipboard,
 undo/redo, and a built-in vertical scrollbar pinned to the right edge.
-Only the visible rows are measured and drawn each paint, so large files
-stay cheap. Designed for system-utility editors (Notepad-style); word
-wrap comes later.
+Only the visible rows are drawn each paint, so large files stay cheap.
+Designed for system-utility editors (Notepad-style); word wrap comes
+later.
+
+Lines are not wrapped. One that is wider than the field is clipped at
+its edge, and the view scrolls sideways to keep the caret in sight — as
+it moves, as text is typed, and as a selection is dragged past the edge.
+A trackpad's sideways scroll moves the view too. For a scrollbar along
+the bottom, ask for one:
+
+```rust
+let editor = TextEditor::new(rect).with_horizontal_scrollbar(true);
+```
+
+It appears whether or not the text needs it, as the vertical one does,
+with a blank square in the corner where the two meet.
 
 ```rust
 let mut editor = TextEditor::new(Rect::new(4, 24, 512, 312))
@@ -1371,10 +1384,12 @@ tracks `(row, col)` in _characters_, not bytes — multi-byte UTF-8 is
 handled correctly. Per-character widths are cached during paint so a
 click can be mapped to a column position without a `Painter` at event
 time — and the cache is keyed by row, so only rows currently on screen
-contribute work. The scrollbar's canonical position is its own
-`value()`; the editor reads it (no duplicate state). Clicking focuses
-the widget; the cursor only renders while focused; vertical scroll
-follows the cursor automatically.
+contribute work. The width of a whole line, which the horizontal scroll
+range is made of, is measured once and again only when the line changes.
+A scrollbar's canonical position is its own `value()`; the editor reads
+it (no duplicate state). Clicking focuses the widget; the cursor only
+renders while focused; the view follows the cursor automatically, down
+the text and along the line.
 
 ### `List`
 
@@ -2431,7 +2446,6 @@ Features that fit Saudade's philosophy but haven't been implemented yet:
 
 - `Grid` container (`Row` is already available alongside `Column`)
 - `RadioButton` (`TextInput`, `Checkbox`, and `List` already exist)
-- Horizontal scrolling in `TextEditor` (the horizontal `ScrollBar` is already implemented; the editor just needs to use it)
 - Multi-window support
 - Native menu bars on platforms that provide them
 
