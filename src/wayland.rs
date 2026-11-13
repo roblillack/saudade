@@ -304,6 +304,7 @@ pub(crate) fn run(app: App) {
         icon_sizes: Vec::new(),
         icons: Vec::new(),
         modifiers: Modifiers::default(),
+        buttons_held: 0,
         bg: BackgroundState::from_env(),
         cursor: None,
         cursor_shape: Cursor::Default,
@@ -469,6 +470,11 @@ struct State {
     icon_sizes: Vec<u32>,
     icons: Vec<ToplevelIcon>,
     modifiers: Modifiers,
+    /// Mouse buttons held down, on any of our surfaces: while one is, each key
+    /// is followed by [`State::rehover`]. Cleared when the pointer leaves, and
+    /// when an outbound drag takes the press over (its release then goes to
+    /// the compositor's drag, never to us).
+    buttons_held: u32,
     /// Background pattern + color for the main window, toggled with the
     /// `p` / `c` debug keys. Popups/dialogs ignore it and stay plain.
     bg: BackgroundState,
@@ -989,6 +995,7 @@ impl State {
     /// keyboard path. Most callers ignore the result.
     fn dispatch(&mut self, event: Event) -> EventCtx {
         let mut ctx = EventCtx::with_fullscreen(self.fullscreen);
+        ctx.modifiers = self.modifiers;
         self.root.event(&event, &mut ctx);
         if ctx.paint_requested {
             self.needs_redraw = true;
@@ -1051,6 +1058,7 @@ impl State {
         source.start_drag(dd, &origin, icon.as_ref().map(|i| &i.surface), serial);
         self.drag_payload = paths_to_uri_list(&data.paths).into_bytes();
         self.drag_source = Some(source);
+        self.buttons_held = 0;
         // Now that `start_drag` has given the surface the drag-icon role, paint
         // and commit it. It starts as "no-drop" (nothing valid under the cursor
         // yet); `action` upgrades it to "copy" once a target accepts.
@@ -2116,6 +2124,7 @@ impl KeyboardHandler for State {
         event: WlKeyEvent,
     ) {
         self.handle_key(event, true);
+        self.rehover_while_held();
     }
     fn release_key(
         &mut self,
@@ -2126,6 +2135,7 @@ impl KeyboardHandler for State {
         event: WlKeyEvent,
     ) {
         self.handle_key(event, false);
+        self.rehover_while_held();
     }
     fn update_modifiers(
         &mut self,
@@ -2136,7 +2146,7 @@ impl KeyboardHandler for State {
         modifiers: WlModifiers,
         _layout: u32,
     ) {
-        self.modifiers = Modifiers {
+        let modifiers = Modifiers {
             shift: modifiers.shift,
             control: modifiers.ctrl,
             alt: modifiers.alt,
@@ -2146,10 +2156,39 @@ impl KeyboardHandler for State {
             alt_graph: false,
             logo: modifiers.logo,
         };
+        // Shown under the pointer at once, as a move would.
+        if modifiers != self.modifiers {
+            self.modifiers = modifiers;
+            self.rehover();
+        }
     }
 }
 
 impl State {
+    /// Dispatch a `PointerMove` where the pointer last was, though it hasn't
+    /// moved, and show the cursor the widgets ask for there. Hover feedback
+    /// that depends on more than the position — the modifiers, or a drag a
+    /// key has just called off — so keeps up with it.
+    fn rehover(&mut self) {
+        let pos = self
+            .cursor
+            .or_else(|| self.popups.iter().find_map(|p| p.cursor));
+        let Some(pos) = pos else {
+            return;
+        };
+        let ctx = self.dispatch(Event::PointerMove { pos });
+        self.apply_cursor(ctx.cursor_request, false);
+        self.mark_popups_dirty();
+    }
+
+    /// After a key: a drag shows at once what the key did to it (Escape
+    /// calling it off, say).
+    fn rehover_while_held(&mut self) {
+        if self.buttons_held > 0 {
+            self.rehover();
+        }
+    }
+
     fn handle_key(&mut self, event: WlKeyEvent, pressed: bool) {
         let modifiers = self.modifiers;
         let mapped = map_keysym(event.keysym);
@@ -2265,6 +2304,7 @@ impl PointerHandler for State {
                         Some(i) => self.popups[i].cursor = None,
                         None => self.cursor = None,
                     }
+                    self.buttons_held = 0;
                     self.dispatch(Event::PointerLeave);
                     // The pointer image is the next surface's responsibility now;
                     // forget what we'd shown so the next enter re-establishes it
@@ -2281,6 +2321,7 @@ impl PointerHandler for State {
                     // happened on.
                     self.drag_grab_serial = Some(serial);
                     self.drag_origin_surface = Some(event.surface.clone());
+                    self.buttons_held += 1;
                     self.dispatch(Event::PointerDown {
                         pos,
                         button: b,
@@ -2292,6 +2333,7 @@ impl PointerHandler for State {
                     let Some(b) = map_button(button) else {
                         continue;
                     };
+                    self.buttons_held = self.buttons_held.saturating_sub(1);
                     self.dispatch(Event::PointerUp {
                         pos,
                         button: b,

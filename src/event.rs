@@ -461,6 +461,9 @@ pub struct EventCtx {
     /// [`Self::toggle_fullscreen`]): the state the window should be in once the
     /// dispatch is over. Applied by the runtime alongside the other requests.
     pub(crate) fullscreen_request: Option<bool>,
+    /// The modifier keys held when this dispatch began, filled in by the
+    /// runtime — see [`Self::modifiers`].
+    pub(crate) modifiers: Modifiers,
 }
 
 impl EventCtx {
@@ -481,6 +484,7 @@ impl EventCtx {
             cursor_request: None,
             fullscreen: false,
             fullscreen_request: None,
+            modifiers: Modifiers::default(),
         }
     }
 
@@ -676,6 +680,17 @@ impl EventCtx {
         self.fullscreen_request.unwrap_or(self.fullscreen)
     }
 
+    /// The modifier keys held as this event is dispatched, whatever the event.
+    /// The key and button events carry their own; this is for the rest — above
+    /// all [`Event::PointerMove`], so a drag can show whether a drop would copy
+    /// or move. When the modifiers change, the runtime dispatches a
+    /// `PointerMove` at the pointer's position again (see
+    /// [`Self::set_cursor`]), so such feedback follows them without the mouse
+    /// moving.
+    pub fn modifiers(&self) -> Modifiers {
+        self.modifiers
+    }
+
     /// Begin dragging `data` out of this window as an OS drag-and-drop
     /// operation — the mirror of receiving a [`Event::Drop`]. Call this from a
     /// widget's `event` handler once a press-then-move gesture is recognized
@@ -723,6 +738,12 @@ impl EventCtx {
     /// there's nothing to "unset" on the way out: moving onto another widget,
     /// or off this one, re-runs the reconciliation. Because only moves drive
     /// it, a request made while handling a press, key, or tick is ignored.
+    ///
+    /// The runtime also dispatches a `PointerMove` at the pointer's last
+    /// position, without the mouse moving, when the [modifiers](Self::modifiers)
+    /// change and after each key event while a mouse button is held. A shape
+    /// that depends on them — the copy cursor of a drag with Ctrl held, or the
+    /// arrow again once Escape has called the drag off — so follows them.
     ///
     /// The text fields request [`Cursor::Text`] this way; a widget that never
     /// calls this — a button, say — keeps the normal arrow.

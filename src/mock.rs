@@ -24,7 +24,7 @@
 
 use crate::background::{BackgroundPattern, BackgroundState};
 use crate::chrome::{self, WindowChrome};
-use crate::event::{Event, EventCtx};
+use crate::event::{Event, EventCtx, Modifiers};
 use crate::font::{Font, FontSet};
 use crate::geometry::{Color, Point, Rect, Size};
 use crate::painter::Painter;
@@ -56,6 +56,9 @@ pub struct MockBackend {
     /// mock honors [`EventCtx::set_fullscreen`] on the spot. A `Cell` because
     /// [`Self::dispatch`] takes `&self`.
     fullscreen: std::cell::Cell<bool>,
+    /// The modifier keys dispatches report through [`EventCtx::modifiers`] —
+    /// see [`Self::set_modifiers`].
+    modifiers: std::cell::Cell<Modifiers>,
 }
 
 /// Which backdrop the content pass fills behind the widget tree, mirroring the
@@ -90,6 +93,7 @@ impl MockBackend {
             screen: None,
             display_dpi: None,
             fullscreen: std::cell::Cell::new(false),
+            modifiers: std::cell::Cell::new(Modifiers::default()),
         }
     }
 
@@ -106,6 +110,14 @@ impl MockBackend {
     /// from [`Self::dispatch`].
     pub fn is_fullscreen(&self) -> bool {
         self.fullscreen.get()
+    }
+
+    /// Pretend `modifiers` are held from now on: every later [`Self::dispatch`]
+    /// reports them through [`EventCtx::modifiers`], as the live runtime does
+    /// for whatever keys are down. (Key and button events still carry the
+    /// modifiers they're built with.)
+    pub fn set_modifiers(&self, modifiers: Modifiers) {
+        self.modifiers.set(modifiers);
     }
 
     /// Pretend the window sits on a display whose usable area is `area`, in the
@@ -190,6 +202,7 @@ impl MockBackend {
     /// full winit / Wayland runtime.
     pub fn dispatch(&self, root: &mut dyn Widget, event: &Event) -> DispatchOutcome {
         let mut ctx = EventCtx::with_fullscreen(self.fullscreen.get());
+        ctx.modifiers = self.modifiers.get();
         root.event(event, &mut ctx);
         if let Some(fullscreen) = ctx.fullscreen_request {
             self.fullscreen.set(fullscreen);

@@ -380,6 +380,7 @@ impl EventCtx {
     pub fn set_fullscreen(&mut self, on: bool);  // fill the display, or not
     pub fn toggle_fullscreen(&mut self);
     pub fn is_fullscreen(&self) -> bool;
+    pub fn modifiers(&self) -> Modifiers;        // the modifier keys held now
     pub fn set_cursor(&mut self, cursor: Cursor); // pointer shape, on PointerMove
 }
 ```
@@ -451,6 +452,22 @@ CSS / freedesktop set of shapes — resize arrows, grab hands, crosshair,
 wait, and the rest — and each maps to the platform's own: a
 `wp_cursor_shape` request on Wayland, a winit `CursorIcon` everywhere
 else.
+
+A cursor can depend on more than where the pointer is: `ctx.modifiers()`
+tells which modifier keys are held during any event, a move included. When
+they change the runtime dispatches a `PointerMove` at the pointer's last
+position, though the mouse hasn't moved, and does the same after each key
+while a mouse button is held — so a drag shows the copy cursor the moment Ctrl
+goes down, and the arrow again once Escape has called the drag off:
+
+```rust
+if let Event::PointerMove { pos } = event
+    && self.dragging
+{
+    let copy = ctx.modifiers().control;
+    ctx.set_cursor(if copy { Cursor::Copy } else { Cursor::Grabbing });
+}
+```
 
 ## Theme
 
