@@ -399,9 +399,10 @@ impl Widget for ScrollBar {
             _ => (false, false),
         };
 
-        // Track: the Win 3.1 "newsprint" checkerboard (black on gray) that shows
-        // in the gap between the buttons wherever the thumb isn't.
-        painter.fill_checker(self.track_rect(), theme.face, theme.border);
+        // Track: the Win 3.1 "newsprint" checkerboard (black on gray, unless
+        // the theme inks it otherwise) that shows in the gap between the
+        // buttons wherever the thumb isn't.
+        painter.fill_checker(self.track_rect(), theme.face, theme.scroll_track);
 
         // Buttons and thumb in the lighter frame (square outline, single
         // top/left highlight, 2px bottom/right shadow); a held button sinks in.
@@ -662,6 +663,22 @@ mod tests {
         let h = sb.held.as_mut().expect("a button is held");
         h.pressed_at = past;
         h.last_repeat = past;
+    }
+
+    #[test]
+    fn the_track_is_inked_in_the_themes_scroll_track_color() {
+        use crate::mock::MockBackend;
+
+        let ink = Color::rgb(0x12, 0x34, 0x56);
+        let shows_ink = |theme: Theme| {
+            let backend = MockBackend::new(16, 200).with_theme(theme);
+            backend.render(&mut vbar()).pixels().contains(&ink.0)
+        };
+        assert!(!shows_ink(Theme::default()));
+        assert!(shows_ink(Theme {
+            scroll_track: ink,
+            ..Theme::default()
+        }));
     }
 
     #[test]

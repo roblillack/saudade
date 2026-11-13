@@ -12,6 +12,9 @@ While pre-1.0, the minor version is bumped for breaking changes.
 
 ### Added
 
+- `Theme::scroll_track`, the ink of the checkerboard in a scrollbar's
+  track. It defaults to black, as before; a theme that sets it to its
+  `highlight` gets the paler track of later Windows. (#107)
 - `TextEditor::with_unfocused_caret(false)` and
   `with_unfocused_selection(false)` (or their `set_` counterparts) hide the
   wedge an editor without the focus draws at its caret, and its selection,
