@@ -99,6 +99,15 @@ impl Row {
         focused
     }
 
+    /// The child holding the pointer, if it still holds it. A capture begins
+    /// with a press but need not end with a pointer event: Escape closes the
+    /// popup a child kept the pointer for. Nothing tells the container, so it
+    /// asks the child rather than trust what it noted down.
+    fn capturing(&self) -> Option<usize> {
+        self.captured
+            .filter(|&idx| self.children[idx].widget.captures_pointer())
+    }
+
     fn choose_target(&self, event: &Event) -> Option<usize> {
         if event.is_keyboard() {
             return self.focused;
@@ -259,6 +268,8 @@ impl Widget for Row {
     }
 
     fn event(&mut self, event: &Event, ctx: &mut EventCtx) {
+        // Forget a capture its holder gave up since the last event.
+        self.captured = self.capturing();
         if !event.is_keyboard() && event.position().is_none() && self.captured.is_none() {
             for child in &mut self.children {
                 child.widget.event(event, ctx);
@@ -345,7 +356,7 @@ impl Widget for Row {
     }
 
     fn captures_pointer(&self) -> bool {
-        self.captured.is_some()
+        self.capturing().is_some()
     }
 
     fn focusable(&self) -> bool {

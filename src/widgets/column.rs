@@ -133,6 +133,15 @@ impl Column {
         focused
     }
 
+    /// The child holding the pointer, if it still holds it. A capture begins
+    /// with a press but need not end with a pointer event: Escape closes the
+    /// popup a child kept the pointer for. Nothing tells the container, so it
+    /// asks the child rather than trust what it noted down.
+    fn capturing(&self) -> Option<usize> {
+        self.captured
+            .filter(|&idx| self.children[idx].widget.captures_pointer())
+    }
+
     fn choose_target(&self, event: &Event) -> Option<usize> {
         if event.is_keyboard() {
             return self.focused;
@@ -365,6 +374,8 @@ impl Widget for Column {
     }
 
     fn event(&mut self, event: &Event, ctx: &mut EventCtx) {
+        // Forget a capture its holder gave up since the last event.
+        self.captured = self.capturing();
         // Reconcile the focus visual *before* dispatching, so widgets that gate
         // their handlers on `self.focused` (the iconbox's Enter activation, the
         // list's keyboard nav) stop firing the moment a menu / overlay takes
@@ -481,7 +492,7 @@ impl Widget for Column {
     }
 
     fn captures_pointer(&self) -> bool {
-        self.captured.is_some() || self.active_overlay().is_some()
+        self.capturing().is_some() || self.active_overlay().is_some()
     }
 
     fn focusable(&self) -> bool {
@@ -616,6 +627,91 @@ mod tests {
             },
             &mut ctx,
         );
+    }
+
+    /// A stand-in for a widget with a popup: a press opens it and keeps the
+    /// pointer for as long as it is up, and Escape closes it.
+    struct Popup {
+        rect: Rect,
+        open: bool,
+    }
+
+    impl Widget for Popup {
+        fn bounds(&self) -> Rect {
+            self.rect
+        }
+        fn layout(&mut self, bounds: Rect) {
+            self.rect = bounds;
+        }
+        fn paint(&mut self, _: &mut Painter, _: &Theme) {}
+        fn event(&mut self, event: &Event, ctx: &mut EventCtx) {
+            match event {
+                Event::PointerDown { .. } => {
+                    self.open = true;
+                    ctx.request_focus();
+                }
+                Event::KeyDown {
+                    key: Key::Named(NamedKey::Escape),
+                    ..
+                } => self.open = false,
+                _ => {}
+            }
+        }
+        fn captures_pointer(&self) -> bool {
+            self.open
+        }
+        fn focusable(&self) -> bool {
+            true
+        }
+    }
+
+    /// While a focused child's popup is up the menu bar's accelerators wait,
+    /// and they must be back the moment it closes — also when a key closed it,
+    /// with the popup's owner nested in a row inside the column.
+    #[test]
+    fn accelerators_return_when_a_key_closes_a_nested_popup() {
+        let fired = Rc::new(Cell::new(0));
+        let bar = MenuBar::new(Rect::new(0, 0, 200, 20)).add_menu(Menu::new(
+            "&View",
+            vec![
+                MenuItem::action("&Refresh", {
+                    let fired = fired.clone();
+                    move |_| fired.set(fired.get() + 1)
+                })
+                .with_accel(crate::accel::Accel::new(NamedKey::F5)),
+            ],
+        ));
+        let popup = Popup {
+            rect: Rect::new(0, 0, 0, 0),
+            open: false,
+        };
+        let row = crate::widgets::Row::new().add_fill(popup);
+        let mut col = Column::new().add_fixed(bar, 20).add_fill(row);
+        col.layout(Rect::new(0, 0, 200, 200));
+        col.focus_first();
+
+        let key = |col: &mut Column, key: NamedKey| {
+            let mut ctx = EventCtx::new();
+            col.event(
+                &Event::KeyDown {
+                    key: Key::Named(key),
+                    modifiers: Modifiers::default(),
+                },
+                &mut ctx,
+            );
+        };
+        key(&mut col, NamedKey::F5);
+        assert_eq!(fired.get(), 1);
+
+        press(&mut col, 40, 100);
+        assert!(col.captures_pointer());
+        key(&mut col, NamedKey::F5);
+        assert_eq!(fired.get(), 1, "the open popup owns the keyboard");
+
+        key(&mut col, NamedKey::Escape);
+        assert!(!col.captures_pointer());
+        key(&mut col, NamedKey::F5);
+        assert_eq!(fired.get(), 2, "closed, it gives the keyboard back");
     }
 
     #[test]
