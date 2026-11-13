@@ -61,6 +61,11 @@ While pre-1.0, the minor version is bumped for breaking changes.
   accelerators and a default button's Enter stayed switched off, and the
   first press went to the closed popup's owner instead of where it landed.
   (#104)
+- `TextEditor::cut` and `paste` — and the new `delete`, `undo` and `redo` —
+  left the view where it was, so an edit made from an Edit menu or its
+  accelerator could put the caret out of sight: paste a long text and the
+  editor kept showing its top. They now scroll to the caret, as the same
+  edits made from the keyboard always did. (#106)
 - `TextEditor` painted a line wider than the field straight across its right
   border, the scrollbar and whatever lay beyond. Text is now clipped to the
   inside of the field. (#101)
