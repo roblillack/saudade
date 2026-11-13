@@ -236,6 +236,12 @@ impl TextEditor {
         self.lines.join("\n")
     }
 
+    /// `true` if there is no text at all. Cheaper than `text().is_empty()`,
+    /// which builds the whole string to find out.
+    pub fn is_empty(&self) -> bool {
+        self.lines.len() <= 1 && self.lines.iter().all(String::is_empty)
+    }
+
     /// Replace the whole text, putting the caret at the start. The undo
     /// history goes with the old text: this is a new document, not an edit.
     pub fn set_text(&mut self, text: &str) {
@@ -363,6 +369,12 @@ impl TextEditor {
         self.cursor = (last_row, last_col);
     }
 
+    /// `true` if any text is selected — what an Edit menu greys its Cut, Copy
+    /// and Delete items by.
+    pub fn has_selection(&self) -> bool {
+        self.selection_range().is_some()
+    }
+
     fn selection_range(&self) -> Option<((usize, usize), (usize, usize))> {
         let anchor = self.selection_anchor?;
         if anchor == self.cursor {
@@ -435,6 +447,16 @@ impl TextEditor {
             self.clipboard_set(&text);
             self.delete_selection();
         }
+    }
+
+    /// Delete the selected text without touching the clipboard, as an Edit
+    /// menu's Delete item does. With nothing selected nothing happens: unlike
+    /// the Delete key, this never takes the character after the caret.
+    pub fn delete(&mut self) {
+        if self.read_only {
+            return;
+        }
+        self.delete_selection();
     }
 
     pub fn paste(&mut self) {
@@ -1926,6 +1948,37 @@ mod tests {
         editor.redo();
         assert_eq!(editor.text(), "a1\n2\n3\n4f");
         assert_eq!(editor.cursor, (3, 1));
+    }
+
+    #[test]
+    fn edit_menu_can_ask_and_delete() {
+        let mut editor = mac("");
+        assert!(editor.is_empty() && !editor.has_selection());
+        editor.delete();
+        assert!(!editor.can_undo(), "deleting nothing is not an edit");
+
+        type_text(&mut editor, "one two");
+        assert!(!editor.is_empty() && !editor.has_selection());
+        editor.delete();
+        assert_eq!(editor.text(), "one two", "no selection, nothing deleted");
+
+        for _ in 0..3 {
+            press(&mut editor, NamedKey::Left, true);
+        }
+        assert!(editor.has_selection());
+        editor.delete();
+        assert_eq!(editor.text(), "one ");
+        assert!(!editor.has_selection());
+        editor.undo();
+        assert_eq!(editor.text(), "one two");
+
+        editor.set_read_only(true);
+        assert!(editor.has_selection());
+        editor.delete();
+        assert_eq!(editor.text(), "one two");
+
+        editor.set_text("\n");
+        assert!(!editor.is_empty(), "a line break is text too");
     }
 
     #[test]

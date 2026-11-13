@@ -1350,9 +1350,14 @@ editor.cut();
 editor.copy();
 editor.paste();
 editor.select_all();
+editor.delete(); // the selection, clipboard untouched
 editor.undo();
 editor.redo();
 ```
+
+`has_selection()` and `is_empty()` are there for the same menu, to grey
+Cut, Copy and Delete with nothing selected and Select All with nothing
+to select.
 
 Undo goes back one edit at a time, up to a thousand of them, and puts
 the caret and the selection back where they were. A run of typing is one
