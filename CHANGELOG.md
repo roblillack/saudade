@@ -10,6 +10,15 @@ While pre-1.0, the minor version is bumped for breaking changes.
 
 ## [Unreleased] - ReleaseDate
 
+### Changed
+
+- A system font's faces are parsed the first time text is drawn or measured
+  in them, not at startup. fontdue turns every glyph of a face into outlines as
+  it parses it, which made the twelve faces of the sans, serif and monospace
+  families some 90 MB of heap on a typical Linux desktop; an app now pays only
+  for the faces it uses (about 8 MB each for Noto Sans), and nothing for the
+  serif and monospace families it never draws in.
+
 ## [0.8.2] - 2026-11-08
 
 ### Fixed

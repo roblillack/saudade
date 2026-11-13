@@ -1,4 +1,4 @@
-use std::cell::RefCell;
+use std::cell::{OnceCell, RefCell};
 use std::collections::HashMap;
 use std::rc::Rc;
 
@@ -85,8 +85,8 @@ pub struct FontSet<'a> {
 pub(crate) const STYLE_COUNT: usize = 4;
 
 /// Pick the [`FontStyle`] to actually draw for a requested one, given which
-/// faces are present (`present[s as usize]`). The regular face is always loaded,
-/// so this always resolves to a real, loaded face — we never fake an absent
+/// faces are present (`present[s as usize]`). The regular face is always present,
+/// so this always resolves to a real face — we never fake an absent
 /// bold/italic by transforming the regular glyph. A missing bold-italic prefers
 /// to keep as much of the request as a real face allows (bold, then italic)
 /// before giving up to regular.
@@ -134,6 +134,12 @@ fn resolve_style(present: [bool; STYLE_COUNT], style: FontStyle) -> FontStyle {
 /// one — bold text is the system's bold face, not the regular face smeared a
 /// pixel wider. The bold/italic faces are optional: a family the host ships
 /// without them simply falls back to the regular face (see `resolve_style`).
+///
+/// A face found on the host is parsed the first time something is drawn or
+/// measured in it, not when the font is loaded. fontdue turns every glyph of a
+/// face into outline geometry up front, so a parsed face takes many times its
+/// file's size — some 8 MB for each of the four Noto Sans faces — and most apps
+/// never draw a word of serif or monospace, or of bold italic.
 ///
 /// Rasterizing an outline into a coverage bitmap is expensive, and a
 /// retained-mode window repaints the *entire* visible text on every frame —
@@ -279,11 +285,11 @@ impl<K: Eq + std::hash::Hash + Copy, V: Clone> LruCache<K, V> {
 /// caches, measurement, the blend loop) is written once.
 enum Faces {
     /// Faces parsed out of font files by fontdue, indexed by `FontStyle as
-    /// usize`. Slot 0 (`Regular`) is always `Some`; the bold / italic /
-    /// bold-italic slots are `Some` only when the host actually provides that
+    /// usize`. Slot 0 (`Regular`) always has a face; the bold / italic /
+    /// bold-italic slots have one only when the host actually provides that
     /// face. This is the path for fonts an app supplies as bytes, and for every
     /// platform whose own text stack we don't speak.
-    Outlines(Box<[Option<fontdue::Font>; STYLE_COUNT]>),
+    Outlines(Box<[Face; STYLE_COUNT]>),
     /// The host's text stack, asked for a system font by role rather than for a
     /// file. See [`crate::coretext`] for why a Mac needs this to draw a bold
     /// heading at all.
@@ -297,16 +303,27 @@ impl Faces {
     /// quietly drawn as regular.
     fn presence(&self) -> [bool; STYLE_COUNT] {
         match self {
-            Faces::Outlines(faces) => std::array::from_fn(|i| faces[i].is_some()),
+            Faces::Outlines(faces) => std::array::from_fn(|i| faces[i].present()),
             #[cfg(target_os = "macos")]
             Faces::Native(family) => family.presence(),
+        }
+    }
+
+    /// Make sure the face for an already-resolved `style` is ready to draw with,
+    /// parsing it if this is its first use. `false` when the parse failed — the
+    /// slot then reports itself absent, and [`Font::resolved`] falls back.
+    fn ready(&self, style: FontStyle) -> bool {
+        match self {
+            Faces::Outlines(faces) => faces[style as usize].get().is_some(),
+            #[cfg(target_os = "macos")]
+            Faces::Native(_) => true,
         }
     }
 
     /// Advance width of one glyph at `size` pixels in an already-resolved style.
     fn advance(&self, ch: char, size: f32, style: FontStyle) -> f32 {
         match self {
-            Faces::Outlines(faces) => match &faces[style as usize] {
+            Faces::Outlines(faces) => match faces[style as usize].get() {
                 Some(face) => face.metrics(ch, size).advance_width,
                 None => 0.0,
             },
@@ -328,7 +345,7 @@ impl Faces {
         style: FontStyle,
     ) -> (GlyphMetrics, Vec<u8>) {
         match self {
-            Faces::Outlines(faces) => match &faces[style as usize] {
+            Faces::Outlines(faces) => match faces[style as usize].get() {
                 // An outline face has one shape at every size, so the physical
                 // size is all it needs.
                 Some(face) => {
@@ -345,7 +362,7 @@ impl Faces {
     /// The outline faces, when that is what this font is made of. The
     /// `with_*_bytes` builders attach faces to a font built from bytes; there is
     /// nothing to attach them to on a font backed by the host's text stack.
-    fn outlines_mut(&mut self) -> Option<&mut [Option<fontdue::Font>; STYLE_COUNT]> {
+    fn outlines_mut(&mut self) -> Option<&mut [Face; STYLE_COUNT]> {
         match self {
             Faces::Outlines(faces) => Some(&mut **faces),
             #[cfg(target_os = "macos")]
@@ -354,12 +371,89 @@ impl Faces {
     }
 }
 
+/// One style's slot in an outline font: empty, parsed, or found on the host and
+/// waiting for its first use to be parsed.
+struct Face {
+    /// Where the face's bytes live, for a face that has not been parsed yet.
+    source: Option<(fontdb::Source, u32)>,
+    /// The parsed face, once it is asked for. Set from the start for an empty
+    /// slot (`None`) and for a face built from bytes; `None` after a deferred
+    /// parse that failed.
+    parsed: OnceCell<Option<fontdue::Font>>,
+}
+
+impl Face {
+    fn absent() -> Self {
+        Self {
+            source: None,
+            parsed: OnceCell::from(None),
+        }
+    }
+
+    fn parsed(face: fontdue::Font) -> Self {
+        Self {
+            source: None,
+            parsed: OnceCell::from(Some(face)),
+        }
+    }
+
+    /// A face to parse out of `source` (face `index` of it, for a collection)
+    /// when it is first needed.
+    fn deferred(source: fontdb::Source, index: u32) -> Self {
+        Self {
+            source: Some((source, index)),
+            parsed: OnceCell::new(),
+        }
+    }
+
+    /// Whether this slot has a face to draw with, as far as is known without
+    /// parsing it: a face not yet parsed counts.
+    fn present(&self) -> bool {
+        self.parsed.get().is_none_or(Option::is_some)
+    }
+
+    /// The face, parsed on the first call.
+    fn get(&self) -> Option<&fontdue::Font> {
+        self.parsed
+            .get_or_init(|| {
+                let (source, index) = self.source.as_ref()?;
+                parse_source(source, *index)
+            })
+            .as_ref()
+    }
+}
+
+/// Parse face `index` of a font file fontdb knows about.
+fn parse_source(source: &fontdb::Source, index: u32) -> Option<fontdue::Font> {
+    let parse = |data: &[u8]| {
+        fontdue::Font::from_bytes(
+            data,
+            fontdue::FontSettings {
+                collection_index: index,
+                ..fontdue::FontSettings::default()
+            },
+        )
+        .ok()
+    };
+    match source {
+        fontdb::Source::File(path) => parse(&std::fs::read(path).ok()?),
+        fontdb::Source::Binary(data) | fontdb::Source::SharedFile(_, data) => {
+            parse((**data).as_ref())
+        }
+    }
+}
+
 impl Font {
     /// Build a font from just a regular face. Bold / italic slots start empty;
     /// attach them with [`with_bold_bytes`](Self::with_bold_bytes) and friends,
     /// or let the system loader fill them in.
-    fn from_face(regular: fontdue::Font) -> Self {
-        Self::from_faces(Faces::Outlines(Box::new([Some(regular), None, None, None])))
+    fn from_face(regular: Face) -> Self {
+        Self::from_faces(Faces::Outlines(Box::new([
+            regular,
+            Face::absent(),
+            Face::absent(),
+            Face::absent(),
+        ])))
     }
 
     fn from_faces(faces: Faces) -> Self {
@@ -421,7 +515,7 @@ impl Font {
     pub fn from_sans_bytes(data: Vec<u8>) -> Option<Self> {
         fontdue::Font::from_bytes(data, fontdue::FontSettings::default())
             .ok()
-            .map(Self::from_face)
+            .map(|face| Self::from_face(Face::parsed(face)))
     }
 
     /// Attach a bold face from an in-memory TTF/OTF buffer (builder style).
@@ -449,7 +543,7 @@ impl Font {
             self.faces.outlines_mut(),
             fontdue::Font::from_bytes(data, fontdue::FontSettings::default()),
         ) {
-            faces[style as usize] = Some(face);
+            faces[style as usize] = Face::parsed(face);
         }
         self
     }
@@ -462,8 +556,17 @@ impl Font {
     /// The style to actually draw a requested one in: an absent bold / italic
     /// resolves down to a style that exists (ultimately the always-present
     /// regular one), and that resolved style is what the caches are keyed on.
+    ///
+    /// The face resolved to is parsed here if it has not been yet. Should that
+    /// parse fail, the face counts as absent from then on and the style
+    /// resolves again, so a broken bold face still falls back to regular.
     fn resolved(&self, style: FontStyle) -> FontStyle {
-        resolve_style(self.presence(), style)
+        loop {
+            let resolved = resolve_style(self.presence(), style);
+            if resolved == FontStyle::Regular || self.faces.ready(resolved) {
+                return resolved;
+            }
+        }
     }
 
     /// Cached advance width of a single glyph at `size` pixels in `style`. The
@@ -590,7 +693,8 @@ impl Font {
     }
 }
 
-/// Load the face `id` names out of `db`, as the face it actually is.
+/// The face `id` names in `db`, as the face it actually is, to be parsed when
+/// it is first drawn with. `None` when fontdue would refuse it.
 ///
 /// A font *collection* (`.ttc`) packs several faces into one file, and fontdb
 /// hands back the whole file plus the index of the face inside it — macOS ships
@@ -598,18 +702,18 @@ impl Font {
 /// oblique faces together. Dropping that index leaves fontdue on face 0, so
 /// every emphasis face of a collection quietly rasterized as its regular one:
 /// bold text that measured wider than it looked.
-fn load_face(db: &fontdb::Database, id: fontdb::ID) -> Option<fontdue::Font> {
-    let mut data: Option<(Vec<u8>, u32)> = None;
-    db.with_face_data(id, |bytes, index| data = Some((bytes.to_vec(), index)));
-    let (data, collection_index) = data?;
-    fontdue::Font::from_bytes(
-        data,
-        fontdue::FontSettings {
-            collection_index,
-            ..fontdue::FontSettings::default()
-        },
-    )
-    .ok()
+///
+/// fontdb lists a face once it has read the face's names, which takes less of a
+/// font than fontdue needs. So the face gets the same check fontdue starts with
+/// (that is all it can fail on), which reads the file's table directory and a
+/// few small tables — not a glyph. A face that fails it is passed over now, as
+/// though it weren't there, rather than turning up missing at draw time.
+fn load_face(db: &fontdb::Database, id: fontdb::ID) -> Option<Face> {
+    let info = db.face(id)?;
+    db.with_face_data(id, |bytes, index| {
+        ttf_parser::Face::parse(bytes, index).is_ok()
+    })?
+    .then(|| Face::deferred(info.source.clone(), info.index))
 }
 
 /// The weight at or above which we consider a face "bold". OS/2 weight classes
@@ -632,7 +736,7 @@ fn query_verified(
     family: &str,
     weight: fontdb::Weight,
     style: fontdb::Style,
-) -> Option<fontdue::Font> {
+) -> Option<Face> {
     let query = fontdb::Query {
         families: &[fontdb::Family::Name(family)],
         weight,
@@ -664,7 +768,7 @@ fn load_styled_family(db: &fontdb::Database, family: &str) -> Option<Font> {
             font.faces.outlines_mut(),
             query_verified(db, family, weight, slant),
         ) {
-            faces[style as usize] = Some(face);
+            faces[style as usize] = face;
         }
     };
     attach(FontStyle::Bold, fontdb::Weight::BOLD, fontdb::Style::Normal);
@@ -1026,13 +1130,62 @@ mod tests {
             .find(|f| f.monospaced)
             .expect("the collection carries the mono face")
             .id;
-        let face = load_face(&db, monospaced).expect("the mono face loads");
+        let face = load_face(&db, monospaced).expect("the mono face is found");
+        let face = face.get().expect("the mono face parses");
         // A fixed-width face gives `i` and `M` the same advance; the
         // proportional face at index 0 does not.
         assert_eq!(
             face.metrics('i', 24.0).advance_width,
             face.metrics('M', 24.0).advance_width,
             "the face loaded is the mono one, not the collection's first face"
+        );
+    }
+
+    #[test]
+    fn a_host_face_is_parsed_on_first_use() {
+        let (Some(sans), Some(mono)) = (fixture("DejaVuSans.ttf"), fixture("DejaVuSansMono.ttf"))
+        else {
+            return;
+        };
+        let mut db = fontdb::Database::new();
+        db.load_font_data(sans);
+        db.load_font_data(mono);
+        let font = load_styled_family(&db, "DejaVu Sans").expect("the family is found");
+        // Off macOS, outline faces are the only kind there is.
+        #[allow(irrefutable_let_patterns)]
+        let Faces::Outlines(faces) = &font.faces else {
+            unreachable!("a fontdb family is outline faces");
+        };
+        assert!(
+            faces[FontStyle::Regular as usize].parsed.get().is_none(),
+            "finding the family parses nothing"
+        );
+        assert!(font.measure("Handgloves", 24.0).0 > 0.0);
+        assert!(
+            faces[FontStyle::Regular as usize].parsed.get().is_some(),
+            "measuring text parses the regular face"
+        );
+    }
+
+    #[test]
+    fn a_face_that_fails_to_parse_falls_back() {
+        let Some(sans) = fixture("DejaVuSans.ttf") else {
+            return;
+        };
+        let mut font = stub(&sans, None);
+        let broken = fontdb::Source::Binary(std::sync::Arc::new(b"not a font".to_vec()));
+        font.faces.outlines_mut().expect("outline faces")[FontStyle::Bold as usize] =
+            Face::deferred(broken, 0);
+        assert!(font.presence()[FontStyle::Bold as usize], "not parsed yet");
+
+        assert_eq!(
+            font.measure_styled("Handgloves", 24.0, FontStyle::Bold),
+            font.measure_styled("Handgloves", 24.0, FontStyle::Regular),
+            "a bold face that won't parse is drawn as regular"
+        );
+        assert!(
+            !font.presence()[FontStyle::Bold as usize],
+            "and is absent from then on"
         );
     }
 

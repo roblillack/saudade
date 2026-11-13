@@ -1556,6 +1556,7 @@ dependencies = [
  "saudade-macros",
  "smithay-client-toolkit",
  "softbuffer",
+ "ttf-parser 0.20.0",
  "wayland-client",
  "wayland-protocols",
  "windows-sys 0.61.2",
