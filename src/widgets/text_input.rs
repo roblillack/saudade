@@ -741,7 +741,9 @@ impl Widget for TextInput {
                     }
                     Key::Named(NamedKey::Left) => {
                         self.before_move(modifiers.shift);
-                        if self.scheme.word_move_held(*modifiers) {
+                        if self.scheme.arrow_jump_held(*modifiers) {
+                            self.move_home();
+                        } else if self.scheme.word_move_held(*modifiers) {
                             self.move_word_left();
                         } else {
                             self.move_left();
@@ -751,7 +753,9 @@ impl Widget for TextInput {
                     }
                     Key::Named(NamedKey::Right) => {
                         self.before_move(modifiers.shift);
-                        if self.scheme.word_move_held(*modifiers) {
+                        if self.scheme.arrow_jump_held(*modifiers) {
+                            self.move_end();
+                        } else if self.scheme.word_move_held(*modifiers) {
                             self.move_word_right();
                         } else {
                             self.move_right();
@@ -946,6 +950,25 @@ mod tests {
         chord(&mut input, Key::Char('a'), ctrl());
         type_text(&mut input, "c");
         assert_eq!(input.text(), "c");
+    }
+
+    #[test]
+    fn command_arrow_jumps_to_the_ends_on_a_mac() {
+        let cmd = Modifiers {
+            logo: true,
+            ..Modifiers::default()
+        };
+        let mut input = focused("foo bar").with_scheme(ModifierScheme::Mac);
+        chord(&mut input, Key::Named(NamedKey::Left), cmd);
+        type_text(&mut input, "<");
+        chord(&mut input, Key::Named(NamedKey::Right), cmd);
+        type_text(&mut input, ">");
+        assert_eq!(input.text(), "<foo bar>");
+
+        let shifted = Modifiers { shift: true, ..cmd };
+        chord(&mut input, Key::Named(NamedKey::Left), shifted);
+        type_text(&mut input, "x");
+        assert_eq!(input.text(), "x");
     }
 
     #[test]

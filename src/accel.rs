@@ -46,6 +46,21 @@ impl ModifierScheme {
             ModifierScheme::Pc => modifiers.control,
         }
     }
+
+    /// Whether `modifiers` make an arrow key jump as far as it can go: ⌘ on
+    /// macOS, where ⌘← / ⌘→ reach the ends of the line and ⌘↑ / ⌘↓ the ends
+    /// of the text. Never elsewhere, where Home and End are the keys for
+    /// that — see [`Self::text_end_held`].
+    pub fn arrow_jump_held(self, modifiers: Modifiers) -> bool {
+        self == ModifierScheme::Mac && self.primary_held(modifiers)
+    }
+
+    /// Whether `modifiers` make Home and End reach the ends of the whole
+    /// text rather than of the line: Ctrl everywhere but on macOS, which has
+    /// ⌘↑ / ⌘↓ for that — see [`Self::arrow_jump_held`].
+    pub fn text_end_held(self, modifiers: Modifiers) -> bool {
+        self == ModifierScheme::Pc && self.primary_held(modifiers)
+    }
 }
 
 /// The platform-independent modifier roles of an accelerator chord. Resolved
