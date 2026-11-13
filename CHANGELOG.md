@@ -12,6 +12,11 @@ While pre-1.0, the minor version is bumped for breaking changes.
 
 ### Added
 
+- `TextEditor::with_unfocused_caret(false)` and
+  `with_unfocused_selection(false)` (or their `set_` counterparts) hide the
+  wedge an editor without the focus draws at its caret, and its selection,
+  for windows where only the focused editor should show them, as on
+  Windows. A hidden selection is kept and shows again with the focus. (#105)
 - `TextEditor` opens an editing menu on a right-click, as a Windows edit
   control does: Undo, Cut, Copy, Paste, Delete and Select All, greyed where
   they don't apply. `TextEditor::with_context_menu(false)` (or
