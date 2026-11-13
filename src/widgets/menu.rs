@@ -690,6 +690,17 @@ impl MenuBar {
     /// `true` if the keystroke was consumed.
     fn handle_mnemonic(&mut self, ch: char, modifiers: Modifiers, ctx: &mut EventCtx) -> bool {
         if self.open.is_some() {
+            // Alt and a letter of the bar still mean that menu, as they did
+            // with nothing open: Alt+E moves on from File to Edit, where a
+            // bare E picks an item of the open menu.
+            if modifiers.mnemonic_alt()
+                && let Some(menu_idx) = self.top_level_mnemonic(ch)
+            {
+                self.open = Some(menu_idx);
+                self.hovered_item = self.first_action();
+                ctx.request_paint();
+                return true;
+            }
             // No modifier required while a menu is open — typing a letter
             // fires its mnemonic item.
             if let Some(item) = self.item_mnemonic(ch) {
@@ -835,6 +846,39 @@ mod tests {
             !ctx.swallow_key,
             "opening a menu must not swallow the key press"
         );
+    }
+
+    #[test]
+    fn alt_and_a_letter_switch_from_an_open_menu_to_another() {
+        let fired = Rc::new(Cell::new(None));
+        let item = |label: &str, name: &'static str| {
+            let fired = fired.clone();
+            MenuItem::action(label, move |_| fired.set(Some(name)))
+        };
+        let mut bar = MenuBar::new(Rect::new(0, 0, 200, 20))
+            .add_menu(Menu::new("&File", vec![item("&Open", "open")]))
+            .add_menu(Menu::new("&Edit", vec![item("&Find", "find")]));
+        let alt = Modifiers {
+            alt: true,
+            ..Modifiers::default()
+        };
+        let press = |bar: &mut MenuBar, key, modifiers| {
+            bar.event(&Event::KeyDown { key, modifiers }, &mut EventCtx::new());
+        };
+
+        press(&mut bar, Key::Char('f'), alt);
+        assert_eq!(bar.open, Some(0));
+        press(&mut bar, Key::Char('e'), alt);
+        assert_eq!(bar.open, Some(1), "Alt+E moves on to Edit");
+        assert_eq!(bar.hovered_item, Some(0), "with its first item ready");
+        assert_eq!(fired.get(), None);
+
+        // Alt+F is File again rather than Edit's Find; a bare F is Find.
+        press(&mut bar, Key::Char('f'), alt);
+        assert_eq!((bar.open, fired.get()), (Some(0), None));
+        press(&mut bar, Key::Char('e'), alt);
+        press(&mut bar, Key::Char('f'), Modifiers::default());
+        assert_eq!((bar.open, fired.get()), (None, Some("find")));
     }
 
     #[test]
