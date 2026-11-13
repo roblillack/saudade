@@ -6,9 +6,10 @@
 //! in fractional-DPI snapping as well as integer-DPI layout.
 //!
 //! Each rendered frame is compared to a checked-in baseline PNG. In practice
-//! fontdue rasterizes identically across the dev and CI machines — measured
-//! across the whole suite, the macOS/aarch64 and Linux/x86_64 renders differ
-//! by at most a single channel level on a single pixel. So rather than a
+//! text rasterizes identically across the dev and CI machines — measured
+//! across the whole suite (with fontdue, the rasterizer before ab_glyph), the
+//! macOS/aarch64 and Linux/x86_64 renders differed by at most a single channel
+//! level on a single pixel. So rather than a
 //! pixel-count budget we use a per-pixel *amount* tolerance ([`MAX_CHANNEL_DELTA`]):
 //! a channel may drift by a few levels, but if even one pixel exceeds that, the
 //! snapshot is a regression. The threshold leaves generous headroom over the

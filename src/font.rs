@@ -2,6 +2,8 @@ use std::cell::{OnceCell, RefCell};
 use std::collections::HashMap;
 use std::rc::Rc;
 
+use ab_glyph::Font as _;
+
 use crate::geometry::Color;
 use crate::painter::Painter;
 
@@ -129,17 +131,17 @@ fn resolve_style(present: [bool; STYLE_COUNT], style: FontStyle) -> FontStyle {
 /// saudade owns no bundled bitmap font: we ask the host OS via fontdb for a
 /// reasonable proportional sans-serif (MS Sans Serif on Windows, Tahoma /
 /// Liberation Sans / DejaVu Sans elsewhere) and rasterize on demand with
-/// fontdue. Glyph alpha is blended into the framebuffer. For emphasis we load
+/// ab_glyph. Glyph alpha is blended into the framebuffer. For emphasis we load
 /// the family's *real* bold, italic, and bold-italic faces alongside the regular
 /// one — bold text is the system's bold face, not the regular face smeared a
 /// pixel wider. The bold/italic faces are optional: a family the host ships
 /// without them simply falls back to the regular face (see `resolve_style`).
 ///
-/// A face found on the host is parsed the first time something is drawn or
-/// measured in it, not when the font is loaded. fontdue turns every glyph of a
-/// face into outline geometry up front, so a parsed face takes many times its
-/// file's size — some 8 MB for each of the four Noto Sans faces — and most apps
-/// never draw a word of serif or monospace, or of bold italic.
+/// A face costs the size of its font file and no more: a glyph's outline is
+/// read out of the file when the glyph is first measured or drawn, and only
+/// the caches below keep anything of it. A face found on the host isn't even
+/// read until then, since most apps never draw a word of serif or monospace,
+/// or of bold italic.
 ///
 /// Rasterizing an outline into a coverage bitmap is expensive, and a
 /// retained-mode window repaints the *entire* visible text on every frame —
@@ -158,8 +160,7 @@ fn resolve_style(present: [bool; STYLE_COUNT], style: FontStyle) -> FontStyle {
 /// instead of growing without limit. The advance cache holds a single `f32`
 /// per entry, so it stays an unbounded plain map.
 pub struct Font {
-    /// Where glyphs come from: font files parsed by fontdue, or the host's own
-    /// text stack.
+    /// Where glyphs come from: font files, or the host's own text stack.
     faces: Faces,
     /// Rasterized glyphs, keyed by `(char, physical-size bits, style)`. The
     /// bitmaps are wrapped in `Rc` so a lookup can hand back a cheap clone and
@@ -200,9 +201,8 @@ struct Glyph {
 
 /// What the blend loop needs to place a rasterized glyph: the bitmap's size,
 /// where it sits relative to the pen and the baseline, and how far the pen moves
-/// afterwards. This is the subset of `fontdue::Metrics` this crate ever reads,
-/// named in its own right so a platform rasterizer can fill it in without
-/// pretending to be fontdue.
+/// afterwards. Both rasterizers — ab_glyph, and a platform's own text stack —
+/// fill this in.
 #[derive(Clone, Copy, Default)]
 pub(crate) struct GlyphMetrics {
     /// Bitmap size in pixels.
@@ -215,18 +215,6 @@ pub(crate) struct GlyphMetrics {
     pub(crate) ymin: i32,
     /// How far the pen advances after drawing.
     pub(crate) advance: f32,
-}
-
-impl From<fontdue::Metrics> for GlyphMetrics {
-    fn from(m: fontdue::Metrics) -> Self {
-        Self {
-            width: m.width,
-            height: m.height,
-            xmin: m.xmin,
-            ymin: m.ymin,
-            advance: m.advance_width,
-        }
-    }
 }
 
 /// A small least-recently-used cache: a plain map plus a monotonic access
@@ -284,7 +272,7 @@ impl<K: Eq + std::hash::Hash + Copy, V: Clone> LruCache<K, V> {
 /// is a glyph, what does it look like — so everything above this enum (the
 /// caches, measurement, the blend loop) is written once.
 enum Faces {
-    /// Faces parsed out of font files by fontdue, indexed by `FontStyle as
+    /// Faces read out of font files, indexed by `FontStyle as
     /// usize`. Slot 0 (`Regular`) always has a face; the bold / italic /
     /// bold-italic slots have one only when the host actually provides that
     /// face. This is the path for fonts an app supplies as bytes, and for every
@@ -324,7 +312,7 @@ impl Faces {
     fn advance(&self, ch: char, size: f32, style: FontStyle) -> f32 {
         match self {
             Faces::Outlines(faces) => match faces[style as usize].get() {
-                Some(face) => face.metrics(ch, size).advance_width,
+                Some(face) => face.advance(ch, size),
                 None => 0.0,
             },
             #[cfg(target_os = "macos")]
@@ -348,10 +336,7 @@ impl Faces {
             Faces::Outlines(faces) => match faces[style as usize].get() {
                 // An outline face has one shape at every size, so the physical
                 // size is all it needs.
-                Some(face) => {
-                    let (metrics, bitmap) = face.rasterize(ch, size * scale);
-                    (metrics.into(), bitmap)
-                }
+                Some(face) => face.rasterize(ch, size * scale),
                 None => (GlyphMetrics::default(), Vec::new()),
             },
             #[cfg(target_os = "macos")]
@@ -371,15 +356,71 @@ impl Faces {
     }
 }
 
-/// One style's slot in an outline font: empty, parsed, or found on the host and
-/// waiting for its first use to be parsed.
+/// One face of a font file, its glyphs read out of the file one at a time as
+/// they are asked for.
+struct OutlineFace {
+    font: ab_glyph::FontVec,
+    /// The face's design units per em: a glyph `px` pixels in size is drawn at
+    /// `px / units_per_em` pixels per unit.
+    units_per_em: f32,
+}
+
+impl OutlineFace {
+    /// Face `index` of a font file (a collection holds more than one).
+    fn parse(data: Vec<u8>, index: u32) -> Option<Self> {
+        let font = ab_glyph::FontVec::try_from_vec_and_index(data, index).ok()?;
+        let units_per_em = font.units_per_em()?;
+        Some(Self { font, units_per_em })
+    }
+
+    /// Advance width of `ch` at `px` pixels per em.
+    fn advance(&self, ch: char, px: f32) -> f32 {
+        px / self.units_per_em * self.font.h_advance_unscaled(self.font.glyph_id(ch))
+    }
+
+    /// Rasterize `ch` at `px` pixels per em, with the pen on a whole pixel.
+    fn rasterize(&self, ch: char, px: f32) -> (GlyphMetrics, Vec<u8>) {
+        let id = self.font.glyph_id(ch);
+        let advance = self.advance(ch, px);
+        // ab_glyph sizes a glyph by the face's height (ascent to descent), not
+        // by its em.
+        let scale = px * self.font.height_unscaled() / self.units_per_em;
+        let Some(outline) = self.font.outline_glyph(id.with_scale(scale)) else {
+            // Nothing to draw, a space say.
+            let metrics = GlyphMetrics {
+                advance,
+                ..GlyphMetrics::default()
+            };
+            return (metrics, Vec::new());
+        };
+        // The pixels the outline touches, y growing downwards from the baseline.
+        let bounds = outline.px_bounds();
+        let (width, height) = (bounds.width() as usize, bounds.height() as usize);
+        let mut bitmap = vec![0; width * height];
+        outline.draw(|x, y, coverage| {
+            // 255.9 so that only full coverage comes out at 255.
+            bitmap[y as usize * width + x as usize] = (coverage * 255.9) as u8;
+        });
+        let metrics = GlyphMetrics {
+            width,
+            height,
+            xmin: bounds.min.x as i32,
+            ymin: -bounds.max.y as i32,
+            advance,
+        };
+        (metrics, bitmap)
+    }
+}
+
+/// One style's slot in an outline font: empty, read, or found on the host and
+/// waiting for its first use to be read.
 struct Face {
-    /// Where the face's bytes live, for a face that has not been parsed yet.
+    /// Where the face's bytes live, for a face that has not been read yet.
     source: Option<(fontdb::Source, u32)>,
-    /// The parsed face, once it is asked for. Set from the start for an empty
-    /// slot (`None`) and for a face built from bytes; `None` after a deferred
-    /// parse that failed.
-    parsed: OnceCell<Option<fontdue::Font>>,
+    /// The face, once it is asked for. Set from the start for an empty slot
+    /// (`None`) and for a face built from bytes; `None` after a deferred read
+    /// that failed.
+    parsed: OnceCell<Option<OutlineFace>>,
 }
 
 impl Face {
@@ -390,7 +431,7 @@ impl Face {
         }
     }
 
-    fn parsed(face: fontdue::Font) -> Self {
+    fn parsed(face: OutlineFace) -> Self {
         Self {
             source: None,
             parsed: OnceCell::from(Some(face)),
@@ -412,34 +453,20 @@ impl Face {
         self.parsed.get().is_none_or(Option::is_some)
     }
 
-    /// The face, parsed on the first call.
-    fn get(&self) -> Option<&fontdue::Font> {
+    /// The face, read on the first call.
+    fn get(&self) -> Option<&OutlineFace> {
         self.parsed
             .get_or_init(|| {
                 let (source, index) = self.source.as_ref()?;
-                parse_source(source, *index)
+                let data = match source {
+                    fontdb::Source::File(path) => std::fs::read(path).ok()?,
+                    fontdb::Source::Binary(data) | fontdb::Source::SharedFile(_, data) => {
+                        (**data).as_ref().to_vec()
+                    }
+                };
+                OutlineFace::parse(data, *index)
             })
             .as_ref()
-    }
-}
-
-/// Parse face `index` of a font file fontdb knows about.
-fn parse_source(source: &fontdb::Source, index: u32) -> Option<fontdue::Font> {
-    let parse = |data: &[u8]| {
-        fontdue::Font::from_bytes(
-            data,
-            fontdue::FontSettings {
-                collection_index: index,
-                ..fontdue::FontSettings::default()
-            },
-        )
-        .ok()
-    };
-    match source {
-        fontdb::Source::File(path) => parse(&std::fs::read(path).ok()?),
-        fontdb::Source::Binary(data) | fontdb::Source::SharedFile(_, data) => {
-            parse((**data).as_ref())
-        }
     }
 }
 
@@ -513,9 +540,7 @@ impl Font {
     /// [`with_italic_bytes`](Self::with_italic_bytes), and
     /// [`with_bold_italic_bytes`](Self::with_bold_italic_bytes).
     pub fn from_sans_bytes(data: Vec<u8>) -> Option<Self> {
-        fontdue::Font::from_bytes(data, fontdue::FontSettings::default())
-            .ok()
-            .map(|face| Self::from_face(Face::parsed(face)))
+        OutlineFace::parse(data, 0).map(|face| Self::from_face(Face::parsed(face)))
     }
 
     /// Attach a bold face from an in-memory TTF/OTF buffer (builder style).
@@ -539,10 +564,8 @@ impl Font {
     }
 
     fn with_style_bytes(mut self, style: FontStyle, data: Vec<u8>) -> Self {
-        if let (Some(faces), Ok(face)) = (
-            self.faces.outlines_mut(),
-            fontdue::Font::from_bytes(data, fontdue::FontSettings::default()),
-        ) {
+        if let (Some(faces), Some(face)) = (self.faces.outlines_mut(), OutlineFace::parse(data, 0))
+        {
             faces[style as usize] = Face::parsed(face);
         }
         self
@@ -570,7 +593,7 @@ impl Font {
     }
 
     /// Cached advance width of a single glyph at `size` pixels in `style`. The
-    /// first call for a `(char, size, style)` triple asks fontdue; the rest are
+    /// first call for a `(char, size, style)` triple asks the face; the rest are
     /// map lookups.
     pub(crate) fn advance(&self, ch: char, size: f32, style: FontStyle) -> f32 {
         let resolved = self.resolved(style);
@@ -693,25 +716,26 @@ impl Font {
     }
 }
 
-/// The face `id` names in `db`, as the face it actually is, to be parsed when
-/// it is first drawn with. `None` when fontdue would refuse it.
+/// The face `id` names in `db`, as the face it actually is, to be read when it
+/// is first drawn with. `None` when it can't be drawn with.
 ///
 /// A font *collection* (`.ttc`) packs several faces into one file, and fontdb
 /// hands back the whole file plus the index of the face inside it — macOS ships
 /// most of its families this way, Helvetica.ttc holding the regular, bold and
-/// oblique faces together. Dropping that index leaves fontdue on face 0, so
-/// every emphasis face of a collection quietly rasterized as its regular one:
-/// bold text that measured wider than it looked.
+/// oblique faces together. Dropping that index would leave us on face 0, so
+/// every emphasis face of a collection would quietly rasterize as its regular
+/// one: bold text that measured wider than it looked.
 ///
 /// fontdb lists a face once it has read the face's names, which takes less of a
-/// font than fontdue needs. So the face gets the same check fontdue starts with
-/// (that is all it can fail on), which reads the file's table directory and a
-/// few small tables — not a glyph. A face that fails it is passed over now, as
-/// though it weren't there, rather than turning up missing at draw time.
+/// font than drawing with it does. So the face is parsed here as it will be when
+/// it is used, which reads the file's table directory and a few small tables —
+/// not a glyph — and a face that fails is passed over now, as though it weren't
+/// there, rather than turning up missing at draw time.
 fn load_face(db: &fontdb::Database, id: fontdb::ID) -> Option<Face> {
     let info = db.face(id)?;
     db.with_face_data(id, |bytes, index| {
-        ttf_parser::Face::parse(bytes, index).is_ok()
+        ab_glyph::FontRef::try_from_slice_and_index(bytes, index)
+            .is_ok_and(|font| font.units_per_em().is_some())
     })?
     .then(|| Face::deferred(info.source.clone(), info.index))
 }
@@ -1135,8 +1159,8 @@ mod tests {
         // A fixed-width face gives `i` and `M` the same advance; the
         // proportional face at index 0 does not.
         assert_eq!(
-            face.metrics('i', 24.0).advance_width,
-            face.metrics('M', 24.0).advance_width,
+            face.advance('i', 24.0),
+            face.advance('M', 24.0),
             "the face loaded is the mono one, not the collection's first face"
         );
     }

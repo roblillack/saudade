@@ -379,7 +379,7 @@ impl RoundedBand {
 /// fractional — 1.0, 1.25, 1.5, 2.25, …) and writes straight into the physical
 /// surface buffer. Rectangle edges are snapped independently so adjacent
 /// rectangles always share an exact physical-pixel boundary. Text is
-/// rasterized once at its final physical size via fontdue — no resampling, no
+/// rasterized once at its final physical size via ab_glyph — no resampling, no
 /// smudge.
 ///
 /// Frames are the exception to independent snapping: a button's outline, bevel

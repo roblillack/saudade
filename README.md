@@ -7,7 +7,7 @@
 A small, retained-mode, cross-platform GUI toolkit for Rust, styled after
 Windows 3.1. It builds fast, self-contained native executables that work
 equally well on Windows, macOS, and UNIX (Wayland and X11). Built on `winit` +
-`softbuffer` with `fontdue` + `fontdb` for text — no GPU, no browser engine, no
+`softbuffer` with `ab_glyph` + `fontdb` for text — no GPU, no browser engine, no
 runtime to ship alongside, no mobile support, or complex developer tooling.
 
 ![Saudade examples on a Canoe desktop: the picker with its confirmation dialog open in front, next to the temperature converter and the timer](docs/screenshot.png)
@@ -2032,7 +2032,7 @@ transformation to physical pixels itself.
   vectors" below), because a stack of 1-logical-pixel lines snapped one
   at a time comes out uneven.
 - Text is rasterized once at `font_size × scale` physical pixels via
-  fontdue. No upscale, no resample, no blur.
+  ab_glyph. No upscale, no resample, no blur.
 
 When the window is resized larger than the design size, **content does
 not stretch** — it stays at its natural logical size. What happens

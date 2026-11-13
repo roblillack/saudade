@@ -61,12 +61,7 @@ winit = { version = "0.30.12", default-features = false, features = ["rwh_06", "
 # `macos_layer` on macOS (softbuffer's `master` can do the latter, but no
 # release carries it yet).
 softbuffer = "0.4"
-fontdue = "0.8"
 fontdb = "0.16"
-# The check fontdue makes of a face before parsing it, run up front so a face
-# can be picked now and parsed on first use (see `load_face` in src/font.rs).
-# Already in the tree through fontdue and fontdb; keep it on their version.
-ttf-parser = "0.20"
 png = "0.17"
 
 # The `include_svg!` proc macro. All of the SVG-parsing weight (usvg, kurbo)
@@ -75,6 +70,7 @@ png = "0.17"
 # saudade binary. Path dep for local builds; the version pin lets the crate
 # still be published to crates.io.
 saudade-macros = { path = "macros", version = "0.2.0" }
+ab_glyph = { version = "0.2", default-features = false, features = ["std"] }
 
 # The settings-portal client (see src/portal.rs) asks for the user id it
 # authenticates to the session bus with. Already in the tree through fontdb.
