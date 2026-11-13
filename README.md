@@ -1279,10 +1279,10 @@ exactly 1.
 
 A minimal multi-line text editor: sunken white field, monospace text,
 vertical cursor, selection, cut/copy/paste against the OS clipboard,
-and a built-in vertical scrollbar pinned to the right edge. Only the
-visible rows are measured and drawn each paint, so large files stay
-cheap. Designed for system-utility editors (Notepad-style); undo and
-word wrap come later.
+undo/redo, and a built-in vertical scrollbar pinned to the right edge.
+Only the visible rows are measured and drawn each paint, so large files
+stay cheap. Designed for system-utility editors (Notepad-style); word
+wrap comes later.
 
 ```rust
 let mut editor = TextEditor::new(Rect::new(4, 24, 512, 312))
@@ -1315,11 +1315,14 @@ Editing operations:
 | Ctrl + C          | copy selection to the OS clipboard         |
 | Ctrl + X          | cut selection to the OS clipboard          |
 | Ctrl + V          | paste at the cursor (replaces selection)   |
+| Ctrl + Z          | undo the last edit                         |
+| Ctrl + Shift + Z  | redo the edit just undone                  |
+| Ctrl + Y          | the same redo (not on macOS)               |
 | left click        | place the cursor                           |
 | drag with left    | extend the selection                       |
 
-On macOS, ⌘ takes Ctrl's place for select all / copy / cut / paste, and
-⌥ Option for moving by word, as in a `TextInput`; `with_scheme` pins the
+On macOS, ⌘ takes Ctrl's place for select all / copy / cut / paste /
+undo / redo, and ⌥ Option for moving by word, as in a `TextInput`; `with_scheme` pins the
 `ModifierScheme` they follow.
 
 Selected text renders with `theme.highlight_bg` (navy) behind it and
@@ -1334,12 +1337,22 @@ editor.cut();
 editor.copy();
 editor.paste();
 editor.select_all();
+editor.undo();
+editor.redo();
 ```
+
+Undo goes back one edit at a time, up to a thousand of them, and puts
+the caret and the selection back where they were. A run of typing is one
+edit, as is a run of Backspaces or of Deletes; moving the caret ends the
+run. Enter, a cut, a paste and typing over a selection are each an edit
+of their own. `can_undo()` and `can_redo()` tell an Edit menu when to
+grey its items. `set_text` starts a new document and forgets the
+history.
 
 `with_read_only(true)` (or `set_read_only`) turns the editor into a box
 of text to read: it still takes the focus, moves its caret, scrolls,
-selects and copies, but typing, Enter, Backspace, Delete, cut and paste
-do nothing. `set_text` keeps working, so the program can show its
+selects and copies, but typing, Enter, Backspace, Delete, cut, paste,
+undo and redo do nothing. `set_text` keeps working, so the program can show its
 output there. Its paper is tinted a touch towards the theme's `face`, so it
 can be told from an editable box beside it, while the text stays as legible
 as ever — unlike `set_enabled(false)`, which greys the text and refuses
@@ -2419,7 +2432,6 @@ Features that fit Saudade's philosophy but haven't been implemented yet:
 - `Grid` container (`Row` is already available alongside `Column`)
 - `RadioButton` (`TextInput`, `Checkbox`, and `List` already exist)
 - Horizontal scrolling in `TextEditor` (the horizontal `ScrollBar` is already implemented; the editor just needs to use it)
-- Undo/redo in `TextEditor`
 - Multi-window support
 - Native menu bars on platforms that provide them
 
