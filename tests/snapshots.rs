@@ -905,6 +905,28 @@ fn text_editor_scrolled_sideways() {
     });
 }
 
+/// The right-click menu over a selection: everything is lit but Undo, which
+/// has nothing to take back.
+#[test]
+fn text_editor_context_menu() {
+    snapshot_at_all_scales("text_editor_context_menu", 240, 200, || {
+        let mut editor = laid_out_editor(Rect::new(8, 8, 224, 184), "the quick brown fox");
+        editor.set_focused(true);
+        editor.select_all();
+        let press = Event::PointerDown {
+            pos: Point::new(60, 16),
+            button: MouseButton::Right,
+            modifiers: Modifiers::default(),
+        };
+        saudade::mock::MockBackend::new(240, 200).dispatch(&mut editor, &press);
+        Box::new(
+            Container::new(240, 200)
+                .with_background(Color::LIGHT_GRAY)
+                .add(editor),
+        )
+    });
+}
+
 // ---------------------------------------------------------------- List
 
 /// A small icon used in list-snapshot tests so we exercise icon rendering

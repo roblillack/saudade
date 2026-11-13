@@ -1333,6 +1333,7 @@ Editing operations:
 | Ctrl + Y          | the same redo (not on macOS)               |
 | left click        | place the cursor                           |
 | drag with left    | extend the selection                       |
+| right click       | open the editing menu                      |
 
 On macOS, ⌘ takes Ctrl's place for select all / copy / cut / paste /
 undo / redo, and ⌥ Option for moving by word, as in a `TextInput`; `with_scheme` pins the
@@ -1358,6 +1359,13 @@ editor.redo();
 `has_selection()` and `is_empty()` are there for the same menu, to grey
 Cut, Copy and Delete with nothing selected and Select All with nothing
 to select.
+
+A right-click opens the menu a Windows edit control has — Undo, Cut,
+Copy, Paste, Delete, Select All — with the items that can't apply greyed
+out. A click on the selection keeps it; a click elsewhere moves the
+caret there first. The menu is a [`ContextMenu`](#contextmenu) the
+editor owns, so nothing has to be wired up; `with_context_menu(false)`
+turns it off for an editor that brings a menu of its own.
 
 Undo goes back one edit at a time, up to a thousand of them, and puts
 the caret and the selection back where they were. A run of typing is one

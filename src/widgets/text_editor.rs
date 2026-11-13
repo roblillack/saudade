@@ -1,4 +1,6 @@
+use std::cell::Cell;
 use std::collections::HashMap;
+use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use crate::accel::ModifierScheme;
@@ -7,7 +9,9 @@ use crate::font::{FontFamily, FontStyle};
 use crate::geometry::{Color, Point, Rect};
 use crate::painter::{Merged, Painter};
 use crate::theme::Theme;
-use crate::widget::Widget;
+use crate::widget::{PopupRequest, Widget};
+use crate::widgets::context_menu::ContextMenu;
+use crate::widgets::menu::MenuItem;
 use crate::widgets::scrollbar::{SCROLLBAR_THICKNESS, ScrollBar};
 
 const PADDING_X: i32 = 4;
@@ -51,6 +55,17 @@ enum EditKind {
     Other,
 }
 
+/// An entry of the editor's right-click menu.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum MenuCommand {
+    Undo,
+    Cut,
+    Copy,
+    Paste,
+    Delete,
+    SelectAll,
+}
+
 /// One step of the undo history: at `at`, `removed` gave way to `inserted`.
 #[derive(Debug)]
 struct Edit {
@@ -65,6 +80,10 @@ struct Edit {
 /// A minimal multi-line text editor — sunken white field, monospace text,
 /// cursor, selection with cut/copy/paste, undo/redo, and a built-in vertical
 /// scrollbar.
+///
+/// A right-click opens the menu a Windows edit control has — Undo, Cut, Copy,
+/// Paste, Delete, Select All — unless
+/// [`with_context_menu(false)`](Self::with_context_menu) turns it off.
 ///
 /// Lines are never wrapped. One wider than the field is clipped at its edge,
 /// and the view scrolls sideways to keep the caret in sight;
@@ -117,6 +136,13 @@ pub struct TextEditor {
     /// Set when the caret may have left the view sideways. Where it stands in
     /// pixels takes the font to know, so the next paint does the scrolling.
     reveal_caret: bool,
+    /// The right-click menu, and whether a right-click opens it.
+    menu: ContextMenu,
+    context_menu: bool,
+    /// What was picked from the menu. Its items can only reach shared state,
+    /// so they leave the command here and the editor runs it once the menu
+    /// has handled the event.
+    menu_pick: Rc<Cell<Option<MenuCommand>>>,
     /// When the current half of the blink cycle started. Reset on every
     /// user action so the caret stays visible (and "on") while the user is
     /// actively typing.
@@ -152,6 +178,9 @@ impl TextEditor {
             widest_line: None,
             measured_font_size: 0.0,
             reveal_caret: false,
+            menu: ContextMenu::new(),
+            context_menu: true,
+            menu_pick: Rc::new(Cell::new(None)),
             blink_since: Instant::now(),
             blink_on: true,
         }
@@ -174,6 +203,20 @@ impl TextEditor {
     pub fn with_scheme(mut self, scheme: ModifierScheme) -> Self {
         self.scheme = scheme;
         self
+    }
+
+    /// Whether a right-click opens the editing menu. On by default; turn it
+    /// off for an editor that brings a context menu of its own.
+    pub fn with_context_menu(mut self, enabled: bool) -> Self {
+        self.set_context_menu(enabled);
+        self
+    }
+
+    pub fn set_context_menu(&mut self, enabled: bool) {
+        self.context_menu = enabled;
+        if !enabled {
+            self.menu.close();
+        }
     }
 
     pub fn with_enabled(mut self, enabled: bool) -> Self {
@@ -375,16 +418,17 @@ impl TextEditor {
         self.selection_range().is_some()
     }
 
-    fn selection_range(&self) -> Option<((usize, usize), (usize, usize))> {
-        let anchor = self.selection_anchor?;
-        if anchor == self.cursor {
+    fn selection_range(&self) -> Option<(Pos, Pos)> {
+        self.selection_range_of(self.caret())
+    }
+
+    /// The text a caret and its anchor select, start first.
+    fn selection_range_of(&self, caret: Caret) -> Option<(Pos, Pos)> {
+        let anchor = caret.anchor?;
+        if anchor == caret.cursor {
             return None;
         }
-        if anchor < self.cursor {
-            Some((anchor, self.cursor))
-        } else {
-            Some((self.cursor, anchor))
-        }
+        Some((anchor.min(caret.cursor), anchor.max(caret.cursor)))
     }
 
     fn selected_text(&self) -> Option<String> {
@@ -516,6 +560,59 @@ impl TextEditor {
         if self.cursor.1 > line_len {
             self.cursor.1 = line_len;
         }
+    }
+
+    // ---------------------------------------------------------------- menu
+
+    /// Open the right-click menu at `pos`. A click on the selection keeps it,
+    /// so it can be cut or copied; a click anywhere else moves the caret
+    /// there first, which is where a paste will go.
+    fn open_menu(&mut self, pos: Point) {
+        let before = self.caret();
+        self.place_cursor_at(pos);
+        match self.selection_range_of(before) {
+            Some((start, end)) if start <= self.cursor && self.cursor <= end => {
+                self.set_caret(before);
+            }
+            _ => {
+                self.selection_anchor = None;
+                self.coalesce = false;
+            }
+        }
+
+        let editable = !self.read_only;
+        let selected = self.has_selection();
+        let item = |label: &str, command: MenuCommand, enabled: bool| {
+            let pick = self.menu_pick.clone();
+            MenuItem::action(label, move |_| pick.set(Some(command))).with_enabled(move || enabled)
+        };
+        let items = vec![
+            item("&Undo", MenuCommand::Undo, self.can_undo()),
+            MenuItem::separator(),
+            item("Cu&t", MenuCommand::Cut, editable && selected),
+            item("&Copy", MenuCommand::Copy, selected),
+            item("&Paste", MenuCommand::Paste, editable),
+            item("&Delete", MenuCommand::Delete, editable && selected),
+            MenuItem::separator(),
+            item("Select &All", MenuCommand::SelectAll, !self.is_empty()),
+        ];
+        self.menu.set_items(items);
+        self.menu.open_at(pos);
+    }
+
+    fn run_menu_command(&mut self, command: MenuCommand) {
+        match command {
+            MenuCommand::Undo => self.undo(),
+            MenuCommand::Cut => self.cut(),
+            MenuCommand::Copy => self.copy(),
+            MenuCommand::Paste => self.paste(),
+            MenuCommand::Delete => self.delete(),
+            MenuCommand::SelectAll => self.select_all(),
+        }
+        if command != MenuCommand::SelectAll {
+            self.ensure_cursor_visible();
+        }
+        self.reset_blink();
     }
 
     // ---------------------------------------------------------------- history
@@ -1003,11 +1100,31 @@ impl Widget for TextEditor {
         if self.show_h_scrollbar {
             self.h_scrollbar.paint(painter, theme);
         }
+        // Nothing lands on the field here — this is where an open right-click
+        // menu measures itself for the popup window it draws into.
+        self.menu.paint(painter, theme);
+    }
+
+    fn paint_overlay(&mut self, painter: &mut Painter, theme: &Theme) {
+        self.menu.paint_overlay(painter, theme);
     }
 
     fn event(&mut self, event: &Event, ctx: &mut EventCtx) {
         if !self.enabled {
             return;
+        }
+        // The open right-click menu owns the pointer and the keyboard.
+        if self.menu.is_open() {
+            self.menu.event(event, ctx);
+            if let Some(command) = self.menu_pick.take() {
+                self.run_menu_command(command);
+                ctx.request_paint();
+            }
+            // Only a right-press outside the menu gets past it, and it is
+            // meant to: it opens a fresh menu wherever it landed.
+            if ctx.is_consumed() || self.menu.is_open() {
+                return;
+            }
         }
         // Once a scrollbar is dragging it gets every event until release.
         for bar in [&mut self.v_scrollbar, &mut self.h_scrollbar] {
@@ -1070,6 +1187,16 @@ impl Widget for TextEditor {
                         self.select_all();
                     }
                 }
+                self.reset_blink();
+                ctx.request_paint();
+            }
+            Event::PointerDown {
+                pos,
+                button: MouseButton::Right,
+                ..
+            } if self.context_menu && self.text_area().contains(*pos) => {
+                ctx.request_focus();
+                self.open_menu(*pos);
                 self.reset_blink();
                 ctx.request_paint();
             }
@@ -1254,9 +1381,15 @@ impl Widget for TextEditor {
     }
 
     fn captures_pointer(&self) -> bool {
+        // The open menu keeps the pointer too, so it behaves modally.
         self.drag_active
+            || self.menu.is_open()
             || self.v_scrollbar.captures_pointer()
             || self.h_scrollbar.captures_pointer()
+    }
+
+    fn collect_popups(&self, out: &mut Vec<PopupRequest>) {
+        self.menu.collect_popups(out);
     }
 
     fn focusable(&self) -> bool {
@@ -1979,6 +2112,119 @@ mod tests {
 
         editor.set_text("\n");
         assert!(!editor.is_empty(), "a line break is text too");
+    }
+
+    fn right_click(editor: &mut TextEditor, x: i32, y: i32) -> EventCtx {
+        let mut ctx = EventCtx::new();
+        editor.event(
+            &Event::PointerDown {
+                pos: Point::new(x, y),
+                button: MouseButton::Right,
+                modifiers: Modifiers::default(),
+            },
+            &mut ctx,
+        );
+        ctx
+    }
+
+    /// Pick from the open menu by an item's underlined letter.
+    fn pick(editor: &mut TextEditor, mnemonic: char) {
+        chord(editor, Key::Char(mnemonic), Modifiers::default());
+    }
+
+    #[test]
+    fn right_click_opens_the_editing_menu() {
+        let mut editor = TextEditor::new(Rect::new(0, 0, 200, 120)).with_text("one two");
+        editor.layout(Rect::new(0, 0, 200, 120));
+        assert!(!editor.captures_pointer());
+
+        let ctx = right_click(&mut editor, 50, 8);
+        assert!(ctx.is_focus_requested(), "the click focuses the editor");
+        assert!(editor.menu.is_open());
+        assert!(editor.captures_pointer(), "the menu keeps the pointer");
+        let mut popups = Vec::new();
+        editor.collect_popups(&mut popups);
+        assert!(popups.is_empty(), "no popup before the menu is measured");
+
+        // While it is up the menu owns the keyboard: nothing is typed.
+        type_text(&mut editor, "x");
+        assert_eq!(editor.text(), "one two");
+
+        pick(&mut editor, 'a');
+        assert!(!editor.menu.is_open());
+        assert_eq!(editor.selected_text().as_deref(), Some("one two"));
+
+        right_click(&mut editor, 50, 8);
+        press(&mut editor, NamedKey::Escape, false);
+        assert!(!editor.menu.is_open() && !editor.captures_pointer());
+    }
+
+    #[test]
+    fn menu_edits_and_undoes() {
+        let mut editor = mac("one two");
+        editor.select_all();
+        // Nothing was painted, so the click maps to the start of the text —
+        // which lies in the selection, and a click on the selection keeps it.
+        right_click(&mut editor, 50, 8);
+        assert!(editor.has_selection());
+        pick(&mut editor, 'd');
+        assert_eq!(editor.text(), "");
+
+        right_click(&mut editor, 50, 8);
+        pick(&mut editor, 'u');
+        assert_eq!(editor.text(), "one two");
+    }
+
+    #[test]
+    fn right_click_outside_the_selection_moves_the_caret() {
+        let Some(backend) = backend() else { return };
+        let mut editor = focused("one two\nthree");
+        press(&mut editor, NamedKey::Right, true);
+        press(&mut editor, NamedKey::Right, true);
+        backend.render(&mut editor);
+        let column = editor.cumulative_widths[&0][1];
+
+        // On the selected "on": it stays selected.
+        right_click(&mut editor, PADDING_X + column, PADDING_Y + 2);
+        assert_eq!(editor.selected_text().as_deref(), Some("on"));
+        press(&mut editor, NamedKey::Escape, false);
+
+        // On the second line: the selection goes and the caret lands there.
+        right_click(
+            &mut editor,
+            PADDING_X + 3 * column,
+            PADDING_Y + LINE_HEIGHT + 2,
+        );
+        assert!(!editor.has_selection());
+        assert_eq!(editor.cursor, (1, 3));
+
+        // Once painted the menu asks for its popup window.
+        backend.render(&mut editor);
+        let mut popups = Vec::new();
+        editor.collect_popups(&mut popups);
+        assert_eq!(popups.len(), 1);
+    }
+
+    #[test]
+    fn menu_of_a_read_only_editor_only_copies_and_selects() {
+        let mut editor = mac("one two").with_read_only(true);
+        editor.select_all();
+        for mnemonic in ['u', 't', 'p', 'd'] {
+            right_click(&mut editor, 50, 8);
+            pick(&mut editor, mnemonic);
+            assert!(editor.menu.is_open(), "a greyed item is not picked");
+            press(&mut editor, NamedKey::Escape, false);
+        }
+        assert_eq!(editor.text(), "one two");
+    }
+
+    #[test]
+    fn context_menu_can_be_turned_off() {
+        let mut editor = mac("one two").with_context_menu(false);
+        let ctx = right_click(&mut editor, 50, 8);
+        assert!(!editor.menu.is_open() && !ctx.is_focus_requested());
+        type_text(&mut editor, "x");
+        assert_eq!(editor.text(), "xone two");
     }
 
     #[test]

@@ -12,6 +12,10 @@ While pre-1.0, the minor version is bumped for breaking changes.
 
 ### Added
 
+- `TextEditor` opens an editing menu on a right-click, as a Windows edit
+  control does: Undo, Cut, Copy, Paste, Delete and Select All, greyed where
+  they don't apply. `TextEditor::with_context_menu(false)` (or
+  `set_context_menu`) turns it off. (#103)
 - Horizontal scrolling in `TextEditor`. The view now follows the caret
   sideways along a line wider than the field, and a trackpad's horizontal
   scroll moves it. `TextEditor::with_horizontal_scrollbar(true)` (or
