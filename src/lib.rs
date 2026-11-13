@@ -41,6 +41,7 @@ pub mod chrome;
 mod coretext;
 mod event;
 mod font;
+mod font_scan;
 mod geometry;
 mod icon;
 #[cfg(target_os = "macos")]

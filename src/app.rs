@@ -464,14 +464,15 @@ const TICK_INTERVAL: Duration = Duration::from_millis(16);
 impl AppHandler {
     fn new(app: App) -> Self {
         let design_size = app.window.size;
+        let [font, serif_font, mono_font] = Font::load_system();
         Self {
             window_config: app.window,
             design_size,
             themes: Themes::new(app.theme, app.dark_theme),
             root: app.root,
-            font: Font::load_sans(),
-            serif_font: Font::load_serif(),
-            mono_font: Font::load_monospace(),
+            font,
+            serif_font,
+            mono_font,
             main_win: None,
             main_id: None,
             context: None,

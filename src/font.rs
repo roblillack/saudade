@@ -491,20 +491,41 @@ impl Font {
         }
     }
 
+    /// The system's sans-serif, serif and monospace fonts, as
+    /// [`load_sans`](Self::load_sans), [`load_serif`](Self::load_serif) and
+    /// [`load_monospace`](Self::load_monospace) find them, looking through the
+    /// installed fonts once for all three.
+    pub(crate) fn load_system() -> [Option<Self>; 3] {
+        let fonts = SystemFonts::default();
+        [
+            Self::sans_from(&fonts),
+            Self::serif_from(&fonts),
+            Self::monospace_from(&fonts),
+        ]
+    }
+
     /// Try to load a system sans-serif font, with its bold / italic / bold-italic
     /// faces. Returns `None` if no candidate family could be loaded — text
     /// drawing then becomes a no-op.
     pub fn load_sans() -> Option<Self> {
+        Self::sans_from(&SystemFonts::default())
+    }
+
+    fn sans_from(fonts: &SystemFonts) -> Option<Self> {
         #[cfg(target_os = "macos")]
         if let Some(family) = crate::coretext::Family::system() {
             return Some(Self::from_faces(Faces::Native(family)));
         }
-        load_family_chain(SANS_FAMILIES, false)
+        load_family_chain(fonts, SANS_FAMILIES, false)
     }
 
     /// Try to load a system serif font, with its bold / italic / bold-italic
     /// faces. Returns `None` if no candidate family could be loaded.
     pub fn load_serif() -> Option<Self> {
+        Self::serif_from(&SystemFonts::default())
+    }
+
+    fn serif_from(fonts: &SystemFonts) -> Option<Self> {
         // There is no interface *serif* to ask for by role, so the named chain
         // does the choosing either way — Core Text just draws it better, and can
         // instantiate a variable family's weights (New York) where a font
@@ -515,20 +536,24 @@ impl Font {
         }) {
             return Some(font);
         }
-        load_family_chain(SERIF_FAMILIES, false)
+        load_family_chain(fonts, SERIF_FAMILIES, false)
     }
 
     /// Try to load a fixed-width font (with its styled faces) for plain-text
     /// editors / code displays. Returns `None` if no candidate family could be
     /// loaded.
     pub fn load_monospace() -> Option<Self> {
+        Self::monospace_from(&SystemFonts::default())
+    }
+
+    fn monospace_from(fonts: &SystemFonts) -> Option<Self> {
         // The user's own fixed-pitch preference, which is what a Mac's own text
         // views are set in.
         #[cfg(target_os = "macos")]
         if let Some(family) = crate::coretext::Family::fixed_pitch() {
             return Some(Self::from_faces(Faces::Native(family)));
         }
-        load_family_chain(MONO_FAMILIES, true)
+        load_family_chain(fonts, MONO_FAMILIES, true)
     }
 
     /// Load a font family from an in-memory TTF/OTF byte buffer, used as its
@@ -952,6 +977,18 @@ const MONO_FAMILIES: &[&str] = &[
     "Courier New",
 ];
 
+/// The fonts installed on the host, looked through the first time a family is
+/// to be found among them and then kept for as many more as are looked up
+/// together.
+#[derive(Default)]
+struct SystemFonts(OnceCell<fontdb::Database>);
+
+impl SystemFonts {
+    fn db(&self) -> &fontdb::Database {
+        self.0.get_or_init(crate::font_scan::system_fonts)
+    }
+}
+
 /// Choose which of `families` to dress the UI in, `load` resolving a family
 /// name to whatever faces the host has for it.
 ///
@@ -983,25 +1020,20 @@ fn pick_family(families: &[&str], load: impl Fn(&str) -> Option<Font>) -> Option
 /// don't accidentally drop into a proportional font when none of the well-known
 /// mono families are installed. The fallback faces are regular-only (no styled
 /// variants); a named family is the path that carries bold/italic.
-fn load_family_chain(families: &[&str], monospace_fallback: bool) -> Option<Font> {
-    let mut db = fontdb::Database::new();
-    db.load_system_fonts();
-    // fontdb's fontconfig loader hardcodes /etc/fonts/fonts.conf, but the
-    // FreeBSD port installs fontconfig at /usr/local/etc/fonts/fonts.conf —
-    // so on a stock FreeBSD desktop load_system_fonts ends up with zero
-    // faces. Fall back to the conventional ports font directory.
-    if db.faces().next().is_none() {
-        db.load_fonts_dir("/usr/local/share/fonts");
-    }
-
-    if let Some(font) = pick_family(families, |family| load_styled_family(&db, family)) {
+fn load_family_chain(
+    fonts: &SystemFonts,
+    families: &[&str],
+    monospace_fallback: bool,
+) -> Option<Font> {
+    let db = fonts.db();
+    if let Some(font) = pick_family(families, |family| load_styled_family(db, family)) {
         return Some(font);
     }
 
     if monospace_fallback {
         for face in db.faces() {
             if face.monospaced
-                && let Some(font) = load_face(&db, face.id)
+                && let Some(font) = load_face(db, face.id)
             {
                 return Some(Font::from_face(font));
             }
@@ -1010,7 +1042,7 @@ fn load_family_chain(families: &[&str], monospace_fallback: bool) -> Option<Font
 
     // Last-ditch: any face we can find. Better something than nothing.
     for face in db.faces() {
-        if let Some(font) = load_face(&db, face.id) {
+        if let Some(font) = load_face(db, face.id) {
             return Some(Font::from_face(font));
         }
     }

@@ -1530,6 +1530,7 @@ dependencies = [
  "ab_glyph",
  "arboard",
  "block2 0.6.2",
+ "fontconfig-parser",
  "fontdb 0.16.2",
  "libc",
  "objc2 0.6.3",

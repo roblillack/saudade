@@ -93,6 +93,10 @@ x11rb = { version = "0.13", features = ["randr"] }
 # The drop target's way onto winit's own Xlib connection, for the XDND messages
 # of a source that ignores its proxy. Already in the tree through winit too.
 x11-dl = "2.21"
+# The font directories fontconfig is set up with, read as fontdb reads them, for
+# the index of installed fonts (see `src/font_scan.rs`). Already in the tree
+# through fontdb.
+fontconfig-parser = "0.5"
 
 # macOS/Windows: arboard with its native (Cocoa / Win32) clipboard backend.
 # default-features = false drops the unused `image-data` feature (and the heavy
