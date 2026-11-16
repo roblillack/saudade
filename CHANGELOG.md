@@ -12,28 +12,12 @@ While pre-1.0, the minor version is bumped for breaking changes.
 
 ### Added
 
-- `EventCtx::modifiers()`: the modifier keys held as any event is dispatched,
-  pointer moves included, so a widget can show while a drag hovers whether a
-  drop would copy, move or link. `MockBackend::set_modifiers` sets them for
-  tests.
-- The runtime dispatches a `PointerMove` at the pointer's last position, though
-  the mouse hasn't moved, when the modifiers change and after each key while a
-  mouse button is held. The cursor a widget asks for there is shown at once: a
-  drag's cursor turns to copy as Ctrl goes down, and back to the arrow when
-  Escape calls the drag off.
-- `DropAction`, and with it `EventCtx::start_drag_offering`, for a drag whose
-  drop may move the files, or do something of the target's own, as well as
-  copy them; and `EventCtx::accept_drop_as`, for a drop target to say which of
-  those a drop would do. On Wayland the two applications agree on it, and the
-  compositor shows it in the drag's cursor. A drop left on "ask" is settled as
-  a copy once the widget has it.
-- `EventCtx::is_dragging_out()`: whether a drag the window started is still
-  going, so a widget can tell its own drag, come back over the window, from
-  another application's. `MockBackend::set_dragging_out` sets it for tests, and
-  `DispatchOutcome::accepted_drop` reports what a widget accepted.
-- Wayland: the runtime dispatches a `DragMove` where an incoming drag is when
-  the modifiers change, so a drop target can show at once what a held key
-  does to the drop.
+- Drag feedback: `EventCtx::modifiers()` reports the held modifier keys, and
+  the runtime re-hovers when they change, so a drag's cursor follows them.
+  `EventCtx::start_drag_offering` and `EventCtx::accept_drop_as` let a drag
+  offer, and a drop target pick, copy, move or ask (negotiated with the
+  compositor on Wayland); `EventCtx::is_dragging_out()` tells a widget's own
+  drag from another application's. (#98)
 
 ### Changed
 
