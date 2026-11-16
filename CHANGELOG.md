@@ -10,6 +10,15 @@ While pre-1.0, the minor version is bumped for breaking changes.
 
 ## [Unreleased] - ReleaseDate
 
+### Added
+
+- Drag feedback: `EventCtx::modifiers()` reports the held modifier keys, and
+  the runtime re-hovers when they change, so a drag's cursor follows them.
+  `EventCtx::start_drag_offering` and `EventCtx::accept_drop_as` let a drag
+  offer, and a drop target pick, copy, move or ask (negotiated with the
+  compositor on Wayland); `EventCtx::is_dragging_out()` tells a widget's own
+  drag from another application's. (#98)
+
 ### Changed
 
 - Text is rasterized with ab_glyph in place of fontdue, and a system font's

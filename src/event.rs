@@ -180,6 +180,22 @@ pub struct DraggedFile {
     pub contents: Vec<u8>,
 }
 
+/// What a drop does with what a drag carries, as the drag's source and the
+/// spot under the pointer agree on it while the drag moves: see
+/// [`EventCtx::start_drag_offering`] and [`EventCtx::accept_drop_as`]. Only
+/// Wayland passes the choice between the two applications, and the
+/// compositor's drag cursor shows it there; elsewhere every drop is a copy.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum DropAction {
+    /// The target copies what the drag carries.
+    Copy,
+    /// The target moves it: a file manager moves the files themselves.
+    Move,
+    /// The target asks, or does something of its own — the action for a drop
+    /// that is neither a copy nor a move, a link, say.
+    Ask,
+}
+
 impl DragData {
     /// A payload carrying the given file paths.
     pub fn from_paths(paths: impl IntoIterator<Item = PathBuf>) -> Self {
@@ -426,16 +442,22 @@ pub struct EventCtx {
     /// factor, which only the OS sets).
     pub(crate) resize_request: Option<Size>,
     /// Set when a widget calls [`Self::start_drag`] to begin dragging content
-    /// out of the window. Consumed by the backend after dispatch, which turns
-    /// it into a real OS drag. Only the Wayland backend acts on it (see the
-    /// method docs); the winit backends drop it.
-    pub(crate) drag_request: Option<DragData>,
-    /// Set when a widget calls [`Self::accept_drop`] while handling an incoming
+    /// out of the window, along with the drop actions the drag offers.
+    /// Consumed by the backend after dispatch, which turns it into a real OS
+    /// drag. Only the Wayland backend acts on it (see the method docs); the
+    /// winit backends drop it.
+    pub(crate) drag_request: Option<(DragData, Vec<DropAction>)>,
+    /// Set when a widget calls [`Self::accept_drop`] or
+    /// [`Self::accept_drop_as`] while handling an incoming
     /// [`Event::DragEnter`] / [`Event::DragMove`] to say it will take a drop at
-    /// this position. The Wayland backend, and saudade's own drop targets on
-    /// Windows and X11, read it after dispatch to accept or reject the drag, so
-    /// the source app learns whether this is a valid drop target.
-    pub(crate) accepts_drop: bool,
+    /// this position, and what the drop would do. The Wayland backend, and
+    /// saudade's own drop targets on Windows and X11, read it after dispatch to
+    /// accept or reject the drag, so the source app learns whether this is a
+    /// valid drop target.
+    pub(crate) accepted_drop: Option<DropAction>,
+    /// Whether a drag this window started is still going, filled in by the
+    /// runtime — see [`Self::is_dragging_out`].
+    pub(crate) dragging_out: bool,
     /// Set by a widget that has fully handled a key press and wants the runtime
     /// to drop the rest of it — see [`Self::swallow_key_until_release`].
     pub(crate) swallow_key: bool,
@@ -461,6 +483,9 @@ pub struct EventCtx {
     /// [`Self::toggle_fullscreen`]): the state the window should be in once the
     /// dispatch is over. Applied by the runtime alongside the other requests.
     pub(crate) fullscreen_request: Option<bool>,
+    /// The modifier keys held when this dispatch began, filled in by the
+    /// runtime — see [`Self::modifiers`].
+    pub(crate) modifiers: Modifiers,
 }
 
 impl EventCtx {
@@ -474,13 +499,15 @@ impl EventCtx {
             dismiss_requested: false,
             resize_request: None,
             drag_request: None,
-            accepts_drop: false,
+            accepted_drop: None,
+            dragging_out: false,
             swallow_key: false,
             tick_requested: false,
             focus_next_requested: false,
             cursor_request: None,
             fullscreen: false,
             fullscreen_request: None,
+            modifiers: Modifiers::default(),
         }
     }
 
@@ -676,6 +703,17 @@ impl EventCtx {
         self.fullscreen_request.unwrap_or(self.fullscreen)
     }
 
+    /// The modifier keys held as this event is dispatched, whatever the event.
+    /// The key and button events carry their own; this is for the rest — above
+    /// all [`Event::PointerMove`], so a drag can show whether a drop would copy
+    /// or move. When the modifiers change, the runtime dispatches a
+    /// `PointerMove` at the pointer's position again (see
+    /// [`Self::set_cursor`]), so such feedback follows them without the mouse
+    /// moving.
+    pub fn modifiers(&self) -> Modifiers {
+        self.modifiers
+    }
+
     /// Begin dragging `data` out of this window as an OS drag-and-drop
     /// operation — the mirror of receiving a [`Event::Drop`]. Call this from a
     /// widget's `event` handler once a press-then-move gesture is recognized
@@ -687,9 +725,35 @@ impl EventCtx {
     /// to *initiate* a drag, so this is a no-op there; only the Wayland backend
     /// turns it into a real drag whose `text/uri-list` payload other
     /// applications can drop. Receiving drops, by contrast, works on every
-    /// backend. The drag copies (never moves) the referenced files.
+    /// backend. The drag copies (never moves) the referenced files; see
+    /// [`Self::start_drag_offering`] for a drag that may move them.
     pub fn start_drag(&mut self, data: DragData) {
-        self.drag_request = Some(data);
+        self.start_drag_offering(data, &[DropAction::Copy]);
+    }
+
+    /// Like [`Self::start_drag`], for a drag whose drop may do any of
+    /// `actions`, the spot under the pointer choosing among them. A drag that
+    /// offers [`DropAction::Move`] lets another file manager move the files
+    /// rather than copy them, as one would for a drag from its own window.
+    /// Copy is always offered, `actions` or not.
+    ///
+    /// The drag carries on over this window as well, as
+    /// [`Event::DragEnter`] / [`Event::DragMove`] / [`Event::Drop`]: a widget
+    /// starts the drag the moment a press has moved far enough and takes it
+    /// back, if it is let go here, the way it would a drag from another
+    /// application. [`Self::is_dragging_out`] tells the two apart.
+    pub fn start_drag_offering(&mut self, data: DragData, actions: &[DropAction]) {
+        let mut offered = vec![DropAction::Copy];
+        offered.extend(actions.iter().filter(|a| **a != DropAction::Copy));
+        self.drag_request = Some((data, offered));
+    }
+
+    /// Whether a drag this window started with [`Self::start_drag`] is still
+    /// going. While handling [`Event::DragEnter`] / [`Event::DragMove`], it
+    /// tells a drag of the window's own coming back over it from one coming
+    /// from another application. Always `false` where drags can't be started.
+    pub fn is_dragging_out(&self) -> bool {
+        self.dragging_out
     }
 
     /// Signal, while handling an incoming [`Event::DragEnter`] or
@@ -708,7 +772,16 @@ impl EventCtx {
     /// the drop, so this is advisory there — [`Event::Drop`] arrives regardless
     /// — but calling it keeps drop targets portable.
     pub fn accept_drop(&mut self) {
-        self.accepts_drop = true;
+        self.accept_drop_as(DropAction::Copy);
+    }
+
+    /// Like [`Self::accept_drop`], saying what the drop would do here. On
+    /// Wayland the drag's source learns it — the compositor shows it in the
+    /// drag's cursor — as long as the drag offers that action (see
+    /// [`Self::start_drag_offering`]); a drag that doesn't is copied instead.
+    /// Elsewhere this is [`Self::accept_drop`].
+    pub fn accept_drop_as(&mut self, action: DropAction) {
+        self.accepted_drop = Some(action);
     }
 
     /// Ask the runtime to show `cursor` as the mouse-pointer shape while it
@@ -723,6 +796,12 @@ impl EventCtx {
     /// there's nothing to "unset" on the way out: moving onto another widget,
     /// or off this one, re-runs the reconciliation. Because only moves drive
     /// it, a request made while handling a press, key, or tick is ignored.
+    ///
+    /// The runtime also dispatches a `PointerMove` at the pointer's last
+    /// position, without the mouse moving, when the [modifiers](Self::modifiers)
+    /// change and after each key event while a mouse button is held. A shape
+    /// that depends on them — the copy cursor of a drag with Ctrl held, or the
+    /// arrow again once Escape has called the drag off — so follows them.
     ///
     /// The text fields request [`Cursor::Text`] this way; a widget that never
     /// calls this — a button, say — keeps the normal arrow.

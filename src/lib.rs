@@ -84,7 +84,8 @@ pub use app::{App, WindowConfig};
 pub use background::{BackgroundPattern, PATTERN_COLORS};
 pub use chrome::{WindowChrome, WindowFrame};
 pub use event::{
-    Cursor, DragData, DraggedFile, Event, EventCtx, Key, Modifiers, MouseButton, NamedKey,
+    Cursor, DragData, DraggedFile, DropAction, Event, EventCtx, Key, Modifiers, MouseButton,
+    NamedKey,
 };
 pub use font::{Font, FontFamily, FontSet, FontStyle};
 pub use geometry::{Color, Point, Rect, Size};

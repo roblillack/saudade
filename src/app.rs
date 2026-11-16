@@ -871,16 +871,7 @@ impl AppHandler {
                 self.drag_dropped.push(path);
             }
             WindowEvent::ModifiersChanged(new_mods) => {
-                let s = new_mods.state();
-                self.modifiers = Modifiers {
-                    shift: s.shift_key(),
-                    control: s.control_key(),
-                    alt: s.alt_key(),
-                    // Right Alt / Option = AltGr: reserved for composing
-                    // characters, so it must not trigger menu mnemonics.
-                    alt_graph: new_mods.ralt_state() == ModifiersKeyState::Pressed,
-                    logo: s.super_key(),
-                };
+                self.modifiers_changed(&new_mods, event_loop);
             }
             WindowEvent::KeyboardInput {
                 event: key,
@@ -1045,16 +1036,7 @@ impl AppHandler {
                 self.mark_popups_dirty();
             }
             WindowEvent::ModifiersChanged(new_mods) => {
-                let s = new_mods.state();
-                self.modifiers = Modifiers {
-                    shift: s.shift_key(),
-                    control: s.control_key(),
-                    alt: s.alt_key(),
-                    // Right Alt / Option = AltGr: reserved for composing
-                    // characters, so it must not trigger menu mnemonics.
-                    alt_graph: new_mods.ralt_state() == ModifiersKeyState::Pressed,
-                    logo: s.super_key(),
-                };
+                self.modifiers_changed(&new_mods, event_loop);
             }
             WindowEvent::KeyboardInput {
                 event: key,
@@ -1160,6 +1142,7 @@ impl AppHandler {
 
     fn dispatch(&mut self, event: &Event, event_loop: &ActiveEventLoop) -> EventCtx {
         let mut ctx = EventCtx::with_fullscreen(self.is_fullscreen());
+        ctx.modifiers = self.modifiers;
         self.root.event(event, &mut ctx);
         if ctx.paint_requested {
             self.needs_redraw = true;
@@ -1193,7 +1176,7 @@ impl AppHandler {
         // `Drop` is delivered regardless. saudade's own drop targets on Windows
         // and X11 are the exception: `flush_os_drags` reads the flag off the
         // returned context.
-        let _ = ctx.accepts_drop;
+        let _ = ctx.accepted_drop;
         ctx
     }
 
@@ -1214,11 +1197,11 @@ impl AppHandler {
             match drag {
                 Drag::Enter(p) => {
                     let ctx = self.dispatch(&Event::DragEnter { pos: at(p) }, event_loop);
-                    drags.set_accepted(Some(ctx.accepts_drop));
+                    drags.set_accepted(Some(ctx.accepted_drop.is_some()));
                 }
                 Drag::Move(p) => {
                     let ctx = self.dispatch(&Event::DragMove { pos: at(p) }, event_loop);
-                    drags.set_accepted(Some(ctx.accepts_drop));
+                    drags.set_accepted(Some(ctx.accepted_drop.is_some()));
                 }
                 Drag::Leave => {
                     drags.set_accepted(None);
@@ -1378,9 +1361,76 @@ impl AppHandler {
         event_loop.set_control_flow(ControlFlow::WaitUntil(next));
     }
 
+    /// Take up the modifier keys winit reports as held now. A change is then
+    /// shown under the pointer — see [`Self::rehover`].
+    fn modifiers_changed(
+        &mut self,
+        new_mods: &winit::event::Modifiers,
+        event_loop: &ActiveEventLoop,
+    ) {
+        let s = new_mods.state();
+        let modifiers = Modifiers {
+            shift: s.shift_key(),
+            control: s.control_key(),
+            alt: s.alt_key(),
+            // Right Alt / Option = AltGr: reserved for composing
+            // characters, so it must not trigger menu mnemonics.
+            alt_graph: new_mods.ralt_state() == ModifiersKeyState::Pressed,
+            logo: s.super_key(),
+        };
+        if modifiers != self.modifiers {
+            self.modifiers = modifiers;
+            self.rehover(event_loop);
+        }
+    }
+
+    /// Dispatch a `PointerMove` where the pointer last was, though it hasn't
+    /// moved, and show the cursor the widgets ask for there. Hover feedback
+    /// that depends on more than the position — the modifiers, or a drag a
+    /// key has just called off — so keeps up with it. The pointer is over the
+    /// main window or over one of the popups, or over neither, when there's
+    /// nothing to do.
+    fn rehover(&mut self, event_loop: &ActiveEventLoop) {
+        if let Some(pos) = self.cursor {
+            let ctx = self.dispatch(&Event::PointerMove { pos }, event_loop);
+            if let Some(win) = self.main_win.clone() {
+                reconcile_cursor(&win, &mut self.cursor_icon, ctx.cursor_request);
+            }
+        } else if let Some((idx, pos)) = self
+            .popups
+            .iter()
+            .enumerate()
+            .find_map(|(i, p)| Some((i, p.cursor?)))
+        {
+            let ctx = self.dispatch(&Event::PointerMove { pos }, event_loop);
+            if let Some(p) = self.popups.get_mut(idx) {
+                let win = p.win.clone();
+                reconcile_cursor(&win, &mut p.cursor_icon, ctx.cursor_request);
+            }
+        } else {
+            return;
+        }
+        self.mark_popups_dirty();
+    }
+
     /// Hand a key to the widget tree. `from` is the window it arrived at: its
-    /// index in the popup stack, or `None` for the main window.
+    /// index in the popup stack, or `None` for the main window. While a mouse
+    /// button is held the pointer's hover is run again after it, so a drag
+    /// shows at once what a key did to it (Escape calling it off, say).
     fn dispatch_key(
+        &mut self,
+        key: &winit::event::KeyEvent,
+        from: Option<usize>,
+        is_synthetic: bool,
+        event_loop: &ActiveEventLoop,
+    ) {
+        self.route_key(key, from, is_synthetic, event_loop);
+        if self.buttons.any_held() {
+            self.rehover(event_loop);
+        }
+    }
+
+    fn route_key(
         &mut self,
         key: &winit::event::KeyEvent,
         from: Option<usize>,
