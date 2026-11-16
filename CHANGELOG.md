@@ -12,23 +12,10 @@ While pre-1.0, the minor version is bumped for breaking changes.
 
 ### Changed
 
-- Text is rasterized with ab_glyph in place of fontdue, which turned every
-  glyph of a face into outlines as it loaded it: the twelve faces of the sans,
-  serif and monospace families took some 90 MB of heap on a typical Linux
-  desktop. A glyph's outline is now read from the font file when the glyph is
-  first drawn, so a face costs about the size of its file (half a megabyte for
-  Noto Sans), and a system font's faces aren't read until text is first drawn
-  or measured in them, so the serif and monospace families an app never draws
-  in cost nothing. Curved edges come out a little differently antialiased,
-  since ab_glyph follows a curve at the size it draws it.
-- The installed fonts are found by way of an index in the user's cache
-  directory (`~/.cache/saudade` and its equivalents), one entry per font
-  directory, trusted for as long as the directory's modification time stays
-  the same. An app's start no longer reads every font file on the system three
-  times over, once each for the sans, serif and monospace families: on a Linux
-  desktop with 2,700 font files that took 190 ms, and now takes 7 ms, or 20 ms
-  when the index has to be made or a directory changed, its files read on all
-  CPUs. The fonts found are the same, face for face, as before.
+- Text is rasterized with ab_glyph in place of fontdue, and a system font's
+  faces are parsed on first use, cutting font memory from some 90 MB to about
+  the size of the font files. Installed fonts are found through an index in the
+  user's cache directory, so start-up no longer rescans every font file. (#97)
 
 ## [0.8.2] - 2026-11-08
 
