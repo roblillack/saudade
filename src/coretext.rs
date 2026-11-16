@@ -5,7 +5,7 @@
 //! That is exactly the shape Core Text draws in too, so this module is a second
 //! source for the same three questions [`Font`](crate::Font) asks — which styles
 //! exist, how wide is this glyph, what does it look like — with Core Text
-//! answering instead of fontdue.
+//! answering instead of ab_glyph.
 //!
 //! It exists because the portable path cannot answer the first question for a
 //! *variable* system font. macOS ships San Francisco as one file whose weight is
@@ -19,7 +19,7 @@
 //! (an emoji, a CJK ideograph) is drawn by whichever installed face does have
 //! it, where the portable path draws nothing at all.
 //!
-//! Fonts an app supplies as bytes stay on fontdue, on every platform: an app
+//! Fonts an app supplies as bytes stay on ab_glyph, on every platform: an app
 //! that bundles a face wants that face rendered the same way everywhere, and the
 //! snapshot tests depend on it.
 

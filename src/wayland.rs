@@ -248,6 +248,7 @@ pub(crate) fn run(app: App) {
     let pool = SlotPool::new((initial_w * initial_h * 4) as usize * 4, &shm)
         .expect("saudade: slot pool init failed");
 
+    let [font, serif_font, mono_font] = Font::load_system();
     let mut state = State {
         registry_state: RegistryState::new(&globals),
         seat_state: SeatState::new(&globals, &qh),
@@ -260,9 +261,9 @@ pub(crate) fn run(app: App) {
         window,
         root,
         themes,
-        font: Font::load_sans(),
-        serif_font: Font::load_serif(),
-        mono_font: Font::load_monospace(),
+        font,
+        serif_font,
+        mono_font,
 
         pool,
         surface_w: initial_w,

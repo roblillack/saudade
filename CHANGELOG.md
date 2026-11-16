@@ -10,6 +10,13 @@ While pre-1.0, the minor version is bumped for breaking changes.
 
 ## [Unreleased] - ReleaseDate
 
+### Changed
+
+- Text is rasterized with ab_glyph in place of fontdue, and a system font's
+  faces are parsed on first use, cutting font memory from some 90 MB to about
+  the size of the font files. Installed fonts are found through an index in the
+  user's cache directory, so start-up no longer rescans every font file. (#97)
+
 ## [0.8.2] - 2026-11-08
 
 ### Fixed

@@ -61,7 +61,6 @@ winit = { version = "0.30.12", default-features = false, features = ["rwh_06", "
 # `macos_layer` on macOS (softbuffer's `master` can do the latter, but no
 # release carries it yet).
 softbuffer = "0.4"
-fontdue = "0.8"
 fontdb = "0.16"
 png = "0.17"
 
@@ -71,6 +70,7 @@ png = "0.17"
 # saudade binary. Path dep for local builds; the version pin lets the crate
 # still be published to crates.io.
 saudade-macros = { path = "macros", version = "0.2.0" }
+ab_glyph = { version = "0.2", default-features = false, features = ["std"] }
 
 # The settings-portal client (see src/portal.rs) asks for the user id it
 # authenticates to the session bus with. Already in the tree through fontdb.
@@ -93,6 +93,10 @@ x11rb = { version = "0.13", features = ["randr"] }
 # The drop target's way onto winit's own Xlib connection, for the XDND messages
 # of a source that ignores its proxy. Already in the tree through winit too.
 x11-dl = "2.21"
+# The font directories fontconfig is set up with, read as fontdb reads them, for
+# the index of installed fonts (see `src/font_scan.rs`). Already in the tree
+# through fontdb.
+fontconfig-parser = "0.5"
 
 # macOS/Windows: arboard with its native (Cocoa / Win32) clipboard backend.
 # default-features = false drops the unused `image-data` feature (and the heavy
