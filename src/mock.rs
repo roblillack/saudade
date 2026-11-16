@@ -62,6 +62,9 @@ pub struct MockBackend {
     /// Whether a drag the window started is going on — see
     /// [`Self::set_dragging_out`].
     dragging_out: std::cell::Cell<bool>,
+    /// The title a widget last gave the window with
+    /// [`EventCtx::set_window_title`] — see [`Self::window_title`].
+    title: std::cell::RefCell<Option<String>>,
 }
 
 /// Which backdrop the content pass fills behind the widget tree, mirroring the
@@ -98,6 +101,7 @@ impl MockBackend {
             fullscreen: std::cell::Cell::new(false),
             modifiers: std::cell::Cell::new(Modifiers::default()),
             dragging_out: std::cell::Cell::new(false),
+            title: std::cell::RefCell::new(None),
         }
     }
 
@@ -128,6 +132,13 @@ impl MockBackend {
     /// widgets see it through [`EventCtx::is_dragging_out`].
     pub fn set_dragging_out(&self, dragging: bool) {
         self.dragging_out.set(dragging);
+    }
+
+    /// The title a widget last gave the pretend window through
+    /// [`EventCtx::set_window_title`] while handling an event from
+    /// [`Self::dispatch`], or `None` if none has.
+    pub fn window_title(&self) -> Option<String> {
+        self.title.borrow().clone()
     }
 
     /// Pretend the window sits on a display whose usable area is `area`, in the
@@ -217,6 +228,9 @@ impl MockBackend {
         root.event(event, &mut ctx);
         if let Some(fullscreen) = ctx.fullscreen_request {
             self.fullscreen.set(fullscreen);
+        }
+        if let Some(title) = ctx.title_request.take() {
+            *self.title.borrow_mut() = Some(title);
         }
         DispatchOutcome {
             paint_requested: ctx.paint_requested,
