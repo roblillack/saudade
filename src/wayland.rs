@@ -14,9 +14,9 @@ use std::cell::Cell;
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
-use smithay_client_toolkit::compositor::{CompositorHandler, CompositorState};
+use smithay_client_toolkit::compositor::{CompositorHandler, CompositorState, Region};
 use smithay_client_toolkit::data_device_manager::data_device::{DataDevice, DataDeviceHandler};
 use smithay_client_toolkit::data_device_manager::data_offer::{DataOfferHandler, DragOffer};
 use smithay_client_toolkit::data_device_manager::data_source::{DataSourceHandler, DragSource};
@@ -26,6 +26,7 @@ use smithay_client_toolkit::reexports::calloop::{
     EventLoop as CalloopLoop, LoopHandle, PostAction, channel,
 };
 use smithay_client_toolkit::reexports::calloop_wayland_source::WaylandSource;
+use smithay_client_toolkit::reexports::csd_frame::{WindowManagerCapabilities, WindowState};
 use smithay_client_toolkit::registry::{ProvidesRegistryState, RegistryState};
 use smithay_client_toolkit::seat::keyboard::{
     KeyEvent as WlKeyEvent, KeyboardHandler, Keysym, Modifiers as WlModifiers,
@@ -37,7 +38,7 @@ use smithay_client_toolkit::seat::{Capability, SeatHandler, SeatState};
 use smithay_client_toolkit::shell::WaylandSurface;
 use smithay_client_toolkit::shell::xdg::popup::{Popup, PopupConfigure, PopupHandler};
 use smithay_client_toolkit::shell::xdg::window::{
-    Window as XdgWindow, WindowConfigure, WindowDecorations, WindowHandler,
+    DecorationMode, Window as XdgWindow, WindowConfigure, WindowDecorations, WindowHandler,
 };
 use smithay_client_toolkit::shell::xdg::{XdgShell, XdgSurface};
 use smithay_client_toolkit::shm::slot::{Buffer, SlotPool};
@@ -67,6 +68,7 @@ use wayland_protocols::xdg::dialog::v1::client::xdg_dialog_v1::XdgDialogV1;
 use wayland_protocols::xdg::dialog::v1::client::xdg_wm_dialog_v1::XdgWmDialogV1;
 use wayland_protocols::xdg::shell::client::xdg_positioner::{Anchor, Gravity, XdgPositioner};
 use wayland_protocols::xdg::shell::client::xdg_surface::XdgSurface as XdgSurfaceObj;
+use wayland_protocols::xdg::shell::client::xdg_toplevel::ResizeEdge;
 use wayland_protocols::xdg::toplevel_icon::v1::client::xdg_toplevel_icon_manager_v1::{
     self, XdgToplevelIconManagerV1,
 };
@@ -75,6 +77,7 @@ use wayland_protocols::xdg::toplevel_icon::v1::client::xdg_toplevel_icon_v1::Xdg
 use crate::app::{App, KeySwallow};
 use crate::appearance::{Appearance, Themes};
 use crate::background::BackgroundState;
+use crate::chrome::{self, Edges, Hit, TitleButton, WindowChrome, WindowFrame};
 use crate::event::{
     Cursor, DragData, DropAction, Event, EventCtx, Key, Modifiers, MouseButton, NamedKey,
     SCROLL_PIXELS_PER_LINE, WHEEL_LINES_PER_DETENT,
@@ -187,8 +190,13 @@ pub(crate) fn run(app: App) {
         .bind::<XdgToplevelIconManagerV1, _, _>(&qh, 1..=1, ())
         .ok();
 
+    // Server-side decorations, please — and where the compositor won't draw
+    // them, we draw our own (see `Decor`). `SAUDADE_DECORATIONS=client` skips
+    // the asking and always draws our own, the way a compositor without
+    // server-side decorations has us do.
+    let decorations = decoration_request();
     let surface = compositor.create_surface(&qh);
-    let window = xdg_shell.create_window(surface, WindowDecorations::RequestServer, &qh);
+    let window = xdg_shell.create_window(surface, decorations, &qh);
     window.set_title(&window_cfg.title);
     window.set_app_id(
         window_cfg
@@ -220,35 +228,12 @@ pub(crate) fn run(app: App) {
     let initial_w = surface_units(window_cfg.size.w, ui);
     let initial_h = surface_units(window_cfg.size.h, ui);
 
-    if window_cfg.resizable {
-        // Honor the configured minimum (relayed to the WM as the surface's
-        // min-size hint), falling back to a small default so a resizable
-        // window can't be collapsed to nothing.
-        let min = window_cfg
-            .min_size
-            .map(|m| (surface_units(m.w, ui), surface_units(m.h, ui)))
-            .unwrap_or((100, 60));
-        window.set_min_size(Some(min));
-    } else {
-        // Fixed-size window: min == max tells the compositor the surface
-        // is unresizable. Without the max hint, wlroots-based compositors
-        // (river, …) report `max=(0x0)` → `is_fixed_size=false` and still
-        // offer resize edges. Pinning both to the configured size mirrors
-        // the winit backend's `with_resizable(false)`.
-        window.set_min_size(Some((initial_w, initial_h)));
-        window.set_max_size(Some((initial_w, initial_h)));
-    }
     if window_cfg.fullscreen {
         // Asked before the first commit, so the first configure already comes
-        // at the display's size. A fixed window's equal min / max hints would
-        // contradict it; they go back on when it leaves fullscreen.
-        if !window_cfg.resizable {
-            window.set_min_size(None);
-            window.set_max_size(None);
-        }
+        // at the display's size. (The size hints, sent below, leave a fixed
+        // window's equal min / max out while it is fullscreen.)
         window.set_fullscreen(None);
     }
-    window.commit();
 
     let pool = SlotPool::new((initial_w * initial_h * 4) as usize * 4, &shm)
         .expect("saudade: slot pool init failed");
@@ -264,6 +249,15 @@ pub(crate) fn run(app: App) {
         xdg_dialog_mgr,
 
         window,
+        title: window_cfg.title.clone(),
+        decor: Decor::new(if window_cfg.resizable {
+            WindowFrame::Resizable
+        } else {
+            WindowFrame::Fixed
+        }),
+        decorations,
+        min_size: window_cfg.min_size,
+        sent_hints: None,
         root,
         themes,
         font,
@@ -294,6 +288,8 @@ pub(crate) fn run(app: App) {
         keyboard: None,
         keyboard_surface: None,
         pointer: None,
+        seat: None,
+        chrome_grab: false,
         data_device_manager,
         data_device: None,
         drag: None,
@@ -320,6 +316,11 @@ pub(crate) fn run(app: App) {
         swallow: KeySwallow::default(),
     };
     drop(conn);
+
+    // The size hints, then the commit the compositor answers with the first
+    // configure.
+    state.apply_size_hints();
+    state.window.commit();
 
     // Give the toplevel an icon straight away, at the sizes a desktop usually
     // wants. A compositor that has its own preferences announces them on the
@@ -349,6 +350,20 @@ struct State {
     xdg_dialog_mgr: Option<XdgWmDialogV1>,
 
     window: XdgWindow,
+    /// The main window's title, as the decorations we draw show it.
+    title: String,
+    /// The decorations we draw around the main window, if the compositor
+    /// leaves that to us.
+    decor: Decor,
+    /// What every toplevel asks the compositor for in the way of decorations —
+    /// see [`decoration_request`].
+    decorations: WindowDecorations,
+    /// The smallest size, in saudade pixels, a resizable window can be
+    /// resized to — `None` for a small default.
+    min_size: Option<Size>,
+    /// The main window's min / max size hints as last sent, so that they are
+    /// sent again only when they change.
+    sent_hints: Option<SizeHints>,
     root: Box<dyn Widget>,
     /// The light and dark themes, and which one the desktop's appearance —
     /// or `SAUDADE_THEME` — currently calls for.
@@ -436,6 +451,13 @@ struct State {
     /// — see [`Self::keyboard_under_dialog`].
     keyboard_surface: Option<wl_surface::WlSurface>,
     pointer: Option<wl_pointer::WlPointer>,
+    /// The seat the pointer belongs to: what a move, a resize, or the window
+    /// menu begun from the decorations we draw is asked for on.
+    seat: Option<wl_seat::WlSeat>,
+    /// Whether the buttons held went down on the decorations rather than the
+    /// content: until they are all up, the pointer is theirs, not the widget
+    /// tree's.
+    chrome_grab: bool,
     /// Drag-and-drop plumbing. `data_device_manager` is the bound global;
     /// `data_device` is the per-seat device we read drag offers from, created
     /// once the first seat appears. `drag` tracks an in-flight drag so motion
@@ -590,6 +612,10 @@ impl Drop for ChildSurface {
 
 struct PopupState {
     surface: ChildSurface,
+    /// A dialog's decorations, where we draw them; never on for a menu.
+    decor: Decor,
+    /// A dialog's title, for those decorations.
+    title: String,
     /// The popup's viewport, where the compositor has `wp_viewporter`: what
     /// lets its buffer be the fractional size the display presents rather than
     /// an integer multiple of it. See [`State::raster_scale`].
@@ -613,9 +639,10 @@ struct PopupState {
 /// entered (zero for the main window, the popup's anchor for a popup) and the
 /// last reported position so a drop knows where to land.
 struct DragSession {
-    /// Offset added to surface-local drag coordinates to reach widget-tree
-    /// logical coordinates — the same translation pointer events use.
-    anchor: Point,
+    /// The surface the drag is over: what its surface-local coordinates are
+    /// translated from to reach the widget tree's — the same translation
+    /// pointer events get.
+    surface: wl_surface::WlSurface,
     /// Last reported position in widget-tree logical coordinates.
     pos: Point,
     /// What the widget under the cursor said a drop would do on the last
@@ -673,6 +700,272 @@ struct DragIcon {
     paint_scale: f32,
     /// Currently painted feedback, so re-renders are skipped when unchanged.
     feedback: DragFeedback,
+}
+
+/// How soon a second click has to follow the first to make a double click on
+/// the decorations we draw — Canoe's figure, as the decorations are Canoe's.
+const DOUBLE_CLICK: Duration = Duration::from_millis(400);
+
+/// What each toplevel asks the compositor for in the way of decorations:
+/// server-side ones, unless `SAUDADE_DECORATIONS=client` says to draw our own
+/// whatever the compositor could do.
+fn decoration_request() -> WindowDecorations {
+    match std::env::var("SAUDADE_DECORATIONS") {
+        Ok(v) if v.eq_ignore_ascii_case("client") => WindowDecorations::ClientOnly,
+        _ => WindowDecorations::RequestServer,
+    }
+}
+
+/// Client-side decorations: the Canoe frame we draw around a toplevel — the
+/// main window or a dialog — ourselves, when the compositor leaves decorating
+/// windows to their clients. GNOME's Mutter does, as does Weston and any
+/// compositor without `zxdg_decoration_manager_v1`; others do when they answer
+/// our request for server-side decorations with `client_side`. It is the same
+/// chrome [`MockBackend::render_framed`](crate::mock::MockBackend::render_framed)
+/// frames screenshots in.
+///
+/// The frame sits in the buffer around the content, with room outside it for
+/// the drop shadow. The window geometry we report is the frame, so the
+/// compositor sizes, places and snaps the window by it and leaves the shadow
+/// out; the input region is the frame plus the strip of shadow its edges can
+/// be grabbed by, so a click anywhere else on the shadow goes to whatever is
+/// underneath.
+struct Decor {
+    /// Whether we draw them: the compositor wants client-side decorations, and
+    /// the window isn't fullscreen.
+    on: bool,
+    frame: WindowFrame,
+    /// Whether the window has the focus, for the title bar's colors.
+    active: bool,
+    /// Maximized or tiled: no shadow, and no edges to resize by.
+    docked: bool,
+    maximized: bool,
+    /// What the compositor says it can do. The buttons for what it can't are
+    /// left out.
+    caps: WindowManagerCapabilities,
+    /// The title-bar button a left press went down on, until its release, and
+    /// whether the pointer is over it still: it is drawn down only then, and
+    /// does what it does only if released there.
+    held: Option<TitleButton>,
+    over_held: bool,
+    /// When the title bar and the close box were last clicked: the next click
+    /// within [`DOUBLE_CLICK`] is a double click.
+    title_click: Option<Instant>,
+    close_click: Option<Instant>,
+    /// The window geometry and input region last sent, so they are sent again
+    /// only when they change. `None` until the decorations are first drawn: a
+    /// window that never has any never sends either.
+    sent: Option<(Rect, Option<Rect>)>,
+}
+
+impl Decor {
+    fn new(frame: WindowFrame) -> Self {
+        Self {
+            on: false,
+            frame,
+            active: true,
+            docked: false,
+            maximized: false,
+            caps: WindowManagerCapabilities::all(),
+            held: None,
+            over_held: false,
+            title_click: None,
+            close_click: None,
+            sent: None,
+        }
+    }
+
+    /// Take in what a configure says about the window. Returns whether that
+    /// moves anything the size hints depend on.
+    fn configure(&mut self, configure: &WindowConfigure) -> bool {
+        let was = (self.on, self.docked);
+        self.on = configure.decoration_mode == DecorationMode::Client && !configure.is_fullscreen();
+        self.active = configure.is_activated();
+        self.maximized = configure.is_maximized();
+        self.docked = self.maximized || configure.state.intersects(WindowState::TILED);
+        self.caps = configure.capabilities;
+        was != (self.on, self.docked)
+    }
+
+    fn can_minimize(&self) -> bool {
+        self.frame != WindowFrame::Dialog && self.caps.contains(WindowManagerCapabilities::MINIMIZE)
+    }
+
+    fn can_maximize(&self) -> bool {
+        self.frame == WindowFrame::Resizable
+            && self.caps.contains(WindowManagerCapabilities::MAXIMIZE)
+    }
+
+    /// The chrome to draw, titled `title`.
+    fn chrome(&self, title: &str) -> WindowChrome {
+        WindowChrome::new(title, self.frame)
+            .with_active(self.active)
+            .docked(self.docked)
+            .with_buttons(self.can_minimize(), self.can_maximize())
+            .with_pressed(self.held.filter(|_| self.over_held))
+    }
+
+    /// Where everything goes on a surface holding `content` (surface units)
+    /// inside these decorations, at `ui` surface units to a saudade pixel.
+    fn layout(&self, content: (u32, u32), ui: f32) -> DecorLayout {
+        let (w, h) = (content.0.max(1), content.1.max(1));
+        if !self.on {
+            return DecorLayout {
+                surface: (w, h),
+                content_size: (w, h),
+                content: (0, 0),
+                geometry: Rect::new(0, 0, w as i32, h as i32),
+                input: None,
+                extra: (0, 0),
+            };
+        }
+        let chrome = self.chrome("");
+        // Rounded up, so the room kept for the frame is never short of the
+        // frame drawn in it.
+        let su = |logical: i32| (logical.max(0) as f32 * ui).ceil() as u32;
+        let f = chrome.frame_insets();
+        let s = chrome.shadow_insets();
+        let (fl, ft, fr, fb) = (su(f.left), su(f.top), su(f.right), su(f.bottom));
+        let (sl, st, sr, sb) = (su(s.left), su(s.top), su(s.right), su(s.bottom));
+        let geometry = Rect::new(
+            sl as i32,
+            st as i32,
+            (fl + w + fr) as i32,
+            (ft + h + fb) as i32,
+        );
+        let grab = su(chrome.resize_grab()).min(sl.min(st).min(sr).min(sb)) as i32;
+        DecorLayout {
+            surface: (sl + fl + w + fr + sr, st + ft + h + fb + sb),
+            content_size: (w, h),
+            content: (sl + fl, st + ft),
+            geometry,
+            input: Some(Rect::new(
+                geometry.x - grab,
+                geometry.y - grab,
+                geometry.w + 2 * grab,
+                geometry.h + 2 * grab,
+            )),
+            extra: (fl + fr, ft + fb),
+        }
+    }
+}
+
+/// Where everything sits on a toplevel's surface, in surface units: see
+/// [`Decor::layout`]. Without decorations, the content is all there is.
+#[derive(Clone, Copy)]
+struct DecorLayout {
+    /// The whole surface: content, frame and shadow.
+    surface: (u32, u32),
+    /// The content's size, and its top-left corner.
+    content_size: (u32, u32),
+    content: (u32, u32),
+    /// The window geometry: the frame, without the shadow.
+    geometry: Rect,
+    /// The input region, `None` for all of the surface.
+    input: Option<Rect>,
+    /// What the frame adds to the content's width and height: what the window
+    /// geometry — and with it every size the compositor and we tell each
+    /// other — measures beyond the content.
+    extra: (u32, u32),
+}
+
+impl DecorLayout {
+    /// The content's top-left corner in device pixels, at `raster` of them to
+    /// a surface unit: where the widget tree is drawn from.
+    fn content_px(&self, raster: f32) -> (i32, i32) {
+        let px = |v: u32| (v as f32 * raster).round() as i32;
+        (px(self.content.0), px(self.content.1))
+    }
+
+    /// The decorations' geometry in device pixels, at `raster` of them to a
+    /// surface unit, drawn at `paint_scale` device pixels to a saudade one.
+    fn metrics(&self, raster: f32, paint_scale: f32, chrome: &WindowChrome) -> chrome::Metrics {
+        let px = |v: i32| (v as f32 * raster).round() as i32;
+        let span = |from: i32, len: i32| (px(from), px(from + len) - px(from));
+        let (cx, cw) = span(self.content.0 as i32, self.content_size.0 as i32);
+        let (cy, ch) = span(self.content.1 as i32, self.content_size.1 as i32);
+        let g = self.geometry;
+        let (fx, fw) = span(g.x, g.w);
+        let (fy, fh) = span(g.y, g.h);
+        let buffer = Size::new(
+            px(self.surface.0 as i32).max(1),
+            px(self.surface.1 as i32).max(1),
+        );
+        chrome::metrics_around(
+            Rect::new(fx, fy, fw, fh),
+            Rect::new(cx, cy, cw, ch),
+            buffer,
+            paint_scale,
+            chrome,
+        )
+    }
+
+    /// Send the window geometry and input region this layout calls for, if
+    /// they aren't what `decor` sent last. Both are double-buffered: they take
+    /// effect with the next commit of `surface`.
+    fn sync(
+        &self,
+        decor: &mut Decor,
+        compositor: &CompositorState,
+        xdg: &XdgSurfaceObj,
+        surface: &wl_surface::WlSurface,
+    ) {
+        if !decor.on && decor.sent.is_none() {
+            return;
+        }
+        let want = (self.geometry, self.input);
+        if decor.sent == Some(want) {
+            return;
+        }
+        let g = self.geometry;
+        xdg.set_window_geometry(g.x, g.y, g.w.max(1), g.h.max(1));
+        match self
+            .input
+            .and_then(|r| Some((r, Region::new(compositor).ok()?)))
+        {
+            Some((r, region)) => {
+                region.add(r.x, r.y, r.w, r.h);
+                surface.set_input_region(Some(region.wl_region()));
+            }
+            None => surface.set_input_region(None),
+        }
+        decor.sent = Some(want);
+    }
+}
+
+/// The xdg-shell edge a resize from `edges` moves.
+fn resize_edge(edges: Edges) -> ResizeEdge {
+    match (edges.top, edges.bottom, edges.left, edges.right) {
+        (true, _, true, _) => ResizeEdge::TopLeft,
+        (true, _, _, true) => ResizeEdge::TopRight,
+        (_, true, true, _) => ResizeEdge::BottomLeft,
+        (_, true, _, true) => ResizeEdge::BottomRight,
+        (true, ..) => ResizeEdge::Top,
+        (_, true, ..) => ResizeEdge::Bottom,
+        (_, _, true, _) => ResizeEdge::Left,
+        _ => ResizeEdge::Right,
+    }
+}
+
+/// The pointer over a resize handle moving `edges`.
+fn resize_cursor(edges: Edges) -> Cursor {
+    match (edges.top || edges.bottom, edges.left || edges.right) {
+        (true, true) if edges.top == edges.left => Cursor::NwseResize,
+        (true, true) => Cursor::NeswResize,
+        (true, false) => Cursor::NsResize,
+        _ => Cursor::EwResize,
+    }
+}
+
+/// A toplevel's min and max size hints, in surface units: `None` for none.
+type SizeHints = (Option<(u32, u32)>, Option<(u32, u32)>);
+
+/// Which toplevel a decorations event is about: the main window, or the
+/// dialog at an index of the popup stack.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Toplevel {
+    Main,
+    Dialog(usize),
 }
 
 /// One `xdg_toplevel_icon_v1` we have handed the compositor, plus everything
@@ -916,17 +1209,20 @@ impl State {
             self.windowed_size = self.windowed_size.map(|size| requantize(size, was, ui));
             // Fullscreen itself has no size of ours to preserve: the display
             // decides it until the configure that releases the window.
+            let mut commit = false;
             if !self.fullscreen {
                 let (w, h) = requantize((self.surface_w, self.surface_h), was, ui);
                 if (w, h) != (self.surface_w, self.surface_h) {
                     self.surface_w = w;
                     self.surface_h = h;
-                    if !self.resizable {
-                        self.window.set_min_size(Some((w, h)));
-                        self.window.set_max_size(Some((w, h)));
-                    }
-                    self.window.commit();
+                    commit = true;
                 }
+            }
+            // The size hints are in surface units too, and so are the
+            // decorations they count in.
+            commit |= self.apply_size_hints();
+            if commit {
+                self.window.commit();
             }
         }
         self.relayout();
@@ -1025,8 +1321,12 @@ impl State {
         }
         if let Some(title) = ctx.title_request.take() {
             // Not double-buffered state: the compositor takes it on receipt,
-            // with no commit needed.
-            self.window.set_title(title);
+            // with no commit needed. Decorations of our own show it as well.
+            self.window.set_title(title.clone());
+            self.title = title;
+            if self.decor.on {
+                self.needs_redraw = true;
+            }
         }
         if let Some((data, actions)) = ctx.drag_request.take() {
             self.begin_drag(data, &actions);
@@ -1305,12 +1605,9 @@ impl State {
         if w == self.surface_w && h == self.surface_h {
             return;
         }
-        if !self.resizable {
-            self.window.set_min_size(Some((w, h)));
-            self.window.set_max_size(Some((w, h)));
-        }
         self.surface_w = w;
         self.surface_h = h;
+        self.apply_size_hints();
         self.window.commit();
         self.relayout();
         self.needs_redraw = true;
@@ -1329,29 +1626,109 @@ impl State {
         self.fullscreen = fullscreen;
         if fullscreen {
             self.windowed_size = Some((self.surface_w, self.surface_h));
-            if !self.resizable {
-                self.window.set_min_size(None);
-                self.window.set_max_size(None);
-            }
+            self.apply_size_hints();
             self.window.set_fullscreen(None);
         } else {
             self.window.unset_fullscreen();
-            self.pin_fixed_size_hints();
+            self.apply_size_hints();
         }
         self.window.commit();
     }
 
-    /// A fixed window's min == max size hints, pinned to the size it returns
-    /// to from fullscreen. Resizable windows keep the hints they have.
-    fn pin_fixed_size_hints(&mut self) {
-        if self.resizable {
-            return;
+    /// Send the main window's min / max size hints, if they aren't what was
+    /// sent last; returns whether they were sent. They are double-buffered, so
+    /// the caller commits — or leaves it to the frame about to be drawn.
+    ///
+    /// A resizable window gets the configured minimum, or a small default so it
+    /// can't be collapsed to nothing. A fixed one gets min == max, which tells
+    /// the compositor it can't be resized — without the max hint,
+    /// wlroots-based compositors (river, …) report `max=(0x0)` →
+    /// `is_fixed_size=false` and still offer resize edges — pinned to the size
+    /// it has, or returns to from fullscreen; while it is fullscreen it gets
+    /// none, which would contradict the display's size. Either way the hints
+    /// measure the window geometry, so they count in the frame of any
+    /// decorations we draw.
+    fn apply_size_hints(&mut self) -> bool {
+        let extra = self.main_layout().extra;
+        let grow = |(w, h): (u32, u32)| Some((w + extra.0, h + extra.1));
+        let hints = if self.resizable {
+            let min = self
+                .min_size
+                .map(|m| (surface_units(m.w, self.ui), surface_units(m.h, self.ui)))
+                .unwrap_or((100, 60));
+            (grow(min), None)
+        } else if self.fullscreen {
+            (None, None)
+        } else {
+            let size = grow(
+                self.windowed_size
+                    .unwrap_or((self.surface_w, self.surface_h)),
+            );
+            (size, size)
+        };
+        if self.sent_hints == Some(hints) {
+            return false;
         }
-        let (w, h) = self
-            .windowed_size
-            .unwrap_or((self.surface_w, self.surface_h));
-        self.window.set_min_size(Some((w, h)));
-        self.window.set_max_size(Some((w, h)));
+        self.window.set_min_size(hints.0);
+        self.window.set_max_size(hints.1);
+        self.sent_hints = Some(hints);
+        true
+    }
+
+    /// Where everything sits on the main window's surface.
+    fn main_layout(&self) -> DecorLayout {
+        self.decor.layout((self.surface_w, self.surface_h), self.ui)
+    }
+
+    /// Where everything sits on a toplevel's surface. A popup index that
+    /// isn't a dialog's — a stack rebuilt since — is laid out undecorated.
+    fn toplevel_layout(&self, t: Toplevel) -> DecorLayout {
+        match t {
+            Toplevel::Main => self.main_layout(),
+            Toplevel::Dialog(i) => match self.popups.get(i) {
+                Some(p) => p.decor.layout((p.surface_w, p.surface_h), self.ui),
+                None => Decor::new(WindowFrame::Dialog).layout((1, 1), self.ui),
+            },
+        }
+    }
+
+    /// The toplevel `surface` is: the main window's, or a dialog's. `None` for
+    /// a menu's, or a surface we don't know.
+    fn toplevel_of(&self, surface: &wl_surface::WlSurface) -> Option<Toplevel> {
+        if surface.id() == self.window.wl_surface().id() {
+            return Some(Toplevel::Main);
+        }
+        let i = self
+            .popups
+            .iter()
+            .position(|p| p.surface.wl_surface().id() == surface.id())?;
+        (self.popups[i].surface.kind() == PopupKind::Dialog).then_some(Toplevel::Dialog(i))
+    }
+
+    /// A toplevel's decorations, and the window they belong to.
+    fn toplevel_parts(&mut self, t: Toplevel) -> Option<(&mut Decor, &XdgWindow)> {
+        match t {
+            Toplevel::Main => Some((&mut self.decor, &self.window)),
+            Toplevel::Dialog(i) => {
+                let PopupState { decor, surface, .. } = self.popups.get_mut(i)?;
+                match surface {
+                    ChildSurface::Dialog { window, .. } => Some((decor, &*window)),
+                    ChildSurface::Popup(_) => None,
+                }
+            }
+        }
+    }
+
+    /// Repaint a toplevel.
+    fn redraw_toplevel(&mut self, t: Toplevel) {
+        match t {
+            Toplevel::Main => self.needs_redraw = true,
+            Toplevel::Dialog(i) => {
+                if let Some(p) = self.popups.get_mut(i) {
+                    p.needs_redraw = true;
+                }
+            }
+        }
     }
 
     fn draw_main(&mut self) {
@@ -1359,9 +1736,17 @@ impl State {
         // Read off `self` before the pool hands out the canvas, which borrows
         // it for as long as the painter lives.
         let paint_scale = self.paint_scale();
+        let raster = self.raster_scale();
         let system_scale = self.os_scale();
         let display_dpi = self.device_dpi();
-        let (buf_w, buf_h) = self.buffer_size(self.surface_w, self.surface_h);
+        let layout = self.main_layout();
+        let decorations = self.decor.on.then(|| {
+            let chrome = self.decor.chrome(&self.title);
+            let m = layout.metrics(raster, paint_scale, &chrome);
+            (chrome, m)
+        });
+        let (origin_x, origin_y) = layout.content_px(raster);
+        let (buf_w, buf_h) = self.buffer_size(layout.surface.0, layout.surface.1);
         let stride = buf_w * 4;
         let buffer = match self
             .pool
@@ -1375,35 +1760,56 @@ impl State {
             None => return,
         };
         let pixels = bytes_as_u32_mut(canvas);
+        let fonts = FontSet {
+            sans: self.font.as_ref(),
+            serif: self.serif_font.as_ref(),
+            mono: self.mono_font.as_ref(),
+        };
 
         // Buffer holds physical pixels; the painter multiplies the widget
         // tree's logical coords by `paint_scale` to land on them — the surface
-        // units a saudade pixel is worth, times the integer buffer scale.
-        let mut painter = Painter::with_popup_anchor(
-            pixels,
-            buf_w,
-            buf_h,
-            paint_scale,
-            0,
-            0,
-            FontSet {
-                sans: self.font.as_ref(),
-                serif: self.serif_font.as_ref(),
-                mono: self.mono_font.as_ref(),
-            },
-            None,
-        )
-        .with_display_dpi(display_dpi);
-        // Report the scale the display is presented at (e.g. 1.25), which is
-        // neither the integer scale the buffer is rasterized at nor the scale
-        // the UI is drawn at: widgets asking what the *display* is set to want
-        // this one.
-        painter.set_system_scale(system_scale);
-        let theme = self.themes.current();
-        painter.fill_pattern(theme.background, self.bg.pattern, self.bg.ink(theme));
-        self.root.paint(&mut painter, theme);
+        // units a saudade pixel is worth, times the integer buffer scale —
+        // from the content's corner, inside the decorations if there are any.
+        {
+            let mut painter = Painter::with_popup_anchor(
+                pixels,
+                buf_w,
+                buf_h,
+                paint_scale,
+                origin_x,
+                origin_y,
+                fonts,
+                None,
+            )
+            .with_display_dpi(display_dpi);
+            // Report the scale the display is presented at (e.g. 1.25), which
+            // is neither the integer scale the buffer is rasterized at nor the
+            // scale the UI is drawn at: widgets asking what the *display* is
+            // set to want this one.
+            painter.set_system_scale(system_scale);
+            let theme = self.themes.current();
+            painter.fill_pattern(theme.background, self.bg.pattern, self.bg.ink(theme));
+            if let Some((_, m)) = &decorations {
+                let c = m.content;
+                painter.set_clip_phys(c.x, c.y, c.w, c.h);
+            }
+            self.root.paint(&mut painter, theme);
+        }
+        if let Some((chrome, m)) = &decorations {
+            // The frame around it, drawn 1:1 in the device pixels its metrics
+            // are already in, and the shadow, see-through.
+            let mut painter = Painter::new(pixels, buf_w, buf_h, 1.0, 0, 0, fonts);
+            chrome::paint_decorations(&mut painter, m, chrome);
+            crate::painter::premultiply(pixels);
+        }
 
         let surface = self.window.wl_surface();
+        layout.sync(
+            &mut self.decor,
+            &self.compositor,
+            self.window.xdg_surface(),
+            surface,
+        );
         let _ = buffer.attach_to(surface);
         // damage_buffer takes buffer-pixel coordinates.
         surface.damage_buffer(0, 0, buf_w, buf_h);
@@ -1412,8 +1818,8 @@ impl State {
         Self::apply_surface_scale(
             surface,
             self.viewport.as_ref(),
-            self.surface_w,
-            self.surface_h,
+            layout.surface.0,
+            layout.surface.1,
             scale,
         );
         surface.frame(&self.qh, surface.clone());
@@ -1424,12 +1830,20 @@ impl State {
     fn draw_popup(&mut self, idx: usize) -> bool {
         let scale = self.scale.max(1);
         let paint_scale = self.paint_scale();
+        let raster = self.raster_scale();
         let system_scale = self.os_scale();
         let display_dpi = self.device_dpi();
-        let buffer = match self.popups.get(idx) {
-            Some(p) => self.buffer_size(p.surface_w, p.surface_h),
+        let layout = self.toplevel_layout(Toplevel::Dialog(idx));
+        let decorations = match self.popups.get(idx) {
+            Some(p) => p.decor.on.then(|| {
+                let chrome = p.decor.chrome(&p.title);
+                let m = layout.metrics(raster, paint_scale, &chrome);
+                (chrome, m)
+            }),
             None => return false,
         };
+        let (content_x, content_y) = layout.content_px(raster);
+        let buffer = self.buffer_size(layout.surface.0, layout.surface.1);
         let Some(p) = self.popups.get_mut(idx) else {
             return false;
         };
@@ -1450,8 +1864,8 @@ impl State {
         // The anchor is in the root widget's saudade pixels, so it reaches
         // buffer pixels through the same `paint_scale` the painter draws with.
         let anchor = p.anchor;
-        let origin_x = -((anchor.x as f32 * paint_scale).round() as i32);
-        let origin_y = -((anchor.y as f32 * paint_scale).round() as i32);
+        let origin_x = content_x - (anchor.x as f32 * paint_scale).round() as i32;
+        let origin_y = content_y - (anchor.y as f32 * paint_scale).round() as i32;
         let clip_w = (anchor.w as f32 * paint_scale).round() as i32;
         let clip_h = (anchor.h as f32 * paint_scale).round() as i32;
         // A menu panel never fills its buffer: the L-shaped drop shadow leaves
@@ -1467,45 +1881,59 @@ impl State {
         // redraw.
         let transparent = p.surface.kind() == PopupKind::Popup;
 
-        let mut painter = Painter::with_popup_anchor(
-            pixels,
-            buf_w,
-            buf_h,
-            paint_scale,
-            origin_x,
-            origin_y,
-            FontSet {
-                sans: self.font.as_ref(),
-                serif: self.serif_font.as_ref(),
-                mono: self.mono_font.as_ref(),
-            },
-            Some(anchor),
-        )
-        .with_display_dpi(display_dpi);
-        painter.set_system_scale(system_scale);
-        let theme = self.themes.current();
-        if transparent {
-            painter.fill(Color::TRANSPARENT);
-            painter.set_clip_phys(0, 0, clip_w.max(buf_w), clip_h.max(buf_h));
-            self.root.paint_overlay(&mut painter, theme);
-        } else {
-            painter.fill(theme.background);
-            painter.set_clip_phys(0, 0, clip_w, clip_h);
-            self.root.paint(&mut painter, theme);
+        let fonts = FontSet {
+            sans: self.font.as_ref(),
+            serif: self.serif_font.as_ref(),
+            mono: self.mono_font.as_ref(),
+        };
+        {
+            let mut painter = Painter::with_popup_anchor(
+                pixels,
+                buf_w,
+                buf_h,
+                paint_scale,
+                origin_x,
+                origin_y,
+                fonts,
+                Some(anchor),
+            )
+            .with_display_dpi(display_dpi);
+            painter.set_system_scale(system_scale);
+            let theme = self.themes.current();
+            if transparent {
+                painter.fill(Color::TRANSPARENT);
+                painter.set_clip_phys(0, 0, clip_w.max(buf_w), clip_h.max(buf_h));
+                self.root.paint_overlay(&mut painter, theme);
+            } else {
+                painter.fill(theme.background);
+                painter.set_clip_phys(content_x, content_y, clip_w, clip_h);
+                self.root.paint(&mut painter, theme);
+            }
         }
-        painter.clear_clip();
-        if transparent {
+        if let Some((chrome, m)) = &decorations {
+            let mut painter = Painter::new(pixels, buf_w, buf_h, 1.0, 0, 0, fonts);
+            chrome::paint_decorations(&mut painter, m, chrome);
+        }
+        if transparent || decorations.is_some() {
             crate::painter::premultiply(pixels);
         }
 
+        if let ChildSurface::Dialog { window, .. } = &p.surface {
+            layout.sync(
+                &mut p.decor,
+                &self.compositor,
+                window.xdg_surface(),
+                window.wl_surface(),
+            );
+        }
         let surface = p.surface.wl_surface();
         let _ = buf.attach_to(surface);
         surface.damage_buffer(0, 0, buf_w, buf_h);
         Self::apply_surface_scale(
             surface,
             p.viewport.as_ref(),
-            p.surface_w,
-            p.surface_h,
+            layout.surface.0,
+            layout.surface.1,
             scale,
         );
         surface.frame(&self.qh, surface.clone());
@@ -1564,8 +1992,19 @@ impl State {
                 // top-left *in the parent surface*. Gravity goes BottomRight so
                 // the popup extends down/right from the anchor — same shape as a
                 // classic dropdown menu.
-                let rel_x = surface_offset(anchor.x - parent_anchor.x, self.ui);
-                let rel_y = surface_offset(anchor.y - parent_anchor.y, self.ui);
+                // The positioner's rect is relative to the parent's window
+                // geometry, which with decorations of our own on it is the
+                // frame: the content starts the frame's border and title bar in.
+                let geometry = match parent {
+                    None => self.main_layout(),
+                    Some(p) => p.decor.layout((p.surface_w, p.surface_h), self.ui),
+                };
+                let (frame_x, frame_y) = (
+                    geometry.content.0 as i32 - geometry.geometry.x,
+                    geometry.content.1 as i32 - geometry.geometry.y,
+                );
+                let rel_x = surface_offset(anchor.x - parent_anchor.x, self.ui) + frame_x;
+                let rel_y = surface_offset(anchor.y - parent_anchor.y, self.ui) + frame_y;
                 let positioner: XdgPositioner =
                     self.xdg_shell.xdg_wm_base().create_positioner(&self.qh, ());
                 positioner.set_size(surf_w as i32, surf_h as i32);
@@ -1591,7 +2030,8 @@ impl State {
             PopupKind::Dialog => {
                 // A modal dialog is a real top-level with server-side
                 // decorations: the compositor draws the title bar +
-                // close button, and we ask it to enforce a fixed size
+                // close button (or we do, if it won't — see `Decor`), and
+                // we ask it to enforce a fixed size
                 // (set_min_size == set_max_size disables the resize
                 // affordances). `set_parent` makes the dialog transient
                 // to the window it belongs to — the dialog beneath it, or
@@ -1604,11 +2044,9 @@ impl State {
                 // labwc, …) to drop the minimize / maximize controls
                 // from the SSD chrome.
                 let dialog_surface = self.compositor.create_surface(&self.qh);
-                let dialog = self.xdg_shell.create_window(
-                    dialog_surface,
-                    WindowDecorations::RequestServer,
-                    &self.qh,
-                );
+                let dialog =
+                    self.xdg_shell
+                        .create_window(dialog_surface, self.decorations, &self.qh);
                 let title = request.title.as_deref().unwrap_or("Dialog");
                 dialog.set_title(title);
                 let owner = parent
@@ -1650,6 +2088,8 @@ impl State {
 
         Some(PopupState {
             surface,
+            decor: Decor::new(WindowFrame::Dialog),
+            title: request.title.as_deref().unwrap_or("Dialog").to_string(),
             viewport,
             pool,
             anchor,
@@ -1684,6 +2124,69 @@ impl State {
             .find(|p| p.surface.wl_surface().id() == surface.id())
             .map(|p| Point::new(p.anchor.x, p.anchor.y))
             .unwrap_or(Point::new(0, 0))
+    }
+
+    /// A position on `surface` (surface-local, as the pointer and the data
+    /// device report it) in the widget tree's saudade pixels: measured from
+    /// the corner of the content, inside any decorations we draw around it,
+    /// and offset by the surface's anchor.
+    fn surface_point(&self, surface: &wl_surface::WlSurface, x: f64, y: f64) -> Point {
+        let (cx, cy) = match self.toplevel_of(surface) {
+            Some(t) => self.toplevel_layout(t).content,
+            None => (0, 0),
+        };
+        let anchor = self.surface_anchor(surface);
+        self.surface_to_logical(x - cx as f64, y - cy as f64, anchor)
+    }
+
+    /// What a surface-local position on toplevel `t` lands on: the content, or
+    /// a part of the decorations we draw around it.
+    fn decor_hit(&self, t: Toplevel, x: f64, y: f64) -> Hit {
+        let decor = match t {
+            Toplevel::Main => &self.decor,
+            Toplevel::Dialog(i) => match self.popups.get(i) {
+                Some(p) => &p.decor,
+                None => return Hit::Content,
+            },
+        };
+        if !decor.on {
+            return Hit::Content;
+        }
+        let raster = self.raster_scale();
+        let chrome = decor.chrome("");
+        let m = self
+            .toplevel_layout(t)
+            .metrics(raster, self.paint_scale(), &chrome);
+        let px = |v: f64| (v * raster as f64).floor() as i32;
+        chrome::hit_test(&m, &chrome, Point::new(px(x), px(y)))
+    }
+
+    /// Close toplevel `t`, as its close box or the compositor asked.
+    ///
+    /// The main window gives the root a chance to react before we quit: a
+    /// widget used directly as the window root (rather than hosted in a
+    /// `Modal`) gets its `on_cancel` here, so a dialog-as-window can revert
+    /// pending edits on close, matching Escape and the dialog close path. Most
+    /// roots leave this a no-op.
+    ///
+    /// A dialog gets an Escape, so the dialog widget's dismiss path runs
+    /// (which clears `open`; the next `sync_popup` tear-down then destroys the
+    /// toplevel).
+    fn close_toplevel(&mut self, t: Toplevel) {
+        match t {
+            Toplevel::Main => {
+                let mut ctx = EventCtx::with_fullscreen(self.fullscreen);
+                self.root.on_cancel(&mut ctx);
+                self.exit = true;
+            }
+            Toplevel::Dialog(_) => {
+                let mods = self.modifiers;
+                self.dispatch(Event::KeyDown {
+                    key: Key::Named(NamedKey::Escape),
+                    modifiers: mods,
+                });
+            }
+        }
     }
 
     /// Dispatch a [`DragMove`](Event::DragMove) where the incoming drag now
@@ -1926,28 +2429,14 @@ impl OutputHandler for State {
 impl WindowHandler for State {
     fn request_close(&mut self, _: &Connection, _: &QueueHandle<Self>, window: &XdgWindow) {
         if window.xdg_toplevel() == self.window.xdg_toplevel() {
-            // Give the root a chance to react before we quit: a widget used
-            // directly as the window root (rather than hosted in a `Modal`)
-            // gets its `on_cancel` here, so a dialog-as-window can revert
-            // pending edits on close, matching Escape and the dialog-popup
-            // close path below. Most roots leave this a no-op.
-            let mut ctx = EventCtx::with_fullscreen(self.fullscreen);
-            self.root.on_cancel(&mut ctx);
-            self.exit = true;
+            self.close_toplevel(Toplevel::Main);
             return;
         }
-        // Dialog window close-request: synthesize Escape so the dialog
-        // widget's dismiss path runs (which clears `open`, the next
-        // sync_popup tear-down then destroys the toplevel).
-        if self.popups.iter().any(|p| {
+        if let Some(i) = self.popups.iter().position(|p| {
             matches!(&p.surface, ChildSurface::Dialog { window: dialog, .. }
                 if dialog.xdg_toplevel() == window.xdg_toplevel())
         }) {
-            let mods = self.modifiers;
-            self.dispatch(Event::KeyDown {
-                key: Key::Named(NamedKey::Escape),
-                modifiers: mods,
-            });
+            self.close_toplevel(Toplevel::Dialog(i));
         }
     }
 
@@ -1961,8 +2450,18 @@ impl WindowHandler for State {
     ) {
         if window.xdg_toplevel() == self.window.xdg_toplevel() {
             let current = (self.surface_w.max(1), self.surface_h.max(1));
+            // Whether our decorations came on or went off: a size suggested
+            // for a fixed window was then worked out from hints that didn't
+            // count them in (or did), so it is no size to take.
+            let decor_moved = self.decor.configure(&configure);
+            // The compositor's sizes are the window geometry's, which takes in
+            // the frame of any decorations we draw.
+            let extra = self.main_layout().extra;
             let suggested = match configure.new_size {
-                (Some(w), Some(h)) => Some((w.get(), h.get())),
+                (Some(w), Some(h)) if !(decor_moved && !self.resizable) => Some((
+                    w.get().saturating_sub(extra.0).max(1),
+                    h.get().saturating_sub(extra.1).max(1),
+                )),
                 _ => None,
             };
             let fullscreen = configure.is_fullscreen();
@@ -1971,10 +2470,6 @@ impl WindowHandler for State {
                 // keybinding): remember where to come back to either way.
                 if self.windowed_size.is_none() {
                     self.windowed_size = Some(current);
-                    if !self.resizable {
-                        self.window.set_min_size(None);
-                        self.window.set_max_size(None);
-                    }
                 }
                 suggested.unwrap_or(current)
             } else if let Some(windowed) = self.windowed_size.take() {
@@ -1984,8 +2479,6 @@ impl WindowHandler for State {
                 let size = if self.resizable {
                     suggested.unwrap_or(windowed)
                 } else {
-                    self.window.set_min_size(Some(windowed));
-                    self.window.set_max_size(Some(windowed));
                     windowed
                 };
                 self.mark_popups_dirty();
@@ -1996,6 +2489,8 @@ impl WindowHandler for State {
             self.fullscreen = fullscreen;
             self.surface_w = w;
             self.surface_h = h;
+            // Sent with the frame drawn in reply to this configure.
+            self.apply_size_hints();
             let first_configure = !self.configured;
             self.configured = true;
             self.needs_redraw = true;
@@ -2017,11 +2512,20 @@ impl WindowHandler for State {
         // time). Since a Wayland client owns its buffer dimensions, the
         // window snaps back to our size and any resize drag has no
         // effect.
+        let ui = self.ui;
         if let Some(p) = self.popups.iter_mut().find(|p| {
             matches!(&p.surface, ChildSurface::Dialog { window: dialog, .. }
                 if dialog.xdg_toplevel() == window.xdg_toplevel())
         }) {
-            // surface_w / surface_h left untouched on purpose.
+            // surface_w / surface_h left untouched on purpose. The fixed size
+            // hints measure the window geometry, though, so decorations of our
+            // own coming on or going off move them.
+            if p.decor.configure(&configure) {
+                let extra = p.decor.layout((p.surface_w, p.surface_h), ui).extra;
+                let size = Some((p.surface_w + extra.0, p.surface_h + extra.1));
+                window.set_min_size(size);
+                window.set_max_size(size);
+            }
             p.configured = true;
             p.needs_redraw = true;
         }
@@ -2102,6 +2606,7 @@ impl SeatHandler for State {
         }
         if capability == Capability::Pointer && self.pointer.is_none() {
             self.pointer = self.seat_state.get_pointer(qh, &seat).ok();
+            self.seat = Some(seat.clone());
             // Pair the pointer with a cursor-shape device so a drag can swap in
             // the copy / no-drop cursor. Sender-only; no events come back.
             if let (Some(mgr), Some(ptr)) = (self.cursor_shape_mgr.as_ref(), self.pointer.as_ref())
@@ -2315,17 +2820,29 @@ impl PointerHandler for State {
     ) {
         for event in events {
             // Which surface is the event on — the main window, or one of the
-            // stacked popups? Popup anchors are in root coords, so we add the
-            // matching popup's anchor to land back in the widget tree's space.
+            // stacked popups? `surface_point` lands the position in the widget
+            // tree's space from either: inside any decorations, and offset by
+            // a popup's anchor, popup anchors being in root coords.
             let popup_idx = self
                 .popups
                 .iter()
                 .position(|p| p.surface.wl_surface().id() == event.surface.id());
-            let anchor = match popup_idx {
-                Some(i) => Point::new(self.popups[i].anchor.x, self.popups[i].anchor.y),
-                None => Point::new(0, 0),
-            };
-            let pos = self.surface_to_logical(event.position.0, event.position.1, anchor);
+            let (x, y) = event.position;
+            let pos = self.surface_point(&event.surface, x, y);
+
+            // Over decorations we draw, the pointer is theirs: unless a
+            // button that went down on the content is still held, which keeps
+            // the pointer with the widget tree wherever it goes — and the
+            // other way round.
+            if !matches!(event.kind, PointerEventKind::Leave { .. })
+                && let Some(t) = self.toplevel_of(&event.surface)
+            {
+                let hit = self.decor_hit(t, x, y);
+                if self.chrome_grab || (self.buttons_held == 0 && hit != Hit::Content) {
+                    self.chrome_pointer(t, event, hit);
+                    continue;
+                }
+            }
 
             match event.kind {
                 PointerEventKind::Enter { .. } | PointerEventKind::Motion { .. } => {
@@ -2348,6 +2865,15 @@ impl PointerHandler for State {
                         None => self.cursor = None,
                     }
                     self.buttons_held = 0;
+                    // A title-bar button held down pops back up, and does
+                    // nothing: its release won't come to us.
+                    self.chrome_grab = false;
+                    if let Some(t) = self.toplevel_of(&event.surface)
+                        && let Some((decor, _)) = self.toplevel_parts(t)
+                        && decor.held.take().is_some()
+                    {
+                        self.redraw_toplevel(t);
+                    }
                     self.dispatch(Event::PointerLeave);
                     // The pointer image is the next surface's responsibility now;
                     // forget what we'd shown so the next enter re-establishes it
@@ -2418,6 +2944,177 @@ impl PointerHandler for State {
     }
 }
 
+impl State {
+    /// A pointer event on the decorations of toplevel `t`, which `hit` says
+    /// what part of. (A leave never comes here: it goes the way of one on the
+    /// content.)
+    fn chrome_pointer(&mut self, t: Toplevel, event: &PointerEvent, hit: Hit) {
+        match event.kind {
+            PointerEventKind::Enter { .. } | PointerEventKind::Motion { .. } => {
+                // Off the content and onto the decorations: the widget tree
+                // has seen the last of the pointer for now.
+                if !self.chrome_grab {
+                    let was = match t {
+                        Toplevel::Main => self.cursor.take(),
+                        Toplevel::Dialog(i) => self.popups.get_mut(i).and_then(|p| p.cursor.take()),
+                    };
+                    if was.is_some() {
+                        self.dispatch(Event::PointerLeave);
+                        self.mark_popups_dirty();
+                    }
+                }
+                // A title-bar button held down shows down only while the
+                // pointer is on it.
+                if let Some((decor, _)) = self.toplevel_parts(t)
+                    && let Some(button) = decor.held
+                {
+                    let over = hit == Hit::Button(button);
+                    if over != decor.over_held {
+                        decor.over_held = over;
+                        self.redraw_toplevel(t);
+                    }
+                }
+                let cursor = match hit {
+                    Hit::Resize(edges) if !self.chrome_grab => resize_cursor(edges),
+                    _ => Cursor::Default,
+                };
+                let entered = matches!(event.kind, PointerEventKind::Enter { .. });
+                self.apply_cursor(Some(cursor), entered);
+            }
+            PointerEventKind::Press { button, serial, .. } => {
+                self.buttons_held += 1;
+                // Another button, while the first is still held: nothing.
+                if self.chrome_grab {
+                    return;
+                }
+                self.chrome_grab = true;
+                if let Some(b) = map_button(button) {
+                    self.chrome_press(t, hit, b, serial, event.position);
+                }
+            }
+            PointerEventKind::Release { button, .. } => {
+                self.buttons_held = self.buttons_held.saturating_sub(1);
+                if self.buttons_held == 0 {
+                    self.chrome_grab = false;
+                }
+                if map_button(button) == Some(MouseButton::Left) {
+                    self.chrome_release(t, hit);
+                }
+            }
+            PointerEventKind::Leave { .. } | PointerEventKind::Axis { .. } => {}
+        }
+    }
+
+    /// A button went down on the decorations of toplevel `t`, on `hit`, at
+    /// surface-local `pos`. What Canoe does with the same press: the title bar
+    /// moves the window, and maximizes or restores it on a double click; the
+    /// edges resize it; a right click brings up the window menu; and the
+    /// buttons go down, to act once they come up.
+    fn chrome_press(
+        &mut self,
+        t: Toplevel,
+        hit: Hit,
+        button: MouseButton,
+        serial: u32,
+        pos: (f64, f64),
+    ) {
+        let Some(seat) = self.seat.clone() else {
+            return;
+        };
+        let geometry = self.toplevel_layout(t).geometry;
+        let Some((decor, window)) = self.toplevel_parts(t) else {
+            return;
+        };
+        // Moves, resizes and the window menu are the compositor's: it takes
+        // the press over, and its release never comes to us.
+        let mut handed_over = true;
+        match (hit, button) {
+            (Hit::Resize(edges), MouseButton::Left) => {
+                window.resize(&seat, serial, resize_edge(edges));
+            }
+            (Hit::Title, MouseButton::Left) => {
+                let now = Instant::now();
+                let double = decor
+                    .title_click
+                    .take()
+                    .is_some_and(|at| now.duration_since(at) <= DOUBLE_CLICK);
+                if double {
+                    handed_over = false;
+                    if decor.can_maximize() {
+                        toggle_maximized(decor, window);
+                    }
+                } else {
+                    decor.title_click = Some(now);
+                    window.move_(&seat, serial);
+                }
+            }
+            (Hit::Title | Hit::Button(_), MouseButton::Right)
+                if decor.caps.contains(WindowManagerCapabilities::WINDOW_MENU) =>
+            {
+                // At the pointer, in window-geometry coordinates.
+                let x = pos.0 as i32 - geometry.x;
+                let y = pos.1 as i32 - geometry.y;
+                window.show_window_menu(&seat, serial, (x, y));
+            }
+            (Hit::Button(b), MouseButton::Left) => {
+                handed_over = false;
+                decor.held = Some(b);
+                decor.over_held = true;
+                self.redraw_toplevel(t);
+            }
+            _ => handed_over = false,
+        }
+        if handed_over {
+            self.buttons_held = 0;
+            self.chrome_grab = false;
+        }
+    }
+
+    /// The left button came up on the decorations of toplevel `t`, on `hit`.
+    /// A title-bar button it went down on acts if it comes up there too: the
+    /// close box on the second of a double click — Windows 3.1's control-menu
+    /// box, as on Canoe — the other two at once.
+    fn chrome_release(&mut self, t: Toplevel, hit: Hit) {
+        let Some((decor, window)) = self.toplevel_parts(t) else {
+            return;
+        };
+        let Some(button) = decor.held.take() else {
+            return;
+        };
+        let fire = decor.over_held && hit == Hit::Button(button);
+        decor.over_held = false;
+        let close_click = decor.close_click.take();
+        let mut close = false;
+        if fire {
+            match button {
+                TitleButton::Close => {
+                    let now = Instant::now();
+                    close = close_click.is_some_and(|at| now.duration_since(at) <= DOUBLE_CLICK);
+                    if !close {
+                        decor.close_click = Some(now);
+                    }
+                }
+                TitleButton::Minimize => window.set_minimized(),
+                TitleButton::Maximize => toggle_maximized(decor, window),
+            }
+        }
+        self.redraw_toplevel(t);
+        if close {
+            self.close_toplevel(t);
+        }
+    }
+}
+
+/// Ask the compositor to maximize `window`, or to restore it if `decor` says
+/// it is maximized already.
+fn toggle_maximized(decor: &Decor, window: &XdgWindow) {
+    if decor.maximized {
+        window.unset_maximized();
+    } else {
+        window.set_maximized();
+    }
+}
+
 impl DataDeviceHandler for State {
     fn enter(
         &mut self,
@@ -2444,10 +3141,9 @@ impl DataDeviceHandler for State {
             return;
         }
 
-        let anchor = self.surface_anchor(surface);
-        let pos = self.surface_to_logical(x, y, anchor);
+        let pos = self.surface_point(surface, x, y);
         self.drag = Some(DragSession {
-            anchor,
+            surface: surface.clone(),
             pos,
             accepted: None,
         });
@@ -2478,10 +3174,10 @@ impl DataDeviceHandler for State {
         x: f64,
         y: f64,
     ) {
-        let Some(anchor) = self.drag.as_ref().map(|d| d.anchor) else {
+        let Some(surface) = self.drag.as_ref().map(|d| d.surface.clone()) else {
             return;
         };
-        let pos = self.surface_to_logical(x, y, anchor);
+        let pos = self.surface_point(&surface, x, y);
         if let Some(drag) = self.drag.as_mut() {
             drag.pos = pos;
         }
@@ -3177,11 +3873,15 @@ fn _unused(_b: Buffer, _arc: Arc<()>) {}
 #[cfg(test)]
 mod tests {
     use super::{
-        UI_EPSILON, paths_to_uri_list, percent_encode_path, requantize, surface_offset,
-        surface_units, ui_for,
+        Decor, UI_EPSILON, paths_to_uri_list, percent_encode_path, requantize, resize_cursor,
+        resize_edge, surface_offset, surface_units, ui_for,
     };
+    use crate::chrome::{Edges, WindowFrame};
+    use crate::event::Cursor;
+    use crate::geometry::Rect;
     use crate::mime_drop::parse_uri_list;
     use std::path::PathBuf;
+    use wayland_protocols::xdg::shell::client::xdg_toplevel::ResizeEdge;
 
     #[test]
     fn serializes_paths_to_a_crlf_uri_list() {
@@ -3229,6 +3929,114 @@ mod tests {
     const SCALES: &[f32] = &[1.0, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0];
 
     /// Surface units to a saudade pixel, at the default reference density.
+    fn decorated(frame: WindowFrame) -> Decor {
+        let mut decor = Decor::new(frame);
+        decor.on = true;
+        decor
+    }
+
+    #[test]
+    fn without_decorations_the_content_is_the_whole_surface() {
+        let layout = Decor::new(WindowFrame::Resizable).layout((300, 200), 4.0 / 3.0);
+        assert_eq!(layout.surface, (300, 200));
+        assert_eq!(layout.content, (0, 0));
+        assert_eq!(layout.geometry, Rect::new(0, 0, 300, 200));
+        assert_eq!(layout.input, None);
+        assert_eq!(layout.extra, (0, 0));
+    }
+
+    /// The frame is the window geometry, the shadow lies outside it, and the
+    /// content sits inside the frame's border and title bar: at a scale of 1,
+    /// 4 px of border all round, a 19 px title bar and the line beneath it,
+    /// with 20 px of shadow at the sides and bottom and 10 above.
+    #[test]
+    fn decorations_put_the_frame_in_the_geometry_and_the_shadow_outside() {
+        let layout = decorated(WindowFrame::Resizable).layout((300, 200), 1.0);
+        assert_eq!(layout.extra, (8, 28));
+        assert_eq!(layout.geometry, Rect::new(20, 10, 308, 228));
+        assert_eq!(layout.content, (24, 34));
+        assert_eq!(layout.surface, (348, 258));
+        // The edges can be grabbed a little way into the shadow.
+        assert_eq!(layout.input, Some(Rect::new(14, 4, 320, 240)));
+    }
+
+    #[test]
+    fn a_docked_window_has_no_shadow_and_no_edges_to_grab() {
+        let mut decor = decorated(WindowFrame::Resizable);
+        decor.docked = true;
+        let layout = decor.layout((300, 200), 1.0);
+        assert_eq!(layout.geometry, Rect::new(0, 0, 308, 228));
+        assert_eq!(layout.surface, (308, 228));
+        assert_eq!(layout.input, Some(layout.geometry));
+    }
+
+    #[test]
+    fn a_fixed_window_has_a_thin_frame_and_nothing_to_grab_outside_it() {
+        let layout = decorated(WindowFrame::Fixed).layout((300, 200), 1.0);
+        assert_eq!(layout.extra, (2, 22));
+        assert_eq!(layout.input, Some(layout.geometry));
+    }
+
+    /// Counted in surface units, the room kept for the frame is rounded up,
+    /// so it never comes out short of the frame drawn in it.
+    #[test]
+    fn the_frame_is_never_short_of_room_at_a_fractional_unit() {
+        let ui = ui(1.0);
+        let layout = decorated(WindowFrame::Resizable).layout((300, 200), ui);
+        let (left, top) = (
+            layout.content.0 as i32 - layout.geometry.x,
+            layout.content.1 as i32 - layout.geometry.y,
+        );
+        assert!(left as f32 >= 4.0 * ui);
+        assert!(top as f32 >= 24.0 * ui);
+    }
+
+    #[test]
+    fn resize_handles_map_to_their_edge_and_cursor() {
+        let edges = |top, bottom, left, right| Edges {
+            top,
+            bottom,
+            left,
+            right,
+        };
+        assert_eq!(
+            resize_edge(edges(true, false, true, false)),
+            ResizeEdge::TopLeft
+        );
+        assert_eq!(
+            resize_edge(edges(false, true, false, true)),
+            ResizeEdge::BottomRight
+        );
+        assert_eq!(
+            resize_edge(edges(false, false, false, true)),
+            ResizeEdge::Right
+        );
+        assert_eq!(
+            resize_edge(edges(true, false, false, false)),
+            ResizeEdge::Top
+        );
+        assert_eq!(
+            resize_cursor(edges(true, false, true, false)),
+            Cursor::NwseResize
+        );
+        assert_eq!(
+            resize_cursor(edges(false, true, false, true)),
+            Cursor::NwseResize
+        );
+        assert_eq!(
+            resize_cursor(edges(true, false, false, true)),
+            Cursor::NeswResize
+        );
+        assert_eq!(
+            resize_cursor(edges(false, true, false, false)),
+            Cursor::NsResize
+        );
+        assert_eq!(
+            resize_cursor(edges(false, false, true, false)),
+            Cursor::EwResize
+        );
+    }
+
     fn ui(os_scale: f32) -> f32 {
         ui_for(os_scale, None, 72.0)
     }
