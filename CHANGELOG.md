@@ -18,12 +18,12 @@ While pre-1.0, the minor version is bumped for breaking changes.
   around screenshots, around its windows and dialogs. They move, resize,
   minimize, maximize and close the window, and bring up the compositor's window
   menu. `SAUDADE_DECORATIONS=client` draws them where the compositor would draw
-  its own.
+  its own. (#111)
 
 ### Changed
 
 - `render_framed` centers the window title on the title bar and sets it in
-  bold, as Canoe does.
+  bold, as Canoe does. (#111)
 
 ## [0.9.0] - 2026-11-16
 
