@@ -1336,6 +1336,15 @@ editor.paste();
 editor.select_all();
 ```
 
+`with_read_only(true)` (or `set_read_only`) turns the editor into a box
+of text to read: it still takes the focus, moves its caret, scrolls,
+selects and copies, but typing, Enter, Backspace, Delete, cut and paste
+do nothing. `set_text` keeps working, so the program can show its
+output there. Its paper is tinted a touch towards the theme's `face`, so it
+can be told from an editable box beside it, while the text stays as legible
+as ever — unlike `set_enabled(false)`, which greys the text and refuses
+the focus.
+
 The clipboard handle is lazily initialized via `arboard`; in headless
 environments where the OS clipboard isn't reachable, `copy`/`cut`/
 `paste` simply become no-ops — editing still works. On Windows and macOS

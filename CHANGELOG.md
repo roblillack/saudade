@@ -12,6 +12,11 @@ While pre-1.0, the minor version is bumped for breaking changes.
 
 ### Added
 
+- `TextEditor::with_read_only` / `set_read_only` / `is_read_only`: a
+  read-only editor shows text the user can select, copy and scroll but not
+  change — for output and log boxes. It still takes the focus and keeps its
+  caret; `set_text` keeps working. Its paper is tinted a touch towards the
+  theme's `face`, to tell it from an editable box. (#99)
 - On a Wayland compositor that leaves decorating windows to the program —
   GNOME's Mutter, and any without `zxdg_decoration_manager_v1` — saudade draws
   the Canoe-style title bar, frame and drop shadow that `render_framed` puts

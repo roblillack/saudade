@@ -17,6 +17,10 @@ const MULTI_CLICK_MS: u64 = 400;
 const MULTI_CLICK_SLOP: i32 = 3;
 /// How long each half of the caret blink lasts while the widget is focused.
 const BLINK_HALF_MS: u64 = 500;
+/// How far a read-only editor's paper goes from the theme's background
+/// towards its face: enough to tell the box from an editable one beside it
+/// without greying it like a disabled one.
+const READ_ONLY_TINT: f32 = 0.2;
 
 /// A minimal multi-line text editor — sunken white field, monospace text,
 /// cursor, selection with cut/copy/paste, and a built-in vertical scrollbar.
@@ -33,6 +37,7 @@ pub struct TextEditor {
     selection_anchor: Option<(usize, usize)>,
     focused: bool,
     enabled: bool,
+    read_only: bool,
     scheme: ModifierScheme,
     /// Per-visible-row cumulative pixel widths, keyed by absolute row index.
     /// `widths[col]` is the x-offset (in logical px) where the caret sits
@@ -62,6 +67,7 @@ impl TextEditor {
             selection_anchor: None,
             focused: false,
             enabled: true,
+            read_only: false,
             scheme: ModifierScheme::native(),
             cumulative_widths: HashMap::new(),
             drag_active: false,
@@ -112,6 +118,27 @@ impl TextEditor {
             self.last_click = None;
             self.click_count = 0;
         }
+    }
+
+    pub fn with_read_only(mut self, read_only: bool) -> Self {
+        self.set_read_only(read_only);
+        self
+    }
+
+    pub fn is_read_only(&self) -> bool {
+        self.read_only
+    }
+
+    /// Make the editor read-only, or editable again. A read-only editor shows
+    /// text the user may read, select and copy but not change: it still takes
+    /// the focus, moves its caret and scrolls, while typing, Enter, Backspace,
+    /// Delete, [`cut`](Self::cut) and [`paste`](Self::paste) do nothing.
+    /// [`set_text`](Self::set_text) is the program's own doing and keeps
+    /// working. Its paper is a touch towards the theme's `face`, enough to
+    /// tell it from an editable box beside it; the text stays as legible as
+    /// ever, unlike in a [disabled](Self::set_enabled) editor.
+    pub fn set_read_only(&mut self, read_only: bool) {
+        self.read_only = read_only;
     }
 
     pub fn text(&self) -> String {
@@ -248,6 +275,9 @@ impl TextEditor {
     }
 
     pub fn cut(&mut self) {
+        if self.read_only {
+            return;
+        }
         if let Some(text) = self.selected_text() {
             self.clipboard_set(&text);
             self.delete_selection();
@@ -255,6 +285,9 @@ impl TextEditor {
     }
 
     pub fn paste(&mut self) {
+        if self.read_only {
+            return;
+        }
         let Some(text) = self.clipboard_get() else {
             return;
         };
@@ -562,11 +595,13 @@ impl Widget for TextEditor {
 
         // Sunken field with 1-px outer border around the whole widget (text
         // area + scrollbar live inside) — the background when live, the face
-        // when disabled.
-        let field_bg = if self.enabled {
-            theme.background
-        } else {
+        // when disabled, and a touch of the face when read-only.
+        let field_bg = if !self.enabled {
             theme.face
+        } else if self.read_only {
+            theme.background.mix(theme.face, READ_ONLY_TINT)
+        } else {
+            theme.background
         };
         painter.fill_rect(text, field_bg);
         // The bevel + border self-manage the crisp physical-pixel pass at
@@ -729,7 +764,7 @@ impl Widget for TextEditor {
                 ctx.request_paint();
             }
             Event::Char { ch, modifiers } if !modifiers.has_command() => {
-                if !self.focused {
+                if !self.focused || self.read_only {
                     return;
                 }
                 if *ch == '\t' || *ch >= ' ' {
@@ -773,6 +808,8 @@ impl Widget for TextEditor {
                 }
 
                 match key {
+                    Key::Named(NamedKey::Enter | NamedKey::Backspace | NamedKey::Delete)
+                        if self.read_only => {}
                     Key::Named(NamedKey::Enter) => {
                         self.delete_selection();
                         self.insert_newline();
@@ -1158,6 +1195,66 @@ mod tests {
         chord(&mut editor, Key::Char('a'), cmd);
         type_text(&mut editor, "z");
         assert_eq!(editor.text(), "z");
+    }
+
+    #[test]
+    fn read_only_paper_is_a_touch_towards_the_face() {
+        let theme = Theme::default();
+        let tint = theme.background.mix(theme.face, READ_ONLY_TINT);
+        assert!(tint != theme.background && tint != theme.face);
+
+        let backend = crate::mock::MockBackend::new(200, 120);
+        let shows_tint =
+            |editor: &mut TextEditor| backend.render(editor).pixels().contains(&tint.0);
+        let new = || TextEditor::new(Rect::new(0, 0, 200, 120));
+        assert!(shows_tint(&mut new().with_read_only(true)));
+        assert!(!shows_tint(&mut new()));
+        assert!(!shows_tint(&mut new().with_enabled(false)));
+        assert!(
+            !shows_tint(&mut new().with_read_only(true).with_enabled(false)),
+            "disabled wins"
+        );
+    }
+
+    #[test]
+    fn read_only_editor_ignores_every_edit() {
+        let cmd = Modifiers {
+            logo: true,
+            ..Modifiers::default()
+        };
+        let mut editor = focused("ab\ncd")
+            .with_scheme(ModifierScheme::Mac)
+            .with_read_only(true);
+        assert!(
+            editor.focusable(),
+            "a read-only editor still takes the focus"
+        );
+
+        type_text(&mut editor, "x\t");
+        press(&mut editor, NamedKey::Enter, false);
+        press(&mut editor, NamedKey::Delete, false);
+        press(&mut editor, NamedKey::End, false);
+        press(&mut editor, NamedKey::Backspace, false);
+        chord(&mut editor, Key::Char('a'), cmd);
+        chord(&mut editor, Key::Char('x'), cmd);
+        chord(&mut editor, Key::Char('v'), cmd);
+        press(&mut editor, NamedKey::Delete, false);
+        editor.cut();
+        editor.paste();
+        assert_eq!(editor.text(), "ab\ncd");
+        assert_eq!(
+            editor.selected_text().as_deref(),
+            Some("ab\ncd"),
+            "selecting still works"
+        );
+
+        // The program itself may still replace the text.
+        editor.set_text("ef");
+        assert_eq!(editor.text(), "ef");
+
+        editor.set_read_only(false);
+        type_text(&mut editor, "x");
+        assert_eq!(editor.text(), "xef");
     }
 
     /// An empty selection — anchor and caret at the same spot — must not
