@@ -519,6 +519,7 @@ impl TextEditor {
         if let Some(text) = self.selected_text() {
             self.clipboard_set(&text);
             self.delete_selection();
+            self.show_caret();
         }
     }
 
@@ -529,7 +530,9 @@ impl TextEditor {
         if self.read_only {
             return;
         }
-        self.delete_selection();
+        if self.delete_selection() {
+            self.show_caret();
+        }
     }
 
     pub fn paste(&mut self) {
@@ -540,6 +543,7 @@ impl TextEditor {
             return;
         };
         self.replace_selection(&text.replace('\r', ""), EditKind::Other);
+        self.show_caret();
     }
 
     fn clipboard(&mut self) -> Option<&mut arboard::Clipboard> {
@@ -582,6 +586,14 @@ impl TextEditor {
             top = self.cursor.0 + 1 - visible;
         }
         self.set_scroll_top(top);
+    }
+
+    /// Bring the caret into view and restart its blink. An edit asked for
+    /// through the API — by a menu item, say — moves the caret as surely as
+    /// one typed, and the user has to see where it went.
+    fn show_caret(&mut self) {
+        self.ensure_cursor_visible();
+        self.reset_blink();
     }
 
     fn clamp_col(&mut self) {
@@ -771,6 +783,7 @@ impl TextEditor {
         self.set_caret(edit.before);
         self.redo_stack.push(edit);
         self.coalesce = false;
+        self.show_caret();
     }
 
     /// Restore the edit the last [`undo`](Self::undo) took back. Editing the
@@ -786,6 +799,7 @@ impl TextEditor {
         self.set_caret(edit.after);
         self.undo_stack.push(edit);
         self.coalesce = false;
+        self.show_caret();
     }
 
     // ---------------------------------------------------------------- editing
@@ -1836,6 +1850,42 @@ mod tests {
                 modifiers,
             },
         );
+    }
+
+    /// What an Edit menu calls has to scroll to where it left the caret, as the
+    /// same edit made from the keyboard does. `cut` and `paste` go the same way
+    /// as `delete`, but through the system clipboard, so they stay out of this.
+    #[test]
+    fn an_edit_through_the_api_brings_the_caret_into_view() {
+        let text: Vec<String> = (0..100).map(|n| format!("line {n}")).collect();
+        let mut editor = focused(&text.join("\n"));
+        editor.layout(Rect::new(0, 0, 200, 120));
+        let in_view = |editor: &TextEditor| {
+            let (top, rows) = (editor.scroll_top(), editor.visible_rows() as usize);
+            (top..top + rows).contains(&editor.cursor.0)
+        };
+        let away = |editor: &mut TextEditor, top: usize| {
+            editor.set_scroll_top(top);
+            assert!(!in_view(editor));
+        };
+
+        // Type on the last line, look at the top, take the typing back.
+        editor.cursor = (99, 0);
+        type_text(&mut editor, "x");
+        away(&mut editor, 0);
+        editor.undo();
+        assert!(in_view(&editor), "undo");
+        away(&mut editor, 0);
+        editor.redo();
+        assert!(in_view(&editor), "redo");
+
+        // Select the first lines, look at the bottom, remove them. `cut` ends
+        // the same way, but would leave them on the system clipboard.
+        editor.selection_anchor = Some((0, 0));
+        editor.cursor = (2, 0);
+        away(&mut editor, 80);
+        editor.delete();
+        assert!(in_view(&editor), "delete");
     }
 
     #[test]
