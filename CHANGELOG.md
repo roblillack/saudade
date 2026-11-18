@@ -50,6 +50,12 @@ While pre-1.0, the minor version is bumped for breaking changes.
 
 ### Fixed
 
+- A child's popup closed from the keyboard — Escape on an open `Dropdown` or
+  context menu inside a `Container`, `Row` or `Column` — left that container
+  holding the pointer for it. Until the pointer next moved, a menu bar's
+  accelerators and a default button's Enter stayed switched off, and the
+  first press went to the closed popup's owner instead of where it landed.
+  (#104)
 - `TextEditor` painted a line wider than the field straight across its right
   border, the scrollbar and whatever lay beyond. Text is now clipped to the
   inside of the field. (#101)

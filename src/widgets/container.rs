@@ -109,6 +109,15 @@ impl Container {
         focused
     }
 
+    /// The child holding the pointer, if it still holds it. A capture begins
+    /// with a press but need not end with a pointer event: Escape closes the
+    /// popup a child kept the pointer for. Nothing tells the container, so it
+    /// asks the child rather than trust what it noted down.
+    fn capturing(&self) -> Option<usize> {
+        self.captured
+            .filter(|&idx| self.children[idx].captures_pointer())
+    }
+
     fn choose_target(&self, event: &Event) -> Option<usize> {
         if event.is_keyboard() {
             return self.focused;
@@ -258,6 +267,8 @@ impl Widget for Container {
     }
 
     fn event(&mut self, event: &Event, ctx: &mut EventCtx) {
+        // Forget a capture its holder gave up since the last event.
+        self.captured = self.capturing();
         // Non-positional, non-keyboard events with no current capture
         // (e.g. PointerLeave on its own): broadcast to all children.
         if !event.is_keyboard() && event.position().is_none() && self.captured.is_none() {
@@ -378,7 +389,7 @@ impl Widget for Container {
     }
 
     fn captures_pointer(&self) -> bool {
-        self.captured.is_some()
+        self.capturing().is_some()
     }
 
     fn focusable(&self) -> bool {
@@ -448,6 +459,71 @@ mod tests {
         fn focusable(&self) -> bool {
             true
         }
+    }
+
+    /// A stand-in for a widget with a popup: a press opens it and keeps the
+    /// pointer for as long as it is up, and Escape closes it.
+    struct Popup {
+        rect: Rect,
+        open: bool,
+    }
+
+    impl Widget for Popup {
+        fn bounds(&self) -> Rect {
+            self.rect
+        }
+        fn paint(&mut self, _: &mut Painter, _: &Theme) {}
+        fn event(&mut self, event: &Event, ctx: &mut EventCtx) {
+            match event {
+                Event::PointerDown { .. } => {
+                    self.open = true;
+                    ctx.request_focus();
+                }
+                Event::KeyDown {
+                    key: Key::Named(crate::event::NamedKey::Escape),
+                    ..
+                } => self.open = false,
+                _ => {}
+            }
+        }
+        fn captures_pointer(&self) -> bool {
+            self.open
+        }
+        fn focusable(&self) -> bool {
+            true
+        }
+    }
+
+    /// A popup closed from the keyboard used to stay noted as the pointer's
+    /// holder until the next pointer event, which it then swallowed — and a
+    /// parent asking in the meantime was told the pointer was still taken.
+    #[test]
+    fn a_capture_ended_by_a_key_is_let_go() {
+        let hit = Rc::new(Cell::new(false));
+        let mut c = Container::new(200, 100)
+            .add(Popup {
+                rect: Rect::new(0, 0, 100, 100),
+                open: false,
+            })
+            .add(Probe {
+                rect: Rect::new(100, 0, 100, 100),
+                hit: hit.clone(),
+            });
+        press(&mut c, 10, 10);
+        assert!(c.captures_pointer(), "the open popup holds the pointer");
+
+        let mut ctx = EventCtx::new();
+        c.event(
+            &Event::KeyDown {
+                key: Key::Named(crate::event::NamedKey::Escape),
+                modifiers: Modifiers::default(),
+            },
+            &mut ctx,
+        );
+        assert!(!c.captures_pointer(), "closed, it holds nothing");
+
+        press(&mut c, 150, 10);
+        assert!(hit.get(), "the next press goes where it lands");
     }
 
     fn press(c: &mut Container, x: i32, y: i32) {
