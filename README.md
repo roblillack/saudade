@@ -1384,6 +1384,15 @@ can be told from an editable box beside it, while the text stays as legible
 as ever — unlike `set_enabled(false)`, which greys the text and refuses
 the focus.
 
+Without the focus, a small wedge under the line marks where the caret
+will be once the focus comes back, as in `TextInput`.
+`with_unfocused_caret(false)` (or `set_unfocused_caret`) leaves it out,
+for a window where only the focused editor should show a caret.
+A selection stays visible without the focus too, in the muted inactive
+colors; `with_unfocused_selection(false)` (or `set_unfocused_selection`)
+keeps it but shows it only while the editor has the focus, as a Windows
+edit control does.
+
 The clipboard handle is lazily initialized via `arboard`; in headless
 environments where the OS clipboard isn't reachable, `copy`/`cut`/
 `paste` simply become no-ops — editing still works. On Windows and macOS

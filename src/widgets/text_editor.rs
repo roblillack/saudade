@@ -110,6 +110,8 @@ pub struct TextEditor {
     focused: bool,
     enabled: bool,
     read_only: bool,
+    unfocused_caret: bool,
+    unfocused_selection: bool,
     scheme: ModifierScheme,
     /// Per-visible-row cumulative pixel widths, keyed by absolute row index.
     /// `widths[col]` is the x-offset (in logical px) where the caret sits
@@ -165,6 +167,8 @@ impl TextEditor {
             focused: false,
             enabled: true,
             read_only: false,
+            unfocused_caret: true,
+            unfocused_selection: true,
             scheme: ModifierScheme::native(),
             cumulative_widths: HashMap::new(),
             drag_active: false,
@@ -217,6 +221,31 @@ impl TextEditor {
         if !enabled {
             self.menu.close();
         }
+    }
+
+    /// Whether an editor without the focus marks its caret with a small wedge
+    /// under the line. On by default; a window with several editors may want
+    /// the caret to show in the focused one only, as on Windows.
+    pub fn with_unfocused_caret(mut self, shown: bool) -> Self {
+        self.unfocused_caret = shown;
+        self
+    }
+
+    pub fn set_unfocused_caret(&mut self, shown: bool) {
+        self.unfocused_caret = shown;
+    }
+
+    /// Whether an editor without the focus still shows its selection, in the
+    /// muted inactive colors. On by default; turned off, the selection is
+    /// kept but drawn as plain text until the focus comes back, as a Windows
+    /// edit control does.
+    pub fn with_unfocused_selection(mut self, shown: bool) -> Self {
+        self.unfocused_selection = shown;
+        self
+    }
+
+    pub fn set_unfocused_selection(&mut self, shown: bool) {
+        self.unfocused_selection = shown;
     }
 
     pub fn with_enabled(mut self, enabled: bool) -> Self {
@@ -1076,7 +1105,7 @@ impl Widget for TextEditor {
                 if self.blink_on {
                     painter.v_line(cx, cy, LINE_HEIGHT, theme.text);
                 }
-            } else {
+            } else if self.unfocused_caret {
                 // Unfocused: a small wedge at the bottom of the line marks
                 // where the caret would land if the user clicked back in.
                 draw_unfocused_caret(painter, cx, cy + LINE_HEIGHT - 2, theme.text);
@@ -1484,11 +1513,13 @@ impl TextEditor {
             let e = if row == end.0 { end.1 } else { total_chars };
             if s == e { None } else { Some((s, e)) }
         });
+        let row_selection = row_selection.filter(|_| self.focused || self.unfocused_selection);
 
         // An unfocused field still draws its selection so the user can see
         // what's selected when keyboard focus is elsewhere — but in the muted
         // "inactive" palette (black-on-gray) rather than the active
-        // navy-on-white, matching CUA convention.
+        // navy-on-white, matching CUA convention. `unfocused_selection`
+        // turned off leaves it out, above.
         let (sel_bg, sel_text) = if self.focused {
             (theme.highlight_bg, theme.highlight_text)
         } else {
@@ -1805,6 +1836,50 @@ mod tests {
                 modifiers,
             },
         );
+    }
+
+    #[test]
+    fn unfocused_caret_can_be_hidden() {
+        let backend = crate::mock::MockBackend::new(200, 120);
+        let paint = |editor: &mut TextEditor| backend.render(editor).pixels().to_vec();
+        let new = || TextEditor::new(Rect::new(0, 0, 200, 120)).with_text("abc");
+
+        // What the field looks like with no caret at all: focused, in the
+        // dark half of the blink.
+        let mut bare = new();
+        bare.set_focused(true);
+        bare.blink_on = false;
+        let bare = paint(&mut bare);
+
+        assert_ne!(paint(&mut new()), bare, "the wedge marks the caret");
+        assert_eq!(paint(&mut new().with_unfocused_caret(false)), bare);
+    }
+
+    #[test]
+    fn unfocused_selection_can_be_hidden() {
+        // The band is as wide as the text, so this takes a font.
+        let Some(backend) = backend() else { return };
+        let paint = |editor: &mut TextEditor| backend.render(editor).pixels().to_vec();
+        // No wedge, so only the selection can tell two paints apart.
+        let new = || {
+            TextEditor::new(Rect::new(0, 0, 200, 120))
+                .with_text("abc")
+                .with_unfocused_caret(false)
+        };
+        let plain = paint(&mut new());
+
+        let mut editor = new();
+        editor.select_all();
+        assert_ne!(paint(&mut editor), plain, "shown, muted, by default");
+
+        editor.set_unfocused_selection(false);
+        assert_eq!(paint(&mut editor), plain);
+
+        // Hidden, not dropped: it is back with the focus.
+        editor.set_focused(true);
+        editor.blink_on = false;
+        assert_ne!(paint(&mut editor), plain);
+        assert!(editor.has_selection());
     }
 
     const LONG: &str = "0123456789012345678901234567890123456789012345678901234567890123456789";
