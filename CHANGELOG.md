@@ -12,6 +12,12 @@ While pre-1.0, the minor version is bumped for breaking changes.
 
 ### Added
 
+- Undo and redo in `TextEditor`: Ctrl+Z takes back the last edit and
+  Ctrl+Shift+Z (or Ctrl+Y) restores it, with ⌘ in Ctrl's place on macOS —
+  where ⌘Y is left alone. `undo()`, `redo()`, `can_undo()` and `can_redo()`
+  do the same for an Edit menu. A run of typing, of Backspaces or of Deletes
+  is one step; the history holds a thousand steps and is forgotten by
+  `set_text`. The notepad example's Undo and Redo items now work. (#100)
 - `TextEditor::with_read_only` / `set_read_only` / `is_read_only`: a
   read-only editor shows text the user can select, copy and scroll but not
   change — for output and log boxes. It still takes the focus and keeps its

@@ -127,8 +127,28 @@ pub fn window(initial_path: PathBuf) -> (WindowConfig, impl Widget) {
         .add_menu(Menu::new(
             "&Edit",
             vec![
-                MenuItem::action("&Undo", warn(&dialog, "Undo", UNIMPL)),
-                MenuItem::action("&Redo", warn(&dialog, "Redo", UNIMPL)),
+                MenuItem::action("&Undo", {
+                    let editor = editor.clone();
+                    move |cx| {
+                        editor.borrow_mut().undo();
+                        cx.request_paint();
+                    }
+                })
+                .with_enabled({
+                    let editor = editor.clone();
+                    move || editor.borrow().can_undo()
+                }),
+                MenuItem::action("&Redo", {
+                    let editor = editor.clone();
+                    move |cx| {
+                        editor.borrow_mut().redo();
+                        cx.request_paint();
+                    }
+                })
+                .with_enabled({
+                    let editor = editor.clone();
+                    move || editor.borrow().can_redo()
+                }),
                 MenuItem::separator(),
                 MenuItem::action("Cu&t", {
                     let editor = editor.clone();

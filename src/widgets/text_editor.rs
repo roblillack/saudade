@@ -21,9 +21,50 @@ const BLINK_HALF_MS: u64 = 500;
 /// towards its face: enough to tell the box from an editable one beside it
 /// without greying it like a disabled one.
 const READ_ONLY_TINT: f32 = 0.2;
+/// How many steps back [`TextEditor::undo`] can go. Past this the oldest
+/// step is forgotten, so a long session can't grow the history without end.
+const UNDO_LIMIT: usize = 1000;
+
+/// A caret position: `(row, column)`, the column counted in characters.
+type Pos = (usize, usize);
+
+/// Where the caret and the selection anchor stood at some moment.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Caret {
+    cursor: Pos,
+    anchor: Option<Pos>,
+}
+
+/// What kind of edit a history step came from. Steps of the same kind that
+/// follow one another without the caret moving in between grow into a single
+/// step, so one undo takes back a run of typing rather than a letter.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum EditKind {
+    /// A typed character.
+    Typing,
+    /// Backspace over one character.
+    Backspace,
+    /// Delete of one character.
+    Delete,
+    /// Anything else — Enter, cut, paste, a replaced selection. Always a
+    /// step of its own.
+    Other,
+}
+
+/// One step of the undo history: at `at`, `removed` gave way to `inserted`.
+#[derive(Debug)]
+struct Edit {
+    at: Pos,
+    removed: String,
+    inserted: String,
+    before: Caret,
+    after: Caret,
+    kind: EditKind,
+}
 
 /// A minimal multi-line text editor — sunken white field, monospace text,
-/// cursor, selection with cut/copy/paste, and a built-in vertical scrollbar.
+/// cursor, selection with cut/copy/paste, undo/redo, and a built-in vertical
+/// scrollbar.
 ///
 /// Only the visible rows are measured and drawn on each paint — text that's
 /// scrolled out of view contributes no work to the render loop. The scrollbar
@@ -33,8 +74,15 @@ pub struct TextEditor {
     pub rect: Rect,
     pub font_size: f32,
     lines: Vec<String>,
-    cursor: (usize, usize),
-    selection_anchor: Option<(usize, usize)>,
+    cursor: Pos,
+    selection_anchor: Option<Pos>,
+    /// The user's edits, oldest first; [`undo`](Self::undo) takes the last.
+    undo_stack: Vec<Edit>,
+    /// The steps undone since the last edit, for [`redo`](Self::redo).
+    redo_stack: Vec<Edit>,
+    /// Whether the next edit may grow the last history step instead of adding
+    /// one. Cleared by whatever ends a run: moving the caret, undo and redo.
+    coalesce: bool,
     focused: bool,
     enabled: bool,
     read_only: bool,
@@ -65,6 +113,9 @@ impl TextEditor {
             lines: vec![String::new()],
             cursor: (0, 0),
             selection_anchor: None,
+            undo_stack: Vec::new(),
+            redo_stack: Vec::new(),
+            coalesce: false,
             focused: false,
             enabled: true,
             read_only: false,
@@ -132,7 +183,8 @@ impl TextEditor {
     /// Make the editor read-only, or editable again. A read-only editor shows
     /// text the user may read, select and copy but not change: it still takes
     /// the focus, moves its caret and scrolls, while typing, Enter, Backspace,
-    /// Delete, [`cut`](Self::cut) and [`paste`](Self::paste) do nothing.
+    /// Delete, [`cut`](Self::cut), [`paste`](Self::paste), [`undo`](Self::undo)
+    /// and [`redo`](Self::redo) do nothing.
     /// [`set_text`](Self::set_text) is the program's own doing and keeps
     /// working. Its paper is a touch towards the theme's `face`, enough to
     /// tell it from an editable box beside it; the text stays as legible as
@@ -145,7 +197,11 @@ impl TextEditor {
         self.lines.join("\n")
     }
 
+    /// Replace the whole text, putting the caret at the start. The undo
+    /// history goes with the old text: this is a new document, not an edit.
     pub fn set_text(&mut self, text: &str) {
+        self.undo_stack.clear();
+        self.redo_stack.clear();
         self.lines = if text.is_empty() {
             vec![String::new()]
         } else {
@@ -215,6 +271,10 @@ impl TextEditor {
 
     fn selected_text(&self) -> Option<String> {
         let (start, end) = self.selection_range()?;
+        Some(self.text_between(start, end))
+    }
+
+    fn text_between(&self, start: Pos, end: Pos) -> String {
         let mut out = String::new();
         if start.0 == end.0 {
             let line = &self.lines[start.0];
@@ -228,35 +288,22 @@ impl TextEditor {
             }
             out.extend(self.lines[end.0].chars().take(end.1));
         }
-        Some(out)
+        out
     }
 
-    /// Delete the selected text, if any, and drop the selection anchor. Every
-    /// edit starts here: an empty selection (anchor on the caret) has nothing
-    /// to delete, but leaving its anchor behind would select whatever the edit
-    /// inserts — or point at a row that a Backspace joining two lines removed.
+    /// Delete the selected text, if any, and drop the selection anchor. An
+    /// empty selection (anchor on the caret) has nothing to delete, but
+    /// leaving its anchor behind would select whatever the edit inserts — or
+    /// point at a row that a Backspace joining two lines removed.
     fn delete_selection(&mut self) -> bool {
-        let range = self.selection_range();
-        self.selection_anchor = None;
-        let Some((start, end)) = range else {
-            return false;
-        };
-        if start.0 == end.0 {
-            let line = &mut self.lines[start.0];
-            let bs = char_to_byte(line, start.1);
-            let be = char_to_byte(line, end.1);
-            line.replace_range(bs..be, "");
-        } else {
-            let first_prefix: String = self.lines[start.0].chars().take(start.1).collect();
-            let last_suffix: String = self.lines[end.0].chars().skip(end.1).collect();
-            self.lines[start.0] = format!("{}{}", first_prefix, last_suffix);
-            self.lines.drain((start.0 + 1)..=end.0);
-        }
-        self.cursor = start;
-        true
+        let selected = self.selection_range().is_some();
+        self.replace_selection("", EditKind::Other);
+        selected
     }
 
     fn before_move(&mut self, extend: bool) {
+        // Moving the caret ends a run of typing, even if it comes back.
+        self.coalesce = false;
         if extend {
             if self.selection_anchor.is_none() {
                 self.selection_anchor = Some(self.cursor);
@@ -291,8 +338,7 @@ impl TextEditor {
         let Some(text) = self.clipboard_get() else {
             return;
         };
-        self.delete_selection();
-        self.insert_text(&text);
+        self.replace_selection(&text.replace('\r', ""), EditKind::Other);
     }
 
     fn clipboard(&mut self) -> Option<&mut arboard::Clipboard> {
@@ -312,7 +358,7 @@ impl TextEditor {
         self.clipboard().and_then(|cb| cb.get_text().ok())
     }
 
-    // ---------------------------------------------------------------- editing
+    // ---------------------------------------------------------------- scrolling
 
     fn visible_rows(&self) -> i32 {
         ((self.text_area().h - PADDING_Y * 2) / LINE_HEIGHT).max(1)
@@ -343,32 +389,150 @@ impl TextEditor {
         }
     }
 
+    // ---------------------------------------------------------------- history
+
+    fn caret(&self) -> Caret {
+        Caret {
+            cursor: self.cursor,
+            anchor: self.selection_anchor,
+        }
+    }
+
+    fn set_caret(&mut self, caret: Caret) {
+        self.cursor = caret.cursor;
+        self.selection_anchor = caret.anchor;
+    }
+
+    /// Put `text` in place of what lies between `start` and `end`, and return
+    /// what was there. Every change to the text after [`set_text`] comes
+    /// through here.
+    ///
+    /// [`set_text`]: Self::set_text
+    fn splice(&mut self, start: Pos, end: Pos, text: &str) -> String {
+        let removed = self.text_between(start, end);
+        let head = char_to_byte(&self.lines[start.0], start.1);
+        let tail = char_to_byte(&self.lines[end.0], end.1);
+        let mut lines: Vec<String> = text.split('\n').map(String::from).collect();
+        lines[0].insert_str(0, &self.lines[start.0][..head]);
+        let last = lines.len() - 1;
+        lines[last].push_str(&self.lines[end.0][tail..]);
+        self.lines.splice(start.0..=end.0, lines);
+        removed
+    }
+
+    /// One edit by the user: replace `start..end` with `text`, leave the caret
+    /// behind the new text, and remember the step for [`undo`](Self::undo).
+    fn edit(&mut self, start: Pos, end: Pos, text: &str, kind: EditKind) {
+        let before = self.caret();
+        let removed = self.splice(start, end, text);
+        self.cursor = end_of(start, text);
+        self.selection_anchor = None;
+        if removed.is_empty() && text.is_empty() {
+            return;
+        }
+        self.record(Edit {
+            at: start,
+            removed,
+            inserted: text.to_string(),
+            before,
+            after: self.caret(),
+            kind,
+        });
+    }
+
+    /// Replace the selection with `text`, or insert it at the caret when
+    /// nothing is selected.
+    fn replace_selection(&mut self, text: &str, kind: EditKind) {
+        let (start, end) = self.selection_range().unwrap_or((self.cursor, self.cursor));
+        self.edit(start, end, text, kind);
+    }
+
+    fn record(&mut self, edit: Edit) {
+        self.redo_stack.clear();
+        // A run of typing, of Backspaces or of Deletes is one step — as long as
+        // nothing ended it and the caret is still where the last of them left
+        // it (`select_all` and friends move it without saying so).
+        if self.coalesce
+            && let Some(last) = self.undo_stack.last_mut()
+            && last.kind == edit.kind
+            && last.after == edit.before
+        {
+            match edit.kind {
+                EditKind::Typing if edit.removed.is_empty() => {
+                    last.inserted.push_str(&edit.inserted);
+                    last.after = edit.after;
+                    return;
+                }
+                EditKind::Backspace => {
+                    last.removed.insert_str(0, &edit.removed);
+                    last.at = edit.at;
+                    last.after = edit.after;
+                    return;
+                }
+                EditKind::Delete => {
+                    last.removed.push_str(&edit.removed);
+                    return;
+                }
+                _ => {}
+            }
+        }
+        self.undo_stack.push(edit);
+        if self.undo_stack.len() > UNDO_LIMIT {
+            self.undo_stack.remove(0);
+        }
+        self.coalesce = true;
+    }
+
+    /// `true` if [`undo`](Self::undo) has an edit to take back — what an Edit
+    /// menu greys its Undo item by.
+    pub fn can_undo(&self) -> bool {
+        !self.read_only && !self.undo_stack.is_empty()
+    }
+
+    /// `true` if [`redo`](Self::redo) has an undone edit to restore.
+    pub fn can_redo(&self) -> bool {
+        !self.read_only && !self.redo_stack.is_empty()
+    }
+
+    /// Take back the user's last edit, putting the caret and the selection
+    /// back where they were before it. A run of typing counts as one edit, as
+    /// does a run of Backspaces or Deletes.
+    pub fn undo(&mut self) {
+        if self.read_only {
+            return;
+        }
+        let Some(edit) = self.undo_stack.pop() else {
+            return;
+        };
+        self.splice(edit.at, end_of(edit.at, &edit.inserted), &edit.removed);
+        self.set_caret(edit.before);
+        self.redo_stack.push(edit);
+        self.coalesce = false;
+    }
+
+    /// Restore the edit the last [`undo`](Self::undo) took back. Editing the
+    /// text after an undo drops what could have been redone.
+    pub fn redo(&mut self) {
+        if self.read_only {
+            return;
+        }
+        let Some(edit) = self.redo_stack.pop() else {
+            return;
+        };
+        self.splice(edit.at, end_of(edit.at, &edit.removed), &edit.inserted);
+        self.set_caret(edit.after);
+        self.undo_stack.push(edit);
+        self.coalesce = false;
+    }
+
+    // ---------------------------------------------------------------- editing
+
     fn insert_char(&mut self, ch: char) {
-        let (row, col) = self.cursor;
-        let line = &mut self.lines[row];
-        let byte_idx = char_to_byte(line, col);
-        line.insert(byte_idx, ch);
-        self.cursor.1 += 1;
+        self.replace_selection(ch.encode_utf8(&mut [0; 4]), EditKind::Typing);
     }
 
     fn insert_newline(&mut self) {
-        let (row, col) = self.cursor;
-        let line = self.lines[row].clone();
-        let byte_idx = char_to_byte(&line, col);
-        let (left, right) = line.split_at(byte_idx);
-        self.lines[row] = left.to_string();
-        self.lines.insert(row + 1, right.to_string());
-        self.cursor = (row + 1, 0);
-    }
-
-    fn insert_text(&mut self, text: &str) {
-        for ch in text.chars() {
-            match ch {
-                '\n' => self.insert_newline(),
-                '\r' => {}
-                _ => self.insert_char(ch),
-            }
-        }
+        self.replace_selection("\n", EditKind::Other);
     }
 
     fn backspace(&mut self) {
@@ -376,19 +540,14 @@ impl TextEditor {
             return;
         }
         let (row, col) = self.cursor;
-        if col > 0 {
-            let line = &mut self.lines[row];
-            let prev = col - 1;
-            let start = char_to_byte(line, prev);
-            let end = char_to_byte(line, col);
-            line.replace_range(start..end, "");
-            self.cursor.1 = prev;
+        let start = if col > 0 {
+            (row, col - 1)
         } else if row > 0 {
-            let prev_len = self.lines[row - 1].chars().count();
-            let tail = self.lines.remove(row);
-            self.lines[row - 1].push_str(&tail);
-            self.cursor = (row - 1, prev_len);
-        }
+            (row - 1, self.lines[row - 1].chars().count())
+        } else {
+            return;
+        };
+        self.edit(start, (row, col), "", EditKind::Backspace);
     }
 
     fn delete_forward(&mut self) {
@@ -396,16 +555,14 @@ impl TextEditor {
             return;
         }
         let (row, col) = self.cursor;
-        let line_len = self.lines[row].chars().count();
-        if col < line_len {
-            let line = &mut self.lines[row];
-            let start = char_to_byte(line, col);
-            let end = char_to_byte(line, col + 1);
-            line.replace_range(start..end, "");
+        let end = if col < self.lines[row].chars().count() {
+            (row, col + 1)
         } else if row + 1 < self.lines.len() {
-            let next = self.lines.remove(row + 1);
-            self.lines[row].push_str(&next);
-        }
+            (row + 1, 0)
+        } else {
+            return;
+        };
+        self.edit((row, col), end, "", EditKind::Delete);
     }
 
     fn move_left(&mut self) {
@@ -728,6 +885,7 @@ impl Widget for TextEditor {
                 ..
             } => {
                 ctx.request_focus();
+                self.coalesce = false;
                 let clicks = self.register_click(*pos);
                 self.place_cursor_at(*pos);
                 match clicks {
@@ -768,7 +926,6 @@ impl Widget for TextEditor {
                     return;
                 }
                 if *ch == '\t' || *ch >= ' ' {
-                    self.delete_selection();
                     self.insert_char(*ch);
                     self.ensure_cursor_visible();
                     self.reset_blink();
@@ -798,6 +955,23 @@ impl Widget for TextEditor {
                             self.select_all();
                             true
                         }
+                        // Shift+Z redoes everywhere; Ctrl+Y is the PC's own
+                        // chord for it, and no shortcut at all on a Mac.
+                        'z' if modifiers.shift => {
+                            self.redo();
+                            self.ensure_cursor_visible();
+                            true
+                        }
+                        'z' => {
+                            self.undo();
+                            self.ensure_cursor_visible();
+                            true
+                        }
+                        'y' if self.scheme == ModifierScheme::Pc => {
+                            self.redo();
+                            self.ensure_cursor_visible();
+                            true
+                        }
                         _ => false,
                     };
                     if consumed {
@@ -811,7 +985,6 @@ impl Widget for TextEditor {
                     Key::Named(NamedKey::Enter | NamedKey::Backspace | NamedKey::Delete)
                         if self.read_only => {}
                     Key::Named(NamedKey::Enter) => {
-                        self.delete_selection();
                         self.insert_newline();
                         self.ensure_cursor_visible();
                         self.reset_blink();
@@ -1064,6 +1237,15 @@ impl TextEditor {
     }
 }
 
+/// Where text inserted at `at` ends: on the same row unless it has line
+/// breaks, in which case on the row of its last line.
+fn end_of(at: Pos, text: &str) -> Pos {
+    match text.rsplit_once('\n') {
+        None => (at.0, at.1 + text.chars().count()),
+        Some((head, last)) => (at.0 + head.matches('\n').count() + 1, last.chars().count()),
+    }
+}
+
 fn char_to_byte(line: &str, char_idx: usize) -> usize {
     line.char_indices()
         .nth(char_idx)
@@ -1255,6 +1437,252 @@ mod tests {
         editor.set_read_only(false);
         type_text(&mut editor, "x");
         assert_eq!(editor.text(), "xef");
+    }
+
+    fn mac(text: &str) -> TextEditor {
+        focused(text).with_scheme(ModifierScheme::Mac)
+    }
+
+    fn cmd(shift: bool) -> Modifiers {
+        Modifiers {
+            logo: true,
+            shift,
+            ..Modifiers::default()
+        }
+    }
+
+    #[test]
+    fn undo_takes_back_a_run_of_typing_at_once() {
+        let mut editor = mac("");
+        assert!(!editor.can_undo());
+        type_text(&mut editor, "hello");
+        assert!(editor.can_undo() && !editor.can_redo());
+
+        chord(&mut editor, Key::Char('z'), cmd(false));
+        assert_eq!(editor.text(), "");
+        assert!(!editor.can_undo() && editor.can_redo());
+
+        chord(&mut editor, Key::Char('z'), cmd(true));
+        assert_eq!(editor.text(), "hello");
+        assert_eq!(editor.cursor, (0, 5));
+        assert!(editor.can_undo() && !editor.can_redo());
+    }
+
+    #[test]
+    fn moving_the_caret_ends_a_run() {
+        let mut editor = mac("");
+        type_text(&mut editor, "ab");
+        press(&mut editor, NamedKey::Left, false);
+        press(&mut editor, NamedKey::Right, false);
+        type_text(&mut editor, "cd");
+        press(&mut editor, NamedKey::Enter, false);
+        type_text(&mut editor, "ef");
+        assert_eq!(editor.text(), "abcd\nef");
+
+        // "ef", the line break, "cd" and "ab" are four steps.
+        for expected in ["abcd\n", "abcd", "ab", ""] {
+            editor.undo();
+            assert_eq!(editor.text(), expected);
+        }
+        editor.undo();
+        assert_eq!(editor.text(), "", "nothing left to undo");
+    }
+
+    #[test]
+    fn undo_puts_a_replaced_selection_back_selected() {
+        let mut editor = mac("one two");
+        press(&mut editor, NamedKey::End, false);
+        for _ in 0..3 {
+            press(&mut editor, NamedKey::Left, true);
+        }
+        type_text(&mut editor, "2!");
+        assert_eq!(editor.text(), "one 2!");
+
+        editor.undo();
+        assert_eq!(editor.text(), "one two");
+        assert_eq!(editor.selected_text().as_deref(), Some("two"));
+
+        editor.redo();
+        assert_eq!(editor.text(), "one 2!");
+        assert_eq!(editor.cursor, (0, 6));
+        assert_eq!(editor.selected_text(), None);
+    }
+
+    #[test]
+    fn runs_of_backspace_and_delete_are_one_step_each() {
+        let mut editor = mac("ab\ncd\nef");
+        press(&mut editor, NamedKey::Down, false);
+        press(&mut editor, NamedKey::End, false);
+        // Backspace through "cd" and the line break before it…
+        for _ in 0..3 {
+            press(&mut editor, NamedKey::Backspace, false);
+        }
+        assert_eq!(editor.text(), "ab\nef");
+        // …then Delete through the line break after it and the "e".
+        for _ in 0..2 {
+            press(&mut editor, NamedKey::Delete, false);
+        }
+        assert_eq!(editor.text(), "abf");
+
+        editor.undo();
+        assert_eq!(editor.text(), "ab\nef");
+        assert_eq!(editor.cursor, (0, 2));
+        editor.undo();
+        assert_eq!(editor.text(), "ab\ncd\nef");
+        assert_eq!(editor.cursor, (1, 2));
+        editor.redo();
+        editor.redo();
+        assert_eq!(editor.text(), "abf");
+    }
+
+    #[test]
+    fn an_edit_after_undo_drops_the_redo() {
+        let mut editor = mac("");
+        type_text(&mut editor, "a");
+        editor.undo();
+        type_text(&mut editor, "b");
+        assert!(!editor.can_redo());
+        editor.redo();
+        assert_eq!(editor.text(), "b");
+        // The undone "a" must not have grown into the new step either.
+        editor.undo();
+        assert_eq!(editor.text(), "");
+        assert!(!editor.can_undo());
+    }
+
+    #[test]
+    fn typing_after_an_undo_is_a_step_of_its_own() {
+        let mut editor = mac("");
+        type_text(&mut editor, "a");
+        press(&mut editor, NamedKey::Enter, false);
+        // Back on the first line, right where the "a" step left the caret.
+        editor.undo();
+        type_text(&mut editor, "b");
+        editor.undo();
+        assert_eq!(editor.text(), "a");
+    }
+
+    #[test]
+    fn a_multi_line_replacement_undoes_whole() {
+        let mut editor = mac("ab\ncd\nef");
+        press(&mut editor, NamedKey::Right, false);
+        press(&mut editor, NamedKey::Down, true);
+        press(&mut editor, NamedKey::Down, true);
+        // What a paste does with the clipboard's text.
+        editor.replace_selection("1\n2\n3\n4", EditKind::Other);
+        assert_eq!(editor.text(), "a1\n2\n3\n4f");
+        assert_eq!(editor.cursor, (3, 1));
+
+        editor.undo();
+        assert_eq!(editor.text(), "ab\ncd\nef");
+        assert_eq!(editor.selected_text().as_deref(), Some("b\ncd\ne"));
+        editor.redo();
+        assert_eq!(editor.text(), "a1\n2\n3\n4f");
+        assert_eq!(editor.cursor, (3, 1));
+    }
+
+    #[test]
+    fn set_text_forgets_the_history() {
+        let mut editor = mac("");
+        type_text(&mut editor, "a");
+        editor.undo();
+        editor.set_text("new");
+        assert!(!editor.can_undo() && !editor.can_redo());
+        editor.redo();
+        editor.undo();
+        assert_eq!(editor.text(), "new");
+    }
+
+    #[test]
+    fn read_only_editor_keeps_its_history_untouched() {
+        let mut editor = mac("");
+        type_text(&mut editor, "a");
+        editor.set_read_only(true);
+        assert!(!editor.can_undo());
+        chord(&mut editor, Key::Char('z'), cmd(false));
+        assert_eq!(editor.text(), "a");
+
+        editor.set_read_only(false);
+        editor.undo();
+        assert_eq!(editor.text(), "");
+    }
+
+    #[test]
+    fn ctrl_y_redoes_on_a_pc_only() {
+        let ctrl = Modifiers {
+            control: true,
+            ..Modifiers::default()
+        };
+        let mut editor = focused("").with_scheme(ModifierScheme::Pc);
+        type_text(&mut editor, "a");
+        chord(&mut editor, Key::Char('z'), ctrl);
+        assert_eq!(editor.text(), "");
+        chord(&mut editor, Key::Char('y'), ctrl);
+        assert_eq!(editor.text(), "a");
+
+        let mut editor = mac("");
+        type_text(&mut editor, "a");
+        editor.undo();
+        chord(&mut editor, Key::Char('y'), cmd(false));
+        assert_eq!(editor.text(), "", "⌘Y is not a shortcut on a Mac");
+    }
+
+    /// Whatever the edits, undoing all of them leads back through every text
+    /// the editor showed on the way, and redoing them forward again.
+    #[test]
+    fn undo_and_redo_retrace_any_edits() {
+        // A small deterministic generator — no need for a dependency.
+        let mut seed = 0x2545_f491_4f6c_dd1d_u64;
+        let mut next = |n: u64| {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed % n
+        };
+
+        let mut editor = mac("héllo wörld\n\nsecond line\nthird");
+        let mut history = vec![editor.text()];
+        for _ in 0..400 {
+            for _ in 0..next(4) {
+                let key = [
+                    NamedKey::Left,
+                    NamedKey::Right,
+                    NamedKey::Up,
+                    NamedKey::Down,
+                    NamedKey::Home,
+                    NamedKey::End,
+                ][next(6) as usize];
+                press(&mut editor, key, next(3) == 0);
+            }
+            let steps = editor.undo_stack.len();
+            match next(6) {
+                0 => type_text(&mut editor, ["x", "é", "\t"][next(3) as usize]),
+                1 => press(&mut editor, NamedKey::Enter, false),
+                2 => press(&mut editor, NamedKey::Backspace, false),
+                3 => press(&mut editor, NamedKey::Delete, false),
+                4 => editor.replace_selection("pasted\ntext\n", EditKind::Other),
+                _ => editor.replace_selection("", EditKind::Other),
+            }
+            // A step that grew the previous one overwrites its text; a new
+            // step adds one; an edit that changed nothing does neither.
+            if editor.undo_stack.len() > steps {
+                history.push(editor.text());
+            } else if let Some(last) = history.last_mut() {
+                *last = editor.text();
+            }
+        }
+        assert_eq!(history.len(), editor.undo_stack.len() + 1);
+
+        for expected in history.iter().rev().skip(1) {
+            editor.undo();
+            assert_eq!(&editor.text(), expected);
+        }
+        assert!(!editor.can_undo());
+        for expected in history.iter().skip(1) {
+            editor.redo();
+            assert_eq!(&editor.text(), expected);
+        }
+        assert!(!editor.can_redo());
     }
 
     /// An empty selection — anchor and caret at the same spot — must not
