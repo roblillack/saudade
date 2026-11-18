@@ -23,6 +23,11 @@ pub struct Theme {
     pub shadow: Color,
     /// The 1-px outline around buttons, fields and popups.
     pub border: Color,
+    /// Ink of the checkerboard in a scrollbar's track, stippled over `face`.
+    /// Black, the Win 3.1 "newsprint", by default; `highlight` gives the
+    /// paler track of later Windows, for a window where the bars should
+    /// recede.
+    pub scroll_track: Color,
     pub text: Color,
     pub disabled_text: Color,
     /// Selected-item background — Win 3.1 dark navy blue.
@@ -54,6 +59,7 @@ impl Theme {
             highlight: Color::WHITE,
             shadow: Color::MID_GRAY,
             border: Color::BLACK,
+            scroll_track: Color::BLACK,
             text: Color::BLACK,
             disabled_text: Color::MID_GRAY,
             highlight_bg: Color::NAVY,
@@ -80,6 +86,7 @@ impl Theme {
             highlight: Color::rgb(0x80, 0x80, 0x80),
             shadow: Color::rgb(0x20, 0x20, 0x20),
             border: Color::BLACK,
+            scroll_track: Color::BLACK,
             text: Color::rgb(0xF0, 0xF0, 0xF0),
             disabled_text: Color::rgb(0x88, 0x88, 0x88),
             highlight_bg: Color::rgb(0x00, 0x00, 0xA8),

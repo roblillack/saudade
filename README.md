@@ -513,6 +513,7 @@ pub struct Theme {
     pub highlight: Color,       // light bevel edge
     pub shadow: Color,          // dark bevel edge
     pub border: Color,          // 1-px outline (black on the light theme)
+    pub scroll_track: Color,    // checkerboard ink of a scrollbar track
     pub text: Color,
     pub disabled_text: Color,
     pub highlight_bg: Color,    // selected-item bg (Win 3.1: navy)
@@ -567,6 +568,11 @@ Widgets that paint their own surfaces should take their colors from the
 follow along; `Color::mix` derives a shade between two theme colors — a grid
 line a little off the background, say, that is darker on the light theme and
 lighter on the dark one.
+
+`scroll_track` is the ink of the checkerboard in a scrollbar's track,
+stippled over `face`. It defaults to black, the Win 3.1 "newsprint", which
+reads as a dark gray band; set it to the theme's `highlight` for the paler
+track of later Windows, where the bars should recede behind the content.
 
 `button_style` is the face a push button sets its label in. It defaults to
 `FontStyle::Bold` — a button is the one thing on a panel you press, and the
