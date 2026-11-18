@@ -64,6 +64,12 @@ While pre-1.0, the minor version is bumped for breaking changes.
 
 ### Fixed
 
+- A quick click shows. A tap on a trackpad set to tap-to-click reports its
+  press and release together, so both reached the widgets before a frame
+  was painted in between: a `Button` ran its action without ever looking
+  pressed. A release that follows its press by less than 60 ms is now held
+  back until the press has been on screen that long (macOS, Windows, X11).
+  (#110)
 - With a menu open, Alt and another menu's letter now switch to that menu,
   as they open it from a closed bar. An open menu used to keep every letter
   for its own items, so Alt+E did nothing under File, or fired whichever

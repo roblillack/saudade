@@ -343,6 +343,8 @@ struct AppHandler {
     /// effect, which on X11 keeps motion flowing past the window edge — see
     /// [`PointerButtons`] and the `CursorLeft` handling.
     buttons: PointerButtons,
+    /// The release of a click too quick to have shown — see [`QuickRelease`].
+    quick_release: QuickRelease,
     modifiers: Modifiers,
     needs_redraw: bool,
     /// Background pattern + color for the main window, toggled with the
@@ -448,6 +450,61 @@ impl KeySwallow {
     }
 }
 
+/// How long a mouse press is given on screen before its release is acted on.
+const MIN_PRESS: Duration = Duration::from_millis(60);
+
+/// Holds back a release that follows its press too closely to be seen.
+///
+/// A tap on a trackpad set to tap-to-click reports its press and its release
+/// in one burst, a few milliseconds apart at most. Both would reach the
+/// widgets before the frame in between is painted, so a button would run its
+/// action without ever looking pressed. The release of such a click waits
+/// here until the press has had [`MIN_PRESS`] on screen. Whatever else the
+/// user does in the meantime lets it go at once, so events stay in order.
+#[derive(Default)]
+struct QuickRelease {
+    pressed_at: Option<Instant>,
+    /// The release, and when it is due.
+    held: Option<(Event, Instant)>,
+}
+
+impl QuickRelease {
+    /// Record a button press dispatched at `now`.
+    fn press(&mut self, now: Instant) {
+        self.pressed_at = Some(now);
+    }
+
+    /// A release arrived at `now`. It comes back if it is to be dispatched
+    /// right away; a release that is too early is kept instead.
+    fn release(&mut self, event: Event, now: Instant) -> Option<Event> {
+        match self.pressed_at.take() {
+            Some(pressed) if now < pressed + MIN_PRESS => {
+                self.held = Some((event, pressed + MIN_PRESS));
+                None
+            }
+            _ => Some(event),
+        }
+    }
+
+    /// The release that is kept, whether it is due or not.
+    fn take(&mut self) -> Option<Event> {
+        self.held.take().map(|(event, _)| event)
+    }
+
+    /// The release that is kept, once it is due at `now`.
+    fn take_due(&mut self, now: Instant) -> Option<Event> {
+        match self.held {
+            Some((_, due)) if now >= due => self.take(),
+            _ => None,
+        }
+    }
+
+    /// When the release that is kept is due.
+    fn due(&self) -> Option<Instant> {
+        self.held.as_ref().map(|(_, due)| *due)
+    }
+}
+
 /// Count of mouse buttons currently held down on the winit backend.
 ///
 /// X11 keeps an implicit pointer grab from the first button press until the
@@ -532,6 +589,7 @@ impl AppHandler {
             #[cfg(all(unix, not(target_os = "macos")))]
             drop_waker: None,
             swallow: KeySwallow::default(),
+            quick_release: QuickRelease::default(),
         }
     }
 }
@@ -652,6 +710,12 @@ impl ApplicationHandler<Option<Appearance>> for AppHandler {
             self.follow_system(appearance_of(theme));
             return;
         }
+        // A release that is held back goes ahead of whatever comes next, so
+        // the widgets see events in the order they happened. A repaint is no
+        // such thing: it is what the release is waiting for.
+        if !matches!(event, WindowEvent::RedrawRequested) {
+            self.flush_quick_release(event_loop);
+        }
         if Some(window_id) == self.main_id {
             self.handle_main_event(event, event_loop);
         } else if let Some(idx) = self.popups.iter().position(|p| p.win_id == window_id) {
@@ -667,6 +731,10 @@ impl ApplicationHandler<Option<Appearance>> for AppHandler {
     }
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        if let Some(event) = self.quick_release.take_due(Instant::now()) {
+            self.dispatch(&event, event_loop);
+            self.mark_popups_dirty();
+        }
         self.flush_file_drag(event_loop);
         #[cfg(any(windows, all(unix, not(target_os = "macos"))))]
         self.flush_os_drags(event_loop);
@@ -690,6 +758,15 @@ impl ApplicationHandler<Option<Appearance>> for AppHandler {
                 p.win.request_redraw();
                 p.needs_redraw = false;
             }
+        }
+        // Wake up for a release that is held back, whatever `pump_ticks`
+        // settled on.
+        if let Some(due) = self.quick_release.due() {
+            let wake = match event_loop.control_flow() {
+                ControlFlow::WaitUntil(next) => next.min(due),
+                _ => due,
+            };
+            event_loop.set_control_flow(ControlFlow::WaitUntil(wake));
         }
     }
 
@@ -867,7 +944,7 @@ impl AppHandler {
                         modifiers,
                     },
                 };
-                self.dispatch(&event, event_loop);
+                self.dispatch_button(state, event, event_loop);
             }
             WindowEvent::MouseWheel { delta, .. } => {
                 // The wheel carries no position; use the last cursor location.
@@ -1044,7 +1121,7 @@ impl AppHandler {
                         modifiers,
                     },
                 };
-                self.dispatch(&event, event_loop);
+                self.dispatch_button(state, event, event_loop);
                 self.mark_popups_dirty();
             }
             WindowEvent::MouseWheel { delta, .. } => {
@@ -1105,6 +1182,31 @@ impl AppHandler {
                 .rev()
                 .find_map(|p| Some((p.cursor?, p.scale)))
         })
+    }
+
+    /// Dispatch a mouse button's press or release, holding back a release
+    /// that follows its press too closely to be seen — see [`QuickRelease`].
+    fn dispatch_button(&mut self, state: ElementState, event: Event, event_loop: &ActiveEventLoop) {
+        let now = Instant::now();
+        match state {
+            ElementState::Pressed => {
+                self.dispatch(&event, event_loop);
+                self.quick_release.press(now);
+            }
+            ElementState::Released => {
+                if let Some(event) = self.quick_release.release(event, now) {
+                    self.dispatch(&event, event_loop);
+                }
+            }
+        }
+    }
+
+    /// Dispatch the release that is held back, if there is one.
+    fn flush_quick_release(&mut self, event_loop: &ActiveEventLoop) {
+        if let Some(event) = self.quick_release.take() {
+            self.dispatch(&event, event_loop);
+            self.mark_popups_dirty();
+        }
     }
 
     /// Mark every popup window dirty. Cheap, and the right thing after any
@@ -2826,6 +2928,46 @@ impl From<Rect> for Size {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn release() -> Event {
+        Event::PointerUp {
+            pos: Point::new(1, 2),
+            button: MouseButton::Left,
+            modifiers: Modifiers::default(),
+        }
+    }
+
+    #[test]
+    fn a_release_right_after_its_press_waits_for_the_press_to_show() {
+        let (mut q, t) = (QuickRelease::default(), Instant::now());
+        let ms = Duration::from_millis;
+        q.press(t);
+        assert!(q.release(release(), t + ms(3)).is_none(), "held back");
+        assert_eq!(q.due(), Some(t + MIN_PRESS));
+        assert!(q.take_due(t + ms(30)).is_none(), "not yet");
+        assert!(q.take_due(t + MIN_PRESS).is_some(), "now it is due");
+        assert!(q.due().is_none() && q.take().is_none(), "and gone");
+    }
+
+    #[test]
+    fn a_release_after_a_press_that_showed_goes_ahead() {
+        let (mut q, t) = (QuickRelease::default(), Instant::now());
+        q.press(t);
+        assert!(q.release(release(), t + MIN_PRESS).is_some());
+        assert!(q.due().is_none());
+        // So does one with no press before it, as after a press elsewhere.
+        assert!(q.release(release(), t).is_some());
+    }
+
+    #[test]
+    fn a_held_release_gives_way_to_the_next_event() {
+        let (mut q, t) = (QuickRelease::default(), Instant::now());
+        q.press(t);
+        assert!(q.release(release(), t).is_none());
+        // The caller takes it out ahead of whatever arrived, due or not.
+        assert!(q.take().is_some());
+        assert!(q.take_due(t + MIN_PRESS).is_none());
+    }
 
     const O: Option<Key> = Some(Key::Char('o'));
     const F: Option<Key> = Some(Key::Char('f'));
