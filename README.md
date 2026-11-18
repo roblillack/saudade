@@ -948,6 +948,7 @@ top-level menus. Click outside (or press Esc) to dismiss.
 | ← / →      | switch to the previous / next top-level menu                              |
 | Enter      | fire the currently highlighted action                                     |
 | letter     | fire the action whose mnemonic matches                                    |
+| Alt+letter | switch to the top-level menu whose mnemonic matches                       |
 | Esc        | dismiss the menu                                                          |
 
 Menus opened with Alt+letter (or arrow-switched left/right) always

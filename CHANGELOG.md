@@ -64,6 +64,10 @@ While pre-1.0, the minor version is bumped for breaking changes.
 
 ### Fixed
 
+- With a menu open, Alt and another menu's letter now switch to that menu,
+  as they open it from a closed bar. An open menu used to keep every letter
+  for its own items, so Alt+E did nothing under File, or fired whichever
+  File item had an E for a mnemonic. (#109)
 - A child's popup closed from the keyboard — Escape on an open `Dropdown` or
   context menu inside a `Container`, `Row` or `Column` — left that container
   holding the pointer for it. Until the pointer next moved, a menu bar's
