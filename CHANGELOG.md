@@ -12,6 +12,12 @@ While pre-1.0, the minor version is bumped for breaking changes.
 
 ### Added
 
+- The platform's keys for the far ends in `TextEditor` and `TextInput`. On
+  macOS ⌘← / ⌘→ jump to the start / end of the line, and in a `TextEditor`
+  ⌘↑ / ⌘↓ to the start / end of the text; elsewhere Ctrl+Home / Ctrl+End
+  reach the ends of a `TextEditor`'s text. Shift extends the selection, as
+  with any move. `ModifierScheme::arrow_jump_held` and `text_end_held` tell
+  a widget of your own which applies. (#108)
 - `Theme::scroll_track`, the ink of the checkerboard in a scrollbar's
   track. It defaults to black, as before; a theme that sets it to its
   `highlight` gets the paler track of later Windows. (#107)

@@ -976,6 +976,15 @@ impl TextEditor {
         self.cursor.1 = self.lines[self.cursor.0].chars().count();
     }
 
+    fn move_text_start(&mut self) {
+        self.cursor = (0, 0);
+    }
+
+    fn move_text_end(&mut self) {
+        self.cursor.0 = self.lines.len().saturating_sub(1);
+        self.move_end();
+    }
+
     fn move_page(&mut self, delta_pages: i32) {
         let visible = self.visible_rows() as usize;
         let step = visible.saturating_sub(1).max(1);
@@ -1343,7 +1352,9 @@ impl Widget for TextEditor {
                     }
                     Key::Named(NamedKey::Left) => {
                         self.before_move(modifiers.shift);
-                        if self.scheme.word_move_held(*modifiers) {
+                        if self.scheme.arrow_jump_held(*modifiers) {
+                            self.move_home();
+                        } else if self.scheme.word_move_held(*modifiers) {
                             self.move_word_left();
                         } else {
                             self.move_left();
@@ -1354,7 +1365,9 @@ impl Widget for TextEditor {
                     }
                     Key::Named(NamedKey::Right) => {
                         self.before_move(modifiers.shift);
-                        if self.scheme.word_move_held(*modifiers) {
+                        if self.scheme.arrow_jump_held(*modifiers) {
+                            self.move_end();
+                        } else if self.scheme.word_move_held(*modifiers) {
                             self.move_word_right();
                         } else {
                             self.move_right();
@@ -1365,28 +1378,44 @@ impl Widget for TextEditor {
                     }
                     Key::Named(NamedKey::Up) => {
                         self.before_move(modifiers.shift);
-                        self.move_up();
+                        if self.scheme.arrow_jump_held(*modifiers) {
+                            self.move_text_start();
+                        } else {
+                            self.move_up();
+                        }
                         self.ensure_cursor_visible();
                         self.reset_blink();
                         ctx.request_paint();
                     }
                     Key::Named(NamedKey::Down) => {
                         self.before_move(modifiers.shift);
-                        self.move_down();
+                        if self.scheme.arrow_jump_held(*modifiers) {
+                            self.move_text_end();
+                        } else {
+                            self.move_down();
+                        }
                         self.ensure_cursor_visible();
                         self.reset_blink();
                         ctx.request_paint();
                     }
                     Key::Named(NamedKey::Home) => {
                         self.before_move(modifiers.shift);
-                        self.move_home();
+                        if self.scheme.text_end_held(*modifiers) {
+                            self.move_text_start();
+                        } else {
+                            self.move_home();
+                        }
                         self.ensure_cursor_visible();
                         self.reset_blink();
                         ctx.request_paint();
                     }
                     Key::Named(NamedKey::End) => {
                         self.before_move(modifiers.shift);
-                        self.move_end();
+                        if self.scheme.text_end_held(*modifiers) {
+                            self.move_text_end();
+                        } else {
+                            self.move_end();
+                        }
                         self.ensure_cursor_visible();
                         self.reset_blink();
                         ctx.request_paint();
@@ -1808,6 +1837,74 @@ mod tests {
 
     fn mac(text: &str) -> TextEditor {
         focused(text).with_scheme(ModifierScheme::Mac)
+    }
+
+    #[test]
+    fn command_and_an_arrow_jump_to_the_ends_on_a_mac() {
+        let cmd = Modifiers {
+            logo: true,
+            ..Modifiers::default()
+        };
+        let arrow = |editor: &mut TextEditor, key, shift| {
+            chord(editor, Key::Named(key), Modifiers { shift, ..cmd });
+        };
+        let mut editor = mac("ab\ncd\nef");
+        arrow(&mut editor, NamedKey::Down, false);
+        type_text(&mut editor, "1");
+        assert_eq!(editor.text(), "ab\ncd\nef1");
+        arrow(&mut editor, NamedKey::Up, false);
+        type_text(&mut editor, "2");
+        assert_eq!(editor.text(), "2ab\ncd\nef1");
+        arrow(&mut editor, NamedKey::Right, false);
+        type_text(&mut editor, "3");
+        assert_eq!(editor.text(), "2ab3\ncd\nef1");
+        arrow(&mut editor, NamedKey::Left, false);
+        type_text(&mut editor, "4");
+        assert_eq!(editor.text(), "42ab3\ncd\nef1");
+
+        // With Shift the way there is selected.
+        arrow(&mut editor, NamedKey::Down, true);
+        type_text(&mut editor, "5");
+        assert_eq!(editor.text(), "45");
+
+        // Elsewhere Ctrl and an arrow mean something else, or nothing.
+        let ctrl = Modifiers {
+            control: true,
+            ..Modifiers::default()
+        };
+        let mut editor = focused("ab\ncd").with_scheme(ModifierScheme::Pc);
+        chord(&mut editor, Key::Named(NamedKey::Down), ctrl);
+        type_text(&mut editor, "x");
+        assert_eq!(editor.text(), "ab\nxcd", "one line down, as without Ctrl");
+    }
+
+    #[test]
+    fn ctrl_home_and_end_reach_the_ends_of_the_text_on_a_pc() {
+        let ctrl = Modifiers {
+            control: true,
+            ..Modifiers::default()
+        };
+        let mut editor = focused("ab\ncd\nef").with_scheme(ModifierScheme::Pc);
+        chord(&mut editor, Key::Named(NamedKey::End), ctrl);
+        type_text(&mut editor, "1");
+        assert_eq!(editor.text(), "ab\ncd\nef1");
+        chord(&mut editor, Key::Named(NamedKey::Home), ctrl);
+        type_text(&mut editor, "2");
+        assert_eq!(editor.text(), "2ab\ncd\nef1");
+
+        let shifted = Modifiers {
+            shift: true,
+            ..ctrl
+        };
+        chord(&mut editor, Key::Named(NamedKey::End), shifted);
+        type_text(&mut editor, "3");
+        assert_eq!(editor.text(), "23");
+
+        // Without Ctrl they stay on the line.
+        let mut editor = focused("ab\ncd").with_scheme(ModifierScheme::Pc);
+        press(&mut editor, NamedKey::End, false);
+        type_text(&mut editor, "x");
+        assert_eq!(editor.text(), "abx\ncd");
     }
 
     /// A 200×120 window to paint an editor in, with the bundled monospace

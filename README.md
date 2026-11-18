@@ -1211,8 +1211,9 @@ Editing works like the editor's, minus the vertical moves:
 | triple-click         | select everything                                 |
 | drag with left       | extend the selection                              |
 
-On macOS the chords are the Mac's own: ⌘ A / C / X / V, and ⌥ Option + ← / →
-to move by word. They follow a `ModifierScheme`, as menu accelerators do;
+On macOS the chords are the Mac's own: ⌘ A / C / X / V, ⌥ Option + ← / →
+to move by word, and ⌘ ← / → to jump to the start / end. They follow a
+`ModifierScheme`, as menu accelerators do;
 `with_scheme` pins one instead of the platform's, for tests that must behave
 the same on every host.
 
@@ -1328,6 +1329,7 @@ Editing operations:
 | Ctrl + ← / →      | move cursor one word                       |
 | ↑ / ↓             | move cursor one line, clamping column      |
 | Home / End        | jump to line start / end                   |
+| Ctrl + Home / End | jump to the start / end of the text        |
 | PageUp / PageDown | jump by one viewport                       |
 | Shift + any move  | extends the selection                      |
 | Ctrl + A          | select all                                 |
@@ -1342,8 +1344,10 @@ Editing operations:
 | right click       | open the editing menu                      |
 
 On macOS, ⌘ takes Ctrl's place for select all / copy / cut / paste /
-undo / redo, and ⌥ Option for moving by word, as in a `TextInput`; `with_scheme` pins the
-`ModifierScheme` they follow.
+undo / redo, and ⌥ Option for moving by word, as in a `TextInput`. The jumps
+are the Mac's too: ⌘ ← / → to the start / end of the line and ⌘ ↑ / ↓ to the
+start / end of the text, where Ctrl + Home / End do nothing. `with_scheme`
+pins the `ModifierScheme` they follow.
 
 Selected text renders with `theme.highlight_bg` (navy) behind it and
 `theme.highlight_text` (white) on top. Multi-line selections show a
