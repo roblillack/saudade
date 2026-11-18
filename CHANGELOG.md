@@ -17,6 +17,18 @@ While pre-1.0, the minor version is bumped for breaking changes.
   change — for output and log boxes. It still takes the focus and keeps its
   caret; `set_text` keeps working. Its paper is tinted a touch towards the
   theme's `face`, to tell it from an editable box. (#99)
+- On a Wayland compositor that leaves decorating windows to the program —
+  GNOME's Mutter, and any without `zxdg_decoration_manager_v1` — saudade draws
+  the Canoe-style title bar, frame and drop shadow that `render_framed` puts
+  around screenshots, around its windows and dialogs. They move, resize,
+  minimize, maximize and close the window, and bring up the compositor's window
+  menu. `SAUDADE_DECORATIONS=client` draws them where the compositor would draw
+  its own. (#111)
+
+### Changed
+
+- `render_framed` centers the window title on the title bar and sets it in
+  bold, as Canoe does. (#111)
 
 ## [0.9.0] - 2026-11-16
 

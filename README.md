@@ -1472,7 +1472,8 @@ the flight-type dropdown.
 The general-purpose modal dialog: it hosts any widget as the body of a
 dialog window, centered over the window it opens from, and while it is up
 no event reaches the widgets behind it. The window is a real one — the OS
-draws its title bar and close button, and it belongs to the window beneath
+draws its title bar and close button (or saudade does, on a Wayland
+compositor that leaves that to the program), and it belongs to the window beneath
 the way a native dialog does (see "Backends").
 
 A `Modal` sits in the widget tree as an overlay of the root `Column`,
@@ -1622,7 +1623,7 @@ Interaction:
 | type a wildcard (e.g. `*.rs`) + Enter | re-filter the list rather than open     |
 | Alt+L / Alt+N / Alt+T                 | focus the list / File name / File types |
 
-The picker lives in its own window with server-side decorations, so its title
+The picker lives in its own decorated window, so its title
 ("Open" / "Save As") rides along on the `PopupRequest`; its "File types" dropdown
 opens as a nested popup inside it. `examples/notepad.rs` wires it to File → Open
 and File → Save As.
@@ -1991,7 +1992,17 @@ session:
   transient for their window (and modal, where the compositor offers
   `xdg_wm_dialog_v1`), fractional scaling through `wp_viewporter`, and
   lets us drop winit's `wayland-csd-adwaita` and `wayland-dlopen`
-  features from the dependency tree.
+  features from the dependency tree. Windows ask for server-side
+  decorations; where the compositor won't draw them (GNOME's Mutter, and
+  any compositor without `zxdg_decoration_manager_v1`), saudade draws
+  the same Canoe-style title bar, frame and drop shadow that
+  `render_framed` puts around screenshots (see "Offscreen rendering and
+  screenshots"). The title bar moves the window, and a double click on it
+  maximizes or restores it; the border resizes a resizable window; the
+  minimize and maximize buttons do what they say; a right click brings up
+  the compositor's window menu; and, as in Windows 3.1, a double click on
+  the box at the left closes the window. `SAUDADE_DECORATIONS=client`
+  draws these decorations even where the compositor would draw its own.
 - **X11** — otherwise (including XWayland when `WAYLAND_DISPLAY` is
   unset) the runtime drives winit 0.30 with only the `x11` feature
   enabled. Popups are override-redirect windows; dialogs are made
@@ -2025,14 +2036,15 @@ let snap = MockBackend::new(220, 64).with_scale(2.0).render(&mut root);
 std::fs::write("client.png", snap.to_png()).unwrap();
 ```
 
-`render` captures only the client area — the OS owns the title bar and frame,
-so saudade never draws them. For documentation or store screenshots, though,
+`render` captures only the client area — the title bar and frame are usually
+the window manager's. For documentation or store screenshots, though,
 `render_framed` wraps the render in window chrome, reproducing the default
 rendering style of Canoe (the Win 3.1-styled window manager saudade pairs
-with): a teal desktop, a soft drop shadow, a navy active title bar, and a black
-frame. The window is drawn **active** (focused) unless `.inactive()` asks for
-the look of a window without the focus: a white title bar and a smaller
-shadow.
+with): a teal desktop, a soft drop shadow, a navy active title bar with the
+title centered in bold, and a black frame. The window is drawn **active**
+(focused) unless `.inactive()` asks for the look of a window without the focus:
+a white title bar and a smaller shadow. It is the same chrome the Wayland runtime draws around its windows
+where the compositor leaves decorating them to the program (see "Backends").
 
 ```rust
 use saudade::*;
