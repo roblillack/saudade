@@ -12,6 +12,11 @@ While pre-1.0, the minor version is bumped for breaking changes.
 
 ### Added
 
+- Horizontal scrolling in `TextEditor`. The view now follows the caret
+  sideways along a line wider than the field, and a trackpad's horizontal
+  scroll moves it. `TextEditor::with_horizontal_scrollbar(true)` (or
+  `set_horizontal_scrollbar`) adds a scrollbar along the bottom edge, with a
+  blank square in the corner where it meets the vertical one. (#101)
 - Undo and redo in `TextEditor`: Ctrl+Z takes back the last edit and
   Ctrl+Shift+Z (or Ctrl+Y) restores it, with ⌘ in Ctrl's place on macOS —
   where ⌘Y is left alone. `undo()`, `redo()`, `can_undo()` and `can_redo()`
@@ -35,6 +40,12 @@ While pre-1.0, the minor version is bumped for breaking changes.
 
 - `render_framed` centers the window title on the title bar and sets it in
   bold, as Canoe does. (#111)
+
+### Fixed
+
+- `TextEditor` painted a line wider than the field straight across its right
+  border, the scrollbar and whatever lay beyond. Text is now clipped to the
+  inside of the field. (#101)
 
 ## [0.9.0] - 2026-11-16
 

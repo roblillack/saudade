@@ -66,10 +66,15 @@ struct Edit {
 /// cursor, selection with cut/copy/paste, undo/redo, and a built-in vertical
 /// scrollbar.
 ///
-/// Only the visible rows are measured and drawn on each paint — text that's
-/// scrolled out of view contributes no work to the render loop. The scrollbar
-/// owns the canonical scroll position; `TextEditor` reads it via
-/// `scrollbar.value()`.
+/// Lines are never wrapped. One wider than the field is clipped at its edge,
+/// and the view scrolls sideways to keep the caret in sight;
+/// [`with_horizontal_scrollbar`](Self::with_horizontal_scrollbar) adds a
+/// scrollbar along the bottom to do the same by hand.
+///
+/// Only the visible rows are drawn on each paint, and a line is measured once
+/// until it changes — text that's scrolled out of view contributes no work to
+/// the render loop. The scrollbars own the canonical scroll position;
+/// `TextEditor` reads it via `scrollbar.value()`.
 pub struct TextEditor {
     pub rect: Rect,
     pub font_size: f32,
@@ -97,6 +102,21 @@ pub struct TextEditor {
     click_count: u32,
     clipboard: Option<arboard::Clipboard>,
     v_scrollbar: ScrollBar,
+    /// How far the text is scrolled sideways, in pixels. Kept by a scrollbar
+    /// whether or not one is shown, so both cases share the clamping and the
+    /// wheel handling.
+    h_scrollbar: ScrollBar,
+    show_h_scrollbar: bool,
+    /// Pixel width of each line, `None` until measured or once the line has
+    /// changed. What the horizontal scroll range is made of.
+    line_widths: Vec<Option<i32>>,
+    /// The widest of `line_widths`, `None` when any of them changed.
+    widest_line: Option<i32>,
+    /// The font size `line_widths` were measured at.
+    measured_font_size: f32,
+    /// Set when the caret may have left the view sideways. Where it stands in
+    /// pixels takes the font to know, so the next paint does the scrolling.
+    reveal_caret: bool,
     /// When the current half of the blink cycle started. Reset on every
     /// user action so the caret stays visible (and "on") while the user is
     /// actively typing.
@@ -126,6 +146,12 @@ impl TextEditor {
             click_count: 0,
             clipboard: None,
             v_scrollbar: ScrollBar::vertical(Rect::new(0, 0, 0, 0)),
+            h_scrollbar: ScrollBar::horizontal(Rect::new(0, 0, 0, 0)),
+            show_h_scrollbar: false,
+            line_widths: vec![None],
+            widest_line: None,
+            measured_font_size: 0.0,
+            reveal_caret: false,
             blink_since: Instant::now(),
             blink_on: true,
         }
@@ -171,6 +197,19 @@ impl TextEditor {
         }
     }
 
+    /// Show a horizontal scrollbar along the bottom edge, for text whose lines
+    /// may be wider than the field. Off by default: the view then still
+    /// follows the caret sideways, with nothing but the caret to move it.
+    pub fn with_horizontal_scrollbar(mut self, show: bool) -> Self {
+        self.set_horizontal_scrollbar(show);
+        self
+    }
+
+    pub fn set_horizontal_scrollbar(&mut self, show: bool) {
+        self.show_h_scrollbar = show;
+        self.layout(self.rect);
+    }
+
     pub fn with_read_only(mut self, read_only: bool) -> Self {
         self.set_read_only(read_only);
         self
@@ -207,9 +246,12 @@ impl TextEditor {
         } else {
             text.split('\n').map(String::from).collect()
         };
+        self.line_widths = vec![None; self.lines.len()];
+        self.widest_line = None;
         self.cursor = (0, 0);
         self.selection_anchor = None;
         self.v_scrollbar.set_value(0);
+        self.h_scrollbar.set_value(0);
     }
 
     pub fn is_focused(&self) -> bool {
@@ -225,24 +267,88 @@ impl TextEditor {
     }
 
     /// The rectangle used to render text — everything except the column the
-    /// scrollbar occupies on the right edge.
+    /// vertical scrollbar occupies on the right edge and the row the
+    /// horizontal one, if shown, occupies at the bottom.
     fn text_area(&self) -> Rect {
-        // When the scrollbar is present the field overlaps it by 1px so the
-        // field's right border lands on the scrollbar's own left-border column,
-        // collapsing the divider to a single 1px line instead of stacking the
-        // two 1px borders into a 2px band. The scrollbar is painted last, on
-        // top, so that shared column reads as the scrollbar's edge.
-        let (sb_w, overlap) = if self.v_scrollbar.rect().w > 0 {
-            (SCROLLBAR_THICKNESS, 1)
-        } else {
-            (0, 0)
-        };
+        // Where a scrollbar is present the field overlaps it by 1px so the
+        // field's border lands on the scrollbar's own border line, collapsing
+        // the divider to a single 1px line instead of stacking the two 1px
+        // borders into a 2px band. The scrollbars are painted last, on top, so
+        // that shared line reads as the scrollbar's edge.
+        let across = |bar: i32| if bar > 0 { bar - 1 } else { 0 };
         Rect::new(
             self.rect.x,
             self.rect.y,
-            (self.rect.w - sb_w + overlap).max(0),
-            self.rect.h,
+            (self.rect.w - across(self.v_scrollbar.rect().w)).max(0),
+            (self.rect.h - across(self.h_scrollbar.rect().h)).max(0),
         )
+    }
+
+    /// The square in the bottom right corner that neither scrollbar reaches
+    /// when both are shown.
+    fn corner(&self) -> Option<Rect> {
+        let (v, h) = (self.v_scrollbar.rect(), self.h_scrollbar.rect());
+        (v.w > 0 && h.h > 0).then(|| Rect::new(v.x, h.y, v.w, h.h))
+    }
+
+    /// Which edges of the field lie on a scrollbar's border line.
+    fn merged_edges(&self) -> Merged {
+        Merged {
+            right: self.v_scrollbar.rect().w > 0,
+            bottom: self.h_scrollbar.rect().h > 0,
+            ..Merged::NONE
+        }
+    }
+
+    /// Width of the room the text has between the field's paddings.
+    fn view_width(&self) -> i32 {
+        (self.text_area().w - PADDING_X * 2).max(1)
+    }
+
+    /// Measure the lines that changed since the last paint and size the
+    /// horizontal scroll range to the widest line of all.
+    fn sync_h_scrollbar(&mut self, painter: &Painter) {
+        if self.measured_font_size != self.font_size || self.line_widths.len() != self.lines.len() {
+            self.line_widths = vec![None; self.lines.len()];
+            self.widest_line = None;
+            self.measured_font_size = self.font_size;
+        }
+        let size = self.font_size;
+        let line_width = |line: &str| {
+            painter
+                .cumulative_widths(line, size, FontFamily::Mono, FontStyle::Regular)
+                .last()
+                .copied()
+                .unwrap_or(0)
+        };
+        let widest = match self.widest_line {
+            Some(widest) => widest,
+            None => {
+                let mut widest = 0;
+                for (line, width) in self.lines.iter().zip(&mut self.line_widths) {
+                    widest = widest.max(*width.get_or_insert_with(|| line_width(line)));
+                }
+                self.widest_line = Some(widest);
+                widest
+            }
+        };
+        let view = self.view_width();
+        // One pixel past the text, for the caret at the end of the widest line.
+        self.h_scrollbar.set_range(view, widest + 1 - view);
+        // An arrow click or a wheel line moves by a column.
+        self.h_scrollbar.set_line_step(line_width("0"));
+    }
+
+    /// Scroll sideways just far enough that the caret is inside the view,
+    /// given its x-offset from the start of its line.
+    fn reveal_caret_x(&mut self, caret: i32) {
+        let view = self.view_width();
+        let scrolled = self.h_scrollbar.value();
+        if caret < scrolled {
+            self.h_scrollbar.set_value(caret);
+        } else if caret >= scrolled + view {
+            self.h_scrollbar.set_value(caret - view + 1);
+        }
     }
 
     // ---------------------------------------------------------------- selection
@@ -371,6 +477,7 @@ impl TextEditor {
     }
 
     fn ensure_cursor_visible(&mut self) {
+        self.reveal_caret = true;
         self.sync_scrollbar();
         let visible = self.visible_rows() as usize;
         let mut top = self.scroll_top();
@@ -416,6 +523,14 @@ impl TextEditor {
         lines[0].insert_str(0, &self.lines[start.0][..head]);
         let last = lines.len() - 1;
         lines[last].push_str(&self.lines[end.0][tail..]);
+        // The lines put in have yet to be measured. The cache may be behind
+        // the text already if nothing was painted since `font_size` changed;
+        // the next paint starts over then.
+        if self.line_widths.len() == self.lines.len() {
+            self.line_widths
+                .splice(start.0..=end.0, std::iter::repeat_n(None, lines.len()));
+        }
+        self.widest_line = None;
         self.lines.splice(start.0..=end.0, lines);
         removed
     }
@@ -721,7 +836,7 @@ impl TextEditor {
         let row = (self.scroll_top() + row_offset).min(self.lines.len() - 1);
         self.cursor.0 = row;
 
-        let text_x = text.x + PADDING_X;
+        let text_x = text.x + PADDING_X - self.h_scrollbar.value();
         let target = (pos.x - text_x).max(0);
         let widths = self
             .cumulative_widths
@@ -762,18 +877,13 @@ impl Widget for TextEditor {
         };
         painter.fill_rect(text, field_bg);
         // The bevel + border self-manage the crisp physical-pixel pass at
-        // fractional scales; the right edge sits on the scrollbar's own left
-        // border (see `text_area`), so it is merged — the field's line lands
-        // on the very device pixels the scrollbar's line occupies.
-        let merged = if self.v_scrollbar.rect().w > 0 {
-            Merged::RIGHT
-        } else {
-            Merged::NONE
-        };
+        // fractional scales; an edge that sits on a scrollbar's own border
+        // (see `text_area`) is merged — the field's line lands on the very
+        // device pixels the scrollbar's line occupies.
+        let merged = self.merged_edges();
         painter.sunken_bevel_merged(text, merged, theme.highlight, theme.shadow);
         painter.stroke_rect_merged(text, merged, theme.border);
 
-        let text_x = text.x + PADDING_X;
         let text_y0 = text.y + PADDING_Y;
         let visible = self.visible_rows() as usize;
         let scroll_top = self.scroll_top();
@@ -796,6 +906,19 @@ impl Widget for TextEditor {
             );
             self.cumulative_widths.insert(row, widths);
         }
+
+        // Settle the horizontal scroll before anything is placed by it.
+        self.sync_h_scrollbar(painter);
+        if std::mem::take(&mut self.reveal_caret)
+            && let Some(widths) = self.cumulative_widths.get(&self.cursor.0)
+        {
+            let caret = widths.get(self.cursor.1).or(widths.last()).copied();
+            self.reveal_caret_x(caret.unwrap_or(0));
+        }
+        let text_x = text.x + PADDING_X - self.h_scrollbar.value();
+        // Text scrolled sideways stops at the bevel, not at the padding and
+        // not, as a long line would otherwise, somewhere past the field.
+        let clip = painter.push_clip_frame(text, 2, merged);
 
         let selection = self.selection_range();
         for row_offset in 0..visible {
@@ -840,34 +963,55 @@ impl Widget for TextEditor {
                 draw_unfocused_caret(painter, cx, cy + LINE_HEIGHT - 2, theme.text);
             }
         }
+        painter.restore_clip(clip);
 
-        // Scrollbar last so it sits on top of the field's right edge.
+        // The corner the two scrollbars leave open is a blank square in their
+        // frame; its top and left lines are the scrollbars' own.
+        if let Some(corner) = self.corner() {
+            painter.fill_rect(corner, theme.face);
+            let merged = Merged {
+                left: true,
+                top: true,
+                ..Merged::NONE
+            };
+            painter.stroke_rect_merged(corner, merged, theme.border);
+        }
+        // Scrollbars last so they sit on top of the field's edges.
         self.v_scrollbar.paint(painter, theme);
+        if self.show_h_scrollbar {
+            self.h_scrollbar.paint(painter, theme);
+        }
     }
 
     fn event(&mut self, event: &Event, ctx: &mut EventCtx) {
         if !self.enabled {
             return;
         }
-        // Once the scrollbar is dragging it gets every event until release.
-        if self.v_scrollbar.captures_pointer() {
-            self.v_scrollbar.event(event, ctx);
-            return;
+        // Once a scrollbar is dragging it gets every event until release.
+        for bar in [&mut self.v_scrollbar, &mut self.h_scrollbar] {
+            if bar.captures_pointer() {
+                bar.event(event, ctx);
+                return;
+            }
         }
         // The wheel scrolls the view whenever the pointer is over the editor,
-        // leaving the caret and selection where they are.
+        // leaving the caret and selection where they are. Each bar takes the
+        // delta along its own axis.
         if let Event::Scroll { pos, .. } = event {
             if self.rect.contains(*pos) {
                 self.v_scrollbar.event(event, ctx);
+                self.h_scrollbar.event(event, ctx);
             }
             return;
         }
-        // Otherwise route positional events that land in the scrollbar.
-        if let Some(pos) = event.position()
-            && self.v_scrollbar.rect().contains(pos)
-        {
-            self.v_scrollbar.event(event, ctx);
-            return;
+        // Otherwise route positional events that land in a scrollbar.
+        if let Some(pos) = event.position() {
+            for bar in [&mut self.v_scrollbar, &mut self.h_scrollbar] {
+                if bar.rect().contains(pos) {
+                    bar.event(event, ctx);
+                    return;
+                }
+            }
         }
 
         // Past the scrollbar routing above, a pointer move is over the text
@@ -879,11 +1023,12 @@ impl Widget for TextEditor {
         }
 
         match event {
+            // A press in the corner between the scrollbars is nobody's.
             Event::PointerDown {
                 pos,
                 button: MouseButton::Left,
                 ..
-            } => {
+            } if self.text_area().contains(*pos) => {
                 ctx.request_focus();
                 self.coalesce = false;
                 let clicks = self.register_click(*pos);
@@ -908,6 +1053,8 @@ impl Widget for TextEditor {
             }
             Event::PointerMove { pos } if self.drag_active => {
                 self.place_cursor_at(*pos);
+                // Dragging past the left or right edge pulls the view along.
+                self.reveal_caret = true;
                 self.reset_blink();
                 ctx.request_paint();
             }
@@ -1041,12 +1188,14 @@ impl Widget for TextEditor {
                     Key::Named(NamedKey::Home) => {
                         self.before_move(modifiers.shift);
                         self.move_home();
+                        self.ensure_cursor_visible();
                         self.reset_blink();
                         ctx.request_paint();
                     }
                     Key::Named(NamedKey::End) => {
                         self.before_move(modifiers.shift);
                         self.move_end();
+                        self.ensure_cursor_visible();
                         self.reset_blink();
                         ctx.request_paint();
                     }
@@ -1083,7 +1232,9 @@ impl Widget for TextEditor {
     }
 
     fn captures_pointer(&self) -> bool {
-        self.drag_active || self.v_scrollbar.captures_pointer()
+        self.drag_active
+            || self.v_scrollbar.captures_pointer()
+            || self.h_scrollbar.captures_pointer()
     }
 
     fn focusable(&self) -> bool {
@@ -1116,15 +1267,31 @@ impl Widget for TextEditor {
 
     fn layout(&mut self, bounds: Rect) {
         self.rect = bounds;
-        // Carve the rightmost column for the scrollbar; the rest is the
-        // text area.
-        let sb_rect = Rect::new(
+        // Carve the rightmost column for the vertical scrollbar and, if it is
+        // shown, the bottom row for the horizontal one; the rest is the text
+        // area. Where both are shown each stops a pixel into the corner square
+        // between them, so its frame can share their end lines.
+        let across = if self.show_h_scrollbar {
+            SCROLLBAR_THICKNESS - 1
+        } else {
+            0
+        };
+        self.v_scrollbar.set_rect(Rect::new(
             bounds.right() - SCROLLBAR_THICKNESS,
             bounds.y,
             SCROLLBAR_THICKNESS,
-            bounds.h,
-        );
-        self.v_scrollbar.set_rect(sb_rect);
+            bounds.h - across,
+        ));
+        self.h_scrollbar.set_rect(if self.show_h_scrollbar {
+            Rect::new(
+                bounds.x,
+                bounds.bottom() - SCROLLBAR_THICKNESS,
+                bounds.w - across,
+                SCROLLBAR_THICKNESS,
+            )
+        } else {
+            Rect::new(0, 0, 0, 0)
+        });
         // Re-sync the scrollbar's range to the new viewport height and clamp the
         // current scroll into it — but DON'T snap the view to the caret. A
         // layout pass fires for reasons unrelated to editing: on Wayland the
@@ -1441,6 +1608,186 @@ mod tests {
 
     fn mac(text: &str) -> TextEditor {
         focused(text).with_scheme(ModifierScheme::Mac)
+    }
+
+    /// A 200×120 window to paint an editor in, with the bundled monospace
+    /// font — horizontal scrolling is measured in its pixels. The fixtures are
+    /// excluded from the published crate, so a test that needs them stands
+    /// aside when they are not there rather than failing.
+    fn backend() -> Option<crate::mock::MockBackend> {
+        let mono = std::fs::read("tests/fonts/DejaVuSansMono.ttf").ok()?;
+        let mono = crate::font::Font::from_sans_bytes(mono)?;
+        Some(crate::mock::MockBackend::new(200, 120).with_mono_font(mono))
+    }
+
+    fn wheel(editor: &mut TextEditor, delta_x: f32) {
+        dispatch(
+            editor,
+            &Event::Scroll {
+                pos: Point::new(100, 60),
+                delta_x,
+                delta_y: 0.0,
+            },
+        );
+    }
+
+    fn click(editor: &mut TextEditor, x: i32, y: i32) {
+        let (pos, button) = (Point::new(x, y), MouseButton::Left);
+        let modifiers = Modifiers::default();
+        dispatch(
+            editor,
+            &Event::PointerDown {
+                pos,
+                button,
+                modifiers,
+            },
+        );
+        dispatch(
+            editor,
+            &Event::PointerUp {
+                pos,
+                button,
+                modifiers,
+            },
+        );
+    }
+
+    const LONG: &str = "0123456789012345678901234567890123456789012345678901234567890123456789";
+
+    #[test]
+    fn view_follows_the_caret_along_a_long_line() {
+        let Some(backend) = backend() else { return };
+        let mut editor = focused(&format!("short\n{LONG}"));
+        backend.render(&mut editor);
+        assert_eq!(editor.h_scrollbar.value(), 0);
+        let (view, widest) = (editor.view_width(), editor.widest_line.unwrap());
+        assert!(widest > view, "the second line is wider than the field");
+        assert_eq!(editor.h_scrollbar.max(), widest + 1 - view);
+
+        // End of the long line: scrolled all the way, caret on the last pixel.
+        press(&mut editor, NamedKey::Down, false);
+        press(&mut editor, NamedKey::End, false);
+        backend.render(&mut editor);
+        assert_eq!(editor.h_scrollbar.value(), editor.h_scrollbar.max());
+
+        // A few columns back the caret is still in view: nothing moves.
+        for _ in 0..5 {
+            press(&mut editor, NamedKey::Left, false);
+        }
+        backend.render(&mut editor);
+        assert_eq!(editor.h_scrollbar.value(), editor.h_scrollbar.max());
+
+        // The short line above ends left of the view, which follows.
+        press(&mut editor, NamedKey::Up, false);
+        backend.render(&mut editor);
+        let caret = editor.cumulative_widths[&0][5];
+        assert_eq!(editor.h_scrollbar.value(), caret);
+
+        press(&mut editor, NamedKey::Home, false);
+        backend.render(&mut editor);
+        assert_eq!(editor.h_scrollbar.value(), 0);
+    }
+
+    #[test]
+    fn wheel_scrolls_sideways_without_moving_the_caret() {
+        let Some(backend) = backend() else { return };
+        let mut editor = focused(LONG);
+        backend.render(&mut editor);
+
+        wheel(&mut editor, 3.0);
+        let column = editor.cumulative_widths[&0][1];
+        assert_eq!(editor.h_scrollbar.value(), 3 * column, "a line is a column");
+        assert_eq!(editor.cursor, (0, 0));
+        // A repaint for any other reason must not snap back to the caret.
+        backend.render(&mut editor);
+        assert_eq!(editor.h_scrollbar.value(), 3 * column);
+
+        wheel(&mut editor, 1000.0);
+        assert_eq!(editor.h_scrollbar.value(), editor.h_scrollbar.max());
+        wheel(&mut editor, -1000.0);
+        assert_eq!(editor.h_scrollbar.value(), 0);
+    }
+
+    #[test]
+    fn click_lands_on_the_column_under_it_when_scrolled() {
+        let Some(backend) = backend() else { return };
+        let mut editor = focused(LONG);
+        backend.render(&mut editor);
+        wheel(&mut editor, 10.0);
+        backend.render(&mut editor);
+
+        // The left end of the text now shows column 10.
+        click(&mut editor, PADDING_X, PADDING_Y + 2);
+        assert_eq!(editor.cursor, (0, 10));
+    }
+
+    #[test]
+    fn scroll_range_tracks_the_widest_line_through_edits() {
+        let Some(backend) = backend() else { return };
+        let mut editor = mac(&format!("{LONG}\n{LONG}{LONG}"));
+        backend.render(&mut editor);
+        let end = |editor: &TextEditor, row| editor.cumulative_widths[&row].last().copied();
+        let (one, two) = (end(&editor, 0), end(&editor, 1));
+        assert_eq!(editor.widest_line, two);
+
+        // Typing at the end of the widest line widens the range…
+        press(&mut editor, NamedKey::Down, false);
+        press(&mut editor, NamedKey::End, false);
+        type_text(&mut editor, "xx");
+        backend.render(&mut editor);
+        let wider = end(&editor, 1);
+        assert!(wider > two);
+        assert_eq!(editor.widest_line, wider);
+        assert_eq!(editor.h_scrollbar.value(), editor.h_scrollbar.max());
+
+        // …and with that line gone the other one sets it, pulling the view
+        // back inside.
+        press(&mut editor, NamedKey::Home, true);
+        press(&mut editor, NamedKey::Backspace, false);
+        backend.render(&mut editor);
+        assert_eq!(editor.widest_line, one);
+        assert!(editor.h_scrollbar.value() <= editor.h_scrollbar.max());
+
+        // Undo puts the line back, and its width with it.
+        editor.undo();
+        backend.render(&mut editor);
+        assert_eq!(editor.widest_line, wider);
+
+        editor.set_text("short");
+        backend.render(&mut editor);
+        assert_eq!(editor.h_scrollbar.max(), 0);
+        assert_eq!(editor.h_scrollbar.value(), 0);
+    }
+
+    #[test]
+    fn horizontal_scrollbar_takes_the_bottom_row() {
+        let rect = Rect::new(0, 0, 200, 120);
+        let mut editor = TextEditor::new(rect);
+        editor.layout(rect);
+        assert_eq!(editor.text_area(), Rect::new(0, 0, 185, 120));
+        assert_eq!(editor.corner(), None);
+        let rows = editor.visible_rows();
+
+        editor.set_horizontal_scrollbar(true);
+        assert_eq!(editor.text_area(), Rect::new(0, 0, 185, 105));
+        assert_eq!(editor.v_scrollbar.rect(), Rect::new(184, 0, 16, 105));
+        assert_eq!(editor.h_scrollbar.rect(), Rect::new(0, 104, 185, 16));
+        assert_eq!(editor.corner(), Some(Rect::new(184, 104, 16, 16)));
+        assert_eq!(editor.visible_rows(), rows - 1);
+
+        // A press in the corner neither focuses the editor nor moves the caret.
+        let mut editor = editor.with_text("ab\ncd");
+        let mut ctx = EventCtx::new();
+        editor.event(
+            &Event::PointerDown {
+                pos: Point::new(190, 110),
+                button: MouseButton::Left,
+                modifiers: Modifiers::default(),
+            },
+            &mut ctx,
+        );
+        assert!(!ctx.is_focus_requested());
+        assert_eq!(editor.cursor, (0, 0));
     }
 
     fn cmd(shift: bool) -> Modifiers {
