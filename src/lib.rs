@@ -89,7 +89,7 @@ pub use event::{
 };
 pub use font::{Font, FontFamily, FontSet, FontStyle};
 pub use geometry::{Color, Point, Rect, Size};
-pub use painter::{Frame, Merged, Painter, Ring, RoundedBand};
+pub use painter::{Frame, Merged, Painter, Ring, RoundedBand, SavedClip};
 // `include_svg!` reads an SVG at compile time and expands to a const
 // `SvgImage`; the runtime side just fills the baked polygons (no SVG parser in
 // the binary). The macro emits paths like `::saudade::SvgImage`, so these
