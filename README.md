@@ -463,6 +463,14 @@ in the platform's own logical coordinates (points on macOS), so an app can
 put its window back where the user left it. Wayland gives a window no say in
 where it goes: there the one is `None` and the other ignored.
 
+#### Leaving
+
+When the window's close button is pressed, or something other than the app
+itself ends it — ⌘Q from the application menu, a logout — the runtime calls
+the root widget's `on_cancel` before the window goes, so an app can save
+what it has not. An app that ends itself with `EventCtx::close` is expected
+to have done so already.
+
 #### Fullscreen
 
 `set_fullscreen(true)` makes the main window fill the display it is on —
