@@ -12,6 +12,9 @@ While pre-1.0, the minor version is bumped for breaking changes.
 
 ### Added
 
+- `SavedClip`, the state `Painter::push_clip` hands back, is exported, so a
+  widget that pushes a clip in one method and pops it in another can keep it
+  in a field. (#113)
 - `Painter::fill_polygon`, `fill_polygon_rings`, `line` and `fill_ellipse`
   draw anti-aliased shapes at run time — slanted and curved edges, at any
   angle and scale — with the rasterizer `include_svg!` images are filled with.
