@@ -401,12 +401,58 @@ impl EventCtx {
     pub fn modifiers(&self) -> Modifiers;        // the modifier keys held now
     pub fn set_window_title(&mut self, title: impl Into<String>); // retitle the window
     pub fn set_cursor(&mut self, cursor: Cursor); // pointer shape, on PointerMove
+    pub fn request_tick(&mut self);              // one more Tick soon (an animation step)
+    pub fn request_tick_at(&mut self, deadline: Instant); // one Tick then — a timer
+    pub fn request_tick_after(&mut self, delay: Duration);
 }
 ```
 
 Widgets never poke at the runtime directly. The runtime collects the
 requests after a dispatch completes and applies them all at once, which
 keeps event handling deterministic and re-entrancy-free.
+
+#### Timers
+
+`request_tick_at` is a timer: the runtime sleeps until the earliest deadline
+any widget asked for and dispatches one `Event::Tick` then, with the process
+idle in between — a caret that blinks every half second, an autosave that
+waits out a pause in the typing, a clock that steps once a second. A tick
+goes to the whole tree and can come early, for another widget's deadline, so
+a widget keeps its own deadline and checks it when a tick arrives, and asks
+again for the next one from there:
+
+```rust
+fn event(&mut self, event: &Event, ctx: &mut EventCtx) {
+    if let Event::Tick = event && Instant::now() >= self.next {
+        self.next = Instant::now() + Duration::from_secs(1);
+        ctx.request_paint();
+    }
+    ctx.request_tick_at(self.next);
+}
+```
+
+That is the difference from `Widget::wants_ticks` and `request_tick`, which
+keep a ~60 Hz stream running for an animation. `MockBackend`'s
+`DispatchOutcome::tick_at` reports the deadline a dispatch asked for.
+
+#### Waking the app from elsewhere
+
+Work that arrives from outside the event loop — a worker thread finishing, a
+file watcher, a URL the operating system hands the program — needs a way to
+get the widgets to look at it. `App::waker` gives a `Waker`, cheap to clone
+and to send between threads, whose `wake()` has the loop dispatch an
+`Event::Tick`: put the work in a queue the widgets can see, wake, and drain
+the queue when the tick arrives. Wakes from before the loop starts are kept.
+
+```rust
+let app = App::new(config, root);
+let waker = app.waker();
+std::thread::spawn(move || {
+    results.lock().unwrap().push(fetch());
+    waker.wake();
+});
+app.run();
+```
 
 #### Fullscreen
 
@@ -2034,11 +2080,12 @@ draw call.
 ### `App`
 
 ```rust
-App::new(window_cfg, root_widget)
+let app = App::new(window_cfg, root_widget)
    .with_theme(Theme::windows_31())   // optional; the light-mode theme
    .with_dark_theme(Theme::windows_31_dark()) // optional; see "Dark mode"
-   .with_ui_scale(2.0)                // optional; see "How big a logical pixel is"
-   .run();                            // blocks until window closes
+   .with_ui_scale(2.0);               // optional; see "How big a logical pixel is"
+let waker = app.waker();              // optional; see "Waking the app from elsewhere"
+app.run();                            // blocks until window closes
 ```
 
 `App::run` consumes the `App`, creates the event loop (see "Backends")

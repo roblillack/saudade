@@ -59,6 +59,7 @@ mod present;
 mod svg;
 mod theme;
 mod ui_scale;
+mod waker;
 #[cfg(all(unix, not(target_os = "macos")))]
 mod wayland;
 mod widget;
@@ -97,6 +98,7 @@ pub use painter::{Frame, Merged, Painter, Ring, RoundedBand, SavedClip};
 pub use saudade_macros::include_svg;
 pub use svg::{FillRule, SvgImage, SvgPolygon};
 pub use theme::Theme;
+pub use waker::Waker;
 pub use widget::{PopupKind, PopupRequest, Widget};
 pub use widgets::{
     Bevel, Button, ButtonGroup, Checkbox, Column, Container, ContextMenu, Dialog, DialogIcon,

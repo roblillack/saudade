@@ -41,6 +41,7 @@ use crate::painter::Painter;
 use crate::present::{Alpha, Surface};
 use crate::svg::SvgImage;
 use crate::theme::Theme;
+use crate::waker::Waker;
 use crate::widget::{PopupKind, PopupRequest, Widget};
 // The main window's own drop target, where saudade has one: see
 // `AppHandler::flush_os_drags`.
@@ -157,6 +158,7 @@ pub struct App {
     dark_theme: Theme,
     root: Box<dyn Widget>,
     ui_scale: Option<f32>,
+    waker: Waker,
 }
 
 impl App {
@@ -167,7 +169,16 @@ impl App {
             dark_theme: Theme::windows_31_dark(),
             root: Box::new(root),
             ui_scale: None,
+            waker: Waker::default(),
         }
+    }
+
+    /// A [`Waker`] for this app's event loop: whoever holds it can have the
+    /// widget tree handed an [`Event::Tick`](crate::Event::Tick) from outside
+    /// the loop — another thread, or a callback from the operating system.
+    /// Take it before [`run`](Self::run), which keeps the loop to itself.
+    pub fn waker(&self) -> Waker {
+        self.waker.clone()
     }
 
     /// The theme to paint with while the system is in light mode —
@@ -250,6 +261,14 @@ impl App {
         event_loop.set_control_flow(ControlFlow::Wait);
 
         let mut handler = AppHandler::new(self);
+        {
+            // A `None` user event only wakes the loop; `about_to_wait` then
+            // finds the waker's flag and dispatches the tick.
+            let proxy = event_loop.create_proxy();
+            handler.waker.install(move || {
+                let _ = proxy.send_event(None);
+            });
+        }
         #[cfg(all(unix, not(target_os = "macos")))]
         {
             handler.drop_waker = Some(event_loop.create_proxy());
@@ -271,9 +290,9 @@ impl App {
     }
 
     #[cfg(all(unix, not(target_os = "macos")))]
-    pub(crate) fn into_parts(self) -> (WindowConfig, Themes, Box<dyn Widget>, Option<f32>) {
+    pub(crate) fn into_parts(self) -> (WindowConfig, Themes, Box<dyn Widget>, Option<f32>, Waker) {
         let themes = Themes::new(self.theme, self.dark_theme);
-        (self.window, themes, self.root, self.ui_scale)
+        (self.window, themes, self.root, self.ui_scale, self.waker)
     }
 }
 
@@ -367,6 +386,11 @@ struct AppHandler {
     /// fired. The runtime uses this to pace ticks while a widget
     /// reports `wants_ticks()`.
     last_tick: Option<Instant>,
+    /// The earliest deadline a widget asked to be ticked at with
+    /// [`EventCtx::request_tick_at`]; cleared when its tick is dispatched.
+    tick_deadline: Option<Instant>,
+    /// The app's [`Waker`]: a wake makes `pump_ticks` dispatch a tick.
+    waker: Waker,
     /// Latch set whenever a dispatch called [`EventCtx::request_tick`] — the
     /// *push* path to keep ticks flowing without any `wants_ticks()` forwarding.
     /// Cleared just before each tick we fire, so the tick handler re-arms it
@@ -576,6 +600,8 @@ impl AppHandler {
             display_dpi: None,
             popups: Vec::new(),
             last_tick: None,
+            tick_deadline: None,
+            waker: app.waker,
             tick_requested: false,
             windowed_resize: None,
             #[cfg(windows)]
@@ -1288,6 +1314,9 @@ impl AppHandler {
         if ctx.tick_requested {
             self.tick_requested = true;
         }
+        if let Some(at) = ctx.tick_at {
+            self.tick_deadline = Some(self.tick_deadline.map_or(at, |d| d.min(at)));
+        }
         if ctx.close_requested {
             event_loop.exit();
         }
@@ -1481,30 +1510,48 @@ impl AppHandler {
     /// Otherwise revert to a plain `Wait` so the process stays idle
     /// when nothing is animating.
     fn pump_ticks(&mut self, event_loop: &ActiveEventLoop) {
-        // Two independent reasons to keep the clock running: a widget that
-        // *pulls* ticks via `wants_ticks()` (steady-state, e.g. a blinking
-        // caret), or one that *pushed* a one-shot request via
-        // `EventCtx::request_tick` (transient, e.g. a held scrollbar arrow).
-        if !self.root.wants_ticks() && !self.tick_requested {
-            self.last_tick = None;
-            event_loop.set_control_flow(ControlFlow::Wait);
-            return;
-        }
+        // Three reasons to dispatch a tick: a widget that *pulls* a steady
+        // stream via `wants_ticks()` (e.g. an animation), or one that *pushed*
+        // a one-shot request via `EventCtx::request_tick` (transient, e.g. a
+        // held scrollbar arrow) — both paced at `TICK_INTERVAL` — and a
+        // deadline from `EventCtx::request_tick_at` or a `Waker`, each due once.
         let now = Instant::now();
-        let due = match self.last_tick {
-            None => true,
-            Some(prev) => now.duration_since(prev) >= TICK_INTERVAL,
-        };
-        if due {
-            self.last_tick = Some(now);
+        let streaming = self.root.wants_ticks() || self.tick_requested;
+        let deadline_due = self.tick_deadline.is_some_and(|d| d <= now);
+        let woken = self.waker.take();
+        if !streaming {
+            self.last_tick = None;
+        }
+        let stream_due = streaming
+            && match self.last_tick {
+                None => true,
+                Some(prev) => now.duration_since(prev) >= TICK_INTERVAL,
+            };
+        if stream_due || deadline_due || woken {
+            if streaming {
+                self.last_tick = Some(now);
+            }
+            if deadline_due {
+                self.tick_deadline = None;
+            }
             // Clear the push latch *before* dispatching: the tick handler
             // re-arms it (via `request_tick`) only if it still wants more, so a
             // widget that's done lets the ticks stop on their own.
             self.tick_requested = false;
             self.dispatch(&Event::Tick, event_loop);
         }
-        let next = self.last_tick.unwrap_or(now) + TICK_INTERVAL;
-        event_loop.set_control_flow(ControlFlow::WaitUntil(next));
+        // Sleep until whichever comes first: the stream's next tick, or the
+        // earliest deadline. Neither means sleeping until something happens.
+        let stream_next = (self.root.wants_ticks() || self.tick_requested)
+            .then(|| self.last_tick.unwrap_or(now) + TICK_INTERVAL);
+        let next = match (stream_next, self.tick_deadline) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (a, b) => a.or(b),
+        };
+        event_loop.set_control_flow(match next {
+            Some(next) => ControlFlow::WaitUntil(next),
+            None => ControlFlow::Wait,
+        });
     }
 
     /// Take up the modifier keys winit reports as held now. A change is then

@@ -87,6 +87,7 @@ use crate::geometry::{Color, Point, Rect, Size};
 use crate::mime_drop::{self, Reading, URI_LIST};
 use crate::painter::Painter;
 use crate::svg::SvgImage;
+use crate::waker::Waker;
 use crate::widget::{PopupKind, PopupRequest, Widget};
 
 /// Icon sizes handed to the compositor before it has said which it wants —
@@ -104,7 +105,7 @@ const DEFAULT_ICON_SIZES: &[u32] = &[16, 24, 32, 48, 64, 128];
 const UI_EPSILON: f32 = 1e-4;
 
 pub(crate) fn run(app: App) {
-    let (window_cfg, mut themes, root, app_scale) = app.into_parts();
+    let (window_cfg, mut themes, root, app_scale, waker) = app.into_parts();
 
     let conn = Connection::connect_to_env().expect("saudade: Wayland connect failed");
     let (globals, event_queue) =
@@ -285,6 +286,8 @@ pub(crate) fn run(app: App) {
         needs_redraw: true,
         exit: false,
         tick_requested: false,
+        tick_deadline: None,
+        waker,
 
         keyboard: None,
         keyboard_surface: None,
@@ -440,6 +443,12 @@ struct State {
     /// loop iteration (~60Hz) and eventually get a BrokenPipe.
     needs_redraw: bool,
     exit: bool,
+    /// The earliest deadline a widget asked to be ticked at with
+    /// [`EventCtx::request_tick_at`]; cleared when its tick is dispatched. The
+    /// loop wakes every 16 ms, so `tick` only has to look.
+    tick_deadline: Option<Instant>,
+    /// The app's [`Waker`]: a wake makes `tick` dispatch a tick.
+    waker: Waker,
     /// Push-based tick keep-alive: set whenever a dispatch called
     /// [`EventCtx::request_tick`], so a widget can drive an animation without
     /// any `wants_ticks()` forwarding. Cleared just before each tick we fire.
@@ -1070,7 +1079,12 @@ impl State {
         // caret) or a pushed `request_tick` latch (transient, e.g. a held
         // scrollbar arrow). The latch is cleared before dispatch so the tick
         // handler re-arms it only while it still needs more.
-        if self.root.wants_ticks() || self.tick_requested {
+        let deadline_due = self.tick_deadline.is_some_and(|d| d <= Instant::now());
+        if deadline_due {
+            self.tick_deadline = None;
+        }
+        let woken = self.waker.take();
+        if self.root.wants_ticks() || self.tick_requested || deadline_due || woken {
             self.tick_requested = false;
             self.dispatch(Event::Tick);
         }
@@ -1310,6 +1324,9 @@ impl State {
         // how deeply the requesting widget is nested.
         if ctx.tick_requested {
             self.tick_requested = true;
+        }
+        if let Some(at) = ctx.tick_at {
+            self.tick_deadline = Some(self.tick_deadline.map_or(at, |d| d.min(at)));
         }
         if ctx.close_requested {
             self.exit = true;

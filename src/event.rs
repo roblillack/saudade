@@ -1,4 +1,5 @@
 use std::path::PathBuf;
+use std::time::{Duration, Instant};
 
 use crate::geometry::{Point, Size};
 
@@ -483,6 +484,9 @@ pub struct EventCtx {
     /// Set by a widget that wants the runtime to deliver at least one more
     /// [`Event::Tick`] soon — see [`Self::request_tick`].
     pub(crate) tick_requested: bool,
+    /// The earliest moment a widget asked for an [`Event::Tick`] at — see
+    /// [`Self::request_tick_at`].
+    pub(crate) tick_at: Option<Instant>,
     /// Set by a mnemonic-bearing widget (e.g. a [`FocusLabel`](crate::widgets::FocusLabel))
     /// whose accelerator was just matched, asking its parent container to move
     /// keyboard focus to the *next focusable sibling* after it. The container
@@ -526,6 +530,7 @@ impl EventCtx {
             dragging_out: false,
             swallow_key: false,
             tick_requested: false,
+            tick_at: None,
             focus_next_requested: false,
             cursor_request: None,
             fullscreen: false,
@@ -595,6 +600,50 @@ impl EventCtx {
     /// re-requesting, the ticks wind down on their own.
     pub fn request_tick(&mut self) {
         self.tick_requested = true;
+    }
+
+    /// Ask the runtime to deliver an [`Event::Tick`] once `deadline` has
+    /// come, even though nothing else happens until then.
+    ///
+    /// This is a timer: the runtime sleeps until the earliest deadline any
+    /// widget asked for and wakes up to dispatch one `Tick` then, so a caret
+    /// can blink at its own pace, an autosave can wait out a pause in the
+    /// typing, or a clock can step once a second — all without keeping the
+    /// ~60 Hz tick stream of [`Widget::wants_ticks`](crate::Widget::wants_ticks)
+    /// running, and the process asleep in between. Like any tick it goes to the
+    /// whole tree, so a widget keeps its own deadline and checks it when a tick
+    /// arrives; a tick can come early, for another widget's deadline, and
+    /// asking again for a deadline that is still pending costs nothing.
+    ///
+    /// It is one-shot: a widget that wants to be woken again asks again, from
+    /// that tick. A deadline already past is due right away.
+    ///
+    /// ```no_run
+    /// # use saudade::*;
+    /// # use std::time::{Duration, Instant};
+    /// # struct Clock { next: Instant }
+    /// # impl Clock {
+    /// fn event(&mut self, event: &Event, ctx: &mut EventCtx) {
+    ///     if let Event::Tick = event
+    ///         && Instant::now() >= self.next
+    ///     {
+    ///         self.next = Instant::now() + Duration::from_secs(1);
+    ///         ctx.request_paint();
+    ///     }
+    ///     ctx.request_tick_at(self.next);
+    /// }
+    /// # }
+    /// ```
+    pub fn request_tick_at(&mut self, deadline: Instant) {
+        self.tick_at = Some(match self.tick_at {
+            Some(earlier) => earlier.min(deadline),
+            None => deadline,
+        });
+    }
+
+    /// [`Self::request_tick_at`] `delay` from now.
+    pub fn request_tick_after(&mut self, delay: Duration) {
+        self.request_tick_at(Instant::now() + delay);
     }
 
     /// Ask the runtime to close the window after this dispatch completes.
