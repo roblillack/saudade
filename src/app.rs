@@ -420,6 +420,11 @@ struct AppHandler {
     /// `Moved` rather than asked for on every dispatch, which is a round trip
     /// to the X server.
     window_position: Option<Point>,
+    /// Whether the root has already heard that the window is going away — its
+    /// `on_cancel` ran for the close button, or the app closed it itself — so
+    /// `exiting` tells it only when something else ends the app (⌘Q from the
+    /// macOS application menu, logging out).
+    root_released: bool,
     /// Latch set whenever a dispatch called [`EventCtx::request_tick`] — the
     /// *push* path to keep ticks flowing without any `wants_ticks()` forwarding.
     /// Cleared just before each tick we fire, so the tick handler re-arms it
@@ -632,6 +637,7 @@ impl AppHandler {
             tick_deadline: None,
             waker: app.waker,
             window_position: None,
+            root_released: false,
             tick_requested: false,
             windowed_resize: None,
             #[cfg(windows)]
@@ -832,6 +838,16 @@ impl ApplicationHandler<Option<Appearance>> for AppHandler {
     }
 
     fn exiting(&mut self, _event_loop: &ActiveEventLoop) {
+        // Something other than the window's close button or the app itself is
+        // ending the app — ⌘Q in the macOS application menu, a logout — so the
+        // root hears of it the way it would of the close button, while its
+        // window still stands: a last chance to save.
+        if !self.root_released {
+            self.root_released = true;
+            let mut ctx = EventCtx::with_fullscreen(self.is_fullscreen());
+            ctx.window_position = self.window_position;
+            self.root.on_cancel(&mut ctx);
+        }
         // Tear the windows (and the drawing surfaces holding `Rc<Window>`
         // clones) down here, while the event loop is still alive. On macOS a
         // winit `Window` dropped *after* `run_app` returns calls into a
@@ -859,6 +875,7 @@ impl AppHandler {
                 let mut ctx = EventCtx::with_fullscreen(self.is_fullscreen());
                 ctx.window_position = self.window_position;
                 self.root.on_cancel(&mut ctx);
+                self.root_released = true;
                 event_loop.exit();
             }
             WindowEvent::Moved(_) => {
@@ -1357,6 +1374,7 @@ impl AppHandler {
             self.tick_deadline = Some(self.tick_deadline.map_or(at, |d| d.min(at)));
         }
         if ctx.close_requested {
+            self.root_released = true;
             event_loop.exit();
         }
         if let Some(size) = ctx.resize_request {

@@ -88,6 +88,9 @@ While pre-1.0, the minor version is bumped for breaking changes.
 
 ### Changed
 
+- The root widget's `on_cancel` now also runs when something other than the
+  window's close button ends the app — ⌘Q in the default macOS application
+  menu, a logout — so an app always gets a last chance to save. (#119)
 - `WindowConfig` has a new public field, `position`, so code that builds one
   as a struct literal must now set it; `WindowConfig::new` is unaffected.
   (#118)
