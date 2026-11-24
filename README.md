@@ -1801,6 +1801,18 @@ p.v_line(x, y, h, color);
 p.pixel(x, y, color);                       // 1×1 logical pixel
 ```
 
+Shapes worked out while painting — a caret that leans, a tag with a pointed
+end, a check mark, a status light — are filled anti-aliased with the same
+rasterizer an `include_svg!` image is, from points in fractional logical
+coordinates, crisp at any scale:
+
+```rust
+p.fill_polygon(&[(10.0, 10.0), (16.0, 14.0), (10.0, 18.0)], color); // non-zero winding
+p.fill_polygon_rings(&[outer, hole], FillRule::EvenOdd, color);
+p.line(x1, y1, x2, y2, 1.5, color);         // any angle, 1.5 logical px wide
+p.fill_ellipse(rect, color);                // a circle when `rect` is square
+```
+
 ### Win 3.1 chrome helpers
 
 ```rust
