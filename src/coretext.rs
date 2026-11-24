@@ -33,7 +33,7 @@ use objc2_core_foundation::{
 use objc2_core_graphics::{CGBitmapContextCreate, CGContext, CGGlyph, CGImageAlphaInfo};
 use objc2_core_text::{CTFont, CTFontOrientation, CTFontSymbolicTraits, CTFontUIFontType};
 
-use crate::font::{FontStyle, GlyphMetrics, STYLE_COUNT};
+use crate::font::{FontMetrics, FontStyle, GlyphMetrics, STYLE_COUNT};
 
 /// Size the emphasis probe runs at. Any size would do — whether a family has a
 /// bold face does not depend on how big it is drawn — so this is just a typical
@@ -107,6 +107,21 @@ impl Family {
     /// [`FontStyle`] numbers them.
     pub(crate) fn presence(&self) -> [bool; STYLE_COUNT] {
         self.presence
+    }
+
+    /// Vertical metrics of the face drawing `style` at `size` points.
+    pub(crate) fn metrics(&self, size: f32, style: FontStyle) -> FontMetrics {
+        let Some(font) = self.font_for(style, size, 1.0) else {
+            return FontMetrics::default();
+        };
+        // SAFETY: plain metric getters on a live CTFont.
+        unsafe {
+            FontMetrics {
+                ascent: font.ascent() as f32,
+                descent: font.descent() as f32,
+                line_gap: font.leading() as f32,
+            }
+        }
     }
 
     /// Advance width of one glyph of `size`-point text, in `style`, in logical

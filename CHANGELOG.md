@@ -12,6 +12,13 @@ While pre-1.0, the minor version is bumped for breaking changes.
 
 ### Added
 
+- `Font::metrics` (and `FontMetrics`) gives a face's ascent, descent and line
+  gap at a size, to put text on a baseline and space lines the way the font
+  wants. (#114)
+- `Font::system` hands out the system font the runtime draws a family in,
+  loaded once and shared, so an app can measure text outside a paint pass —
+  laying out a document while handling a key, say — with the very advances it
+  will be drawn with. (#114)
 - `SavedClip`, the state `Painter::push_clip` hands back, is exported, so a
   widget that pushes a clip in one method and pops it in another can keep it
   in a field. (#113)

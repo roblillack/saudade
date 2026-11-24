@@ -35,7 +35,7 @@ use crate::event::{
     Cursor, DragData, Event, EventCtx, Key, Modifiers, MouseButton, NamedKey,
     SCROLL_PIXELS_PER_LINE, WHEEL_LINES_PER_DETENT,
 };
-use crate::font::{Font, FontSet};
+use crate::font::{Font, FontFamily, FontSet};
 use crate::geometry::{Color, Point, Rect, Size};
 use crate::painter::Painter;
 use crate::present::{Alpha, Surface};
@@ -295,9 +295,9 @@ struct AppHandler {
     /// or `SAUDADE_THEME` — currently calls for.
     themes: Themes,
     root: Box<dyn Widget>,
-    font: Option<Font>,
-    serif_font: Option<Font>,
-    mono_font: Option<Font>,
+    font: Option<Rc<Font>>,
+    serif_font: Option<Rc<Font>>,
+    mono_font: Option<Rc<Font>>,
 
     // Resources created in `resumed`:
     main_win: Option<Rc<Window>>,
@@ -546,7 +546,8 @@ const TICK_INTERVAL: Duration = Duration::from_millis(16);
 impl AppHandler {
     fn new(app: App) -> Self {
         let design_size = app.window.size;
-        let [font, serif_font, mono_font] = Font::load_system();
+        let [font, serif_font, mono_font] =
+            [FontFamily::Sans, FontFamily::Serif, FontFamily::Mono].map(Font::system);
         Self {
             window_config: app.window,
             design_size,
@@ -1746,9 +1747,9 @@ impl AppHandler {
             origin_x,
             origin_y,
             FontSet {
-                sans: self.font.as_ref(),
-                serif: self.serif_font.as_ref(),
-                mono: self.mono_font.as_ref(),
+                sans: self.font.as_deref(),
+                serif: self.serif_font.as_deref(),
+                mono: self.mono_font.as_deref(),
             },
             None,
         )
@@ -1813,9 +1814,9 @@ impl AppHandler {
             origin_x,
             origin_y,
             FontSet {
-                sans: self.font.as_ref(),
-                serif: self.serif_font.as_ref(),
-                mono: self.mono_font.as_ref(),
+                sans: self.font.as_deref(),
+                serif: self.serif_font.as_deref(),
+                mono: self.mono_font.as_deref(),
             },
             Some(anchor),
         )

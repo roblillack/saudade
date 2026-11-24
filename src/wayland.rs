@@ -82,7 +82,7 @@ use crate::event::{
     Cursor, DragData, DropAction, Event, EventCtx, Key, Modifiers, MouseButton, NamedKey,
     SCROLL_PIXELS_PER_LINE, WHEEL_LINES_PER_DETENT,
 };
-use crate::font::{Font, FontSet};
+use crate::font::{Font, FontFamily, FontSet};
 use crate::geometry::{Color, Point, Rect, Size};
 use crate::mime_drop::{self, Reading, URI_LIST};
 use crate::painter::Painter;
@@ -238,7 +238,8 @@ pub(crate) fn run(app: App) {
     let pool = SlotPool::new((initial_w * initial_h * 4) as usize * 4, &shm)
         .expect("saudade: slot pool init failed");
 
-    let [font, serif_font, mono_font] = Font::load_system();
+    let [font, serif_font, mono_font] =
+        [FontFamily::Sans, FontFamily::Serif, FontFamily::Mono].map(Font::system);
     let mut state = State {
         registry_state: RegistryState::new(&globals),
         seat_state: SeatState::new(&globals, &qh),
@@ -368,9 +369,9 @@ struct State {
     /// The light and dark themes, and which one the desktop's appearance —
     /// or `SAUDADE_THEME` — currently calls for.
     themes: Themes,
-    font: Option<Font>,
-    serif_font: Option<Font>,
-    mono_font: Option<Font>,
+    font: Option<Rc<Font>>,
+    serif_font: Option<Rc<Font>>,
+    mono_font: Option<Rc<Font>>,
 
     pool: SlotPool,
     /// Surface (logical) dimensions reported by the compositor. The buffer we
@@ -1468,9 +1469,9 @@ impl State {
                 0,
                 0,
                 FontSet {
-                    sans: self.font.as_ref(),
-                    serif: self.serif_font.as_ref(),
-                    mono: self.mono_font.as_ref(),
+                    sans: self.font.as_deref(),
+                    serif: self.serif_font.as_deref(),
+                    mono: self.mono_font.as_deref(),
                 },
                 None,
             );
@@ -1761,9 +1762,9 @@ impl State {
         };
         let pixels = bytes_as_u32_mut(canvas);
         let fonts = FontSet {
-            sans: self.font.as_ref(),
-            serif: self.serif_font.as_ref(),
-            mono: self.mono_font.as_ref(),
+            sans: self.font.as_deref(),
+            serif: self.serif_font.as_deref(),
+            mono: self.mono_font.as_deref(),
         };
 
         // Buffer holds physical pixels; the painter multiplies the widget
@@ -1882,9 +1883,9 @@ impl State {
         let transparent = p.surface.kind() == PopupKind::Popup;
 
         let fonts = FontSet {
-            sans: self.font.as_ref(),
-            serif: self.serif_font.as_ref(),
-            mono: self.mono_font.as_ref(),
+            sans: self.font.as_deref(),
+            serif: self.serif_font.as_deref(),
+            mono: self.mono_font.as_deref(),
         };
         {
             let mut painter = Painter::with_popup_anchor(
