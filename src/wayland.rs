@@ -3658,6 +3658,7 @@ fn map_keysym(keysym: Keysym) -> Option<Key> {
         K::F22 => NamedKey::F22,
         K::F23 => NamedKey::F23,
         K::F24 => NamedKey::F24,
+        K::Menu => NamedKey::ContextMenu,
         _ => {
             let ch = keysym.key_char()?;
             return Some(Key::Char(ch));

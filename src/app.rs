@@ -2787,6 +2787,7 @@ fn map_named(named: WNamedKey) -> Option<NamedKey> {
         WNamedKey::F22 => NamedKey::F22,
         WNamedKey::F23 => NamedKey::F23,
         WNamedKey::F24 => NamedKey::F24,
+        WNamedKey::ContextMenu => NamedKey::ContextMenu,
         _ => return None,
     })
 }

@@ -92,6 +92,9 @@ pub enum NamedKey {
     F22,
     F23,
     F24,
+    /// The Menu (or Application) key PC keyboards carry next to the right
+    /// Ctrl, which opens a context menu where the caret or selection is.
+    ContextMenu,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]

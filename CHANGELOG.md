@@ -12,6 +12,8 @@ While pre-1.0, the minor version is bumped for breaking changes.
 
 ### Added
 
+- `NamedKey::ContextMenu`, the Menu key of PC keyboards, for opening a
+  context menu from the keyboard. (#116)
 - `Font::metrics` (and `FontMetrics`) gives a face's ascent, descent and line
   gap at a size, to put text on a baseline and space lines the way the font
   wants. (#114)
@@ -73,6 +75,8 @@ While pre-1.0, the minor version is bumped for breaking changes.
 
 ### Changed
 
+- `NamedKey` has a new variant, `ContextMenu`, which a `match` without a
+  catch-all has to handle. (#116)
 - `render_framed` centers the window title on the title bar and sets it in
   bold, as Canoe does. (#111)
 
