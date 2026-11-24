@@ -3,7 +3,7 @@ use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use winit::application::ApplicationHandler;
-use winit::dpi::{LogicalSize, PhysicalPosition, PhysicalSize};
+use winit::dpi::{LogicalPosition, LogicalSize, PhysicalPosition, PhysicalSize};
 use winit::event::{
     ElementState, InnerSizeWriter, MouseButton as WinitMouseButton, MouseScrollDelta, WindowEvent,
 };
@@ -66,6 +66,9 @@ pub struct WindowConfig {
     /// The name the desktop knows the program by — see [`app_id`](Self::app_id).
     /// `None` takes the executable's file name.
     pub app_id: Option<String>,
+    /// Where to open the window — see [`position`](Self::position). `None`
+    /// leaves it to the window manager.
+    pub position: Option<Point>,
 }
 
 impl WindowConfig {
@@ -78,6 +81,7 @@ impl WindowConfig {
             icon: None,
             fullscreen: false,
             app_id: None,
+            position: None,
         }
     }
 
@@ -145,6 +149,26 @@ impl WindowConfig {
     /// which identify a program by other means.
     pub fn app_id(mut self, app_id: impl Into<String>) -> Self {
         self.app_id = Some(app_id.into());
+        self
+    }
+
+    /// Open the window with its top-left corner at `(x, y)` on the desktop, in
+    /// the platform's own logical coordinates — the ones
+    /// [`EventCtx::window_position`](crate::event::EventCtx::window_position)
+    /// reports, so an app can put its window back where the user left it:
+    ///
+    /// ```no_run
+    /// # use saudade::*;
+    /// # fn saved() -> Option<(Point, Size)> { None }
+    /// let mut config = WindowConfig::new("Notes", 400, 600).resizable(true);
+    /// if let Some((pos, size)) = saved() {
+    ///     config = WindowConfig { size, ..config }.position(pos.x, pos.y);
+    /// }
+    /// ```
+    ///
+    /// Wayland gives a window no say in where it goes, so it is ignored there.
+    pub fn position(mut self, x: i32, y: i32) -> Self {
+        self.position = Some(Point::new(x, y));
         self
     }
 }
@@ -391,6 +415,11 @@ struct AppHandler {
     tick_deadline: Option<Instant>,
     /// The app's [`Waker`]: a wake makes `pump_ticks` dispatch a tick.
     waker: Waker,
+    /// Where the main window sits on the desktop, in the platform's logical
+    /// coordinates, for [`EventCtx::window_position`]. Kept up to date from
+    /// `Moved` rather than asked for on every dispatch, which is a round trip
+    /// to the X server.
+    window_position: Option<Point>,
     /// Latch set whenever a dispatch called [`EventCtx::request_tick`] — the
     /// *push* path to keep ticks flowing without any `wants_ticks()` forwarding.
     /// Cleared just before each tick we fire, so the tick handler re-arms it
@@ -602,6 +631,7 @@ impl AppHandler {
             last_tick: None,
             tick_deadline: None,
             waker: app.waker,
+            window_position: None,
             tick_requested: false,
             windowed_resize: None,
             #[cfg(windows)]
@@ -645,6 +675,9 @@ impl ApplicationHandler<Option<Appearance>> for AppHandler {
         if let Some(min) = self.window_config.min_size {
             attrs = attrs.with_min_inner_size(self.to_platform(min));
         }
+        if let Some(pos) = self.window_config.position {
+            attrs = attrs.with_position(LogicalPosition::new(pos.x as f64, pos.y as f64));
+        }
         // X11: the app_id as both halves of `WM_CLASS`, which is what a window
         // manager matches against `StartupWMClass` and desktop-entry names.
         #[cfg(all(unix, not(target_os = "macos")))]
@@ -687,6 +720,7 @@ impl ApplicationHandler<Option<Appearance>> for AppHandler {
         if let Some(theme) = win.theme() {
             self.themes.follow(appearance_of(theme));
         }
+        self.window_position = logical_position(&win);
         let win = Rc::new(win);
         let id = win.id();
 
@@ -823,10 +857,14 @@ impl AppHandler {
                 // pending edits on close, just as Escape or a `Modal`'s close
                 // would. Most roots leave this a no-op.
                 let mut ctx = EventCtx::with_fullscreen(self.is_fullscreen());
+                ctx.window_position = self.window_position;
                 self.root.on_cancel(&mut ctx);
                 event_loop.exit();
             }
             WindowEvent::Moved(_) => {
+                if let Some(win) = self.main_win.as_ref() {
+                    self.window_position = logical_position(win);
+                }
                 // The main window changed screen position. Override-redirect
                 // popups are unmanaged top-level windows that don't follow
                 // their "parent", so we have to reposition them manually
@@ -1303,6 +1341,7 @@ impl AppHandler {
     fn dispatch(&mut self, event: &Event, event_loop: &ActiveEventLoop) -> EventCtx {
         let mut ctx = EventCtx::with_fullscreen(self.is_fullscreen());
         ctx.modifiers = self.modifiers;
+        ctx.window_position = self.window_position;
         self.root.event(event, &mut ctx);
         if ctx.paint_requested {
             self.needs_redraw = true;
@@ -2725,6 +2764,18 @@ fn suppress_show_animation(win: &Window) {
     if let Some(window) = ns_window(win) {
         window.setAnimationBehavior(objc2_app_kit::NSWindowAnimationBehavior::None);
     }
+}
+
+/// Where `win`'s top-left corner sits on the desktop, in the platform's logical
+/// coordinates (see [`EventCtx::window_position`]). `None` where the platform
+/// won't say.
+fn logical_position(win: &Window) -> Option<Point> {
+    let pos = win.outer_position().ok()?;
+    let logical: LogicalPosition<f64> = pos.to_logical(win.scale_factor());
+    Some(Point::new(
+        logical.x.round() as i32,
+        logical.y.round() as i32,
+    ))
 }
 
 /// What winit's theme stands for in saudade's terms.
