@@ -124,6 +124,22 @@ impl Modifiers {
         self.control || self.alt || self.logo
     }
 
+    /// True when a key pressed with these modifiers issues a command instead of
+    /// typing: the runtime then sends no [`Event::Char`] for it, and text fields
+    /// leave it alone.
+    ///
+    /// Elsewhere that is [`has_command`](Self::has_command). On macOS the
+    /// Option key — left or right — is how a Mac types characters: ⌥L is `@`,
+    /// ⌥5 is `[` on a German keyboard, ⌥E starts an accent. So there only
+    /// Control and ⌘ make a keystroke a command.
+    pub fn suppresses_text(&self) -> bool {
+        if cfg!(target_os = "macos") {
+            self.control || self.logo
+        } else {
+            self.has_command()
+        }
+    }
+
     /// True when an Alt key that should activate menu mnemonics is held — the
     /// left Alt only. The right Alt (`AltGr`) is reserved for composing
     /// characters such as umlauts and must not steal those keystrokes.

@@ -78,6 +78,10 @@ While pre-1.0, the minor version is bumped for breaking changes.
 
 ### Fixed
 
+- On macOS, text typed with the Option key reaches the widgets: ⌥L for `@`,
+  ⌥5 for `[` on a German keyboard and the like were dropped, Option counting
+  as a command modifier. `Modifiers::suppresses_text` says which modifiers
+  make a keystroke a command on the platform at hand. (#115)
 - A quick click shows. A tap on a trackpad set to tap-to-click reports its
   press and release together, so both reached the widgets before a frame
   was painted in between: a `Button` ran its action without ever looking

@@ -1622,7 +1622,7 @@ impl AppHandler {
                         return;
                     }
                 }
-                if !self.modifiers.has_command()
+                if !self.modifiers.suppresses_text()
                     && let Some(text) = key.text.as_deref()
                 {
                     for ch in text.chars() {

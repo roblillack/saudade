@@ -678,7 +678,7 @@ impl Widget for TextInput {
                 }
                 ctx.request_paint();
             }
-            Event::Char { ch, modifiers } if !modifiers.has_command() => {
+            Event::Char { ch, modifiers } if !modifiers.suppresses_text() => {
                 if !self.focused {
                     return;
                 }
