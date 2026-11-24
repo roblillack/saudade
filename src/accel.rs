@@ -266,6 +266,7 @@ fn key_label(key: Key) -> String {
             NamedKey::F22 => "F22",
             NamedKey::F23 => "F23",
             NamedKey::F24 => "F24",
+            NamedKey::ContextMenu => "Menu",
         }
         .to_string(),
     }
@@ -352,6 +353,7 @@ fn parse_key(token: &str, accel: &str) -> Key {
         "f22" => NamedKey::F22,
         "f23" => NamedKey::F23,
         "f24" => NamedKey::F24,
+        "menu" | "contextmenu" | "apps" => NamedKey::ContextMenu,
         _ => panic!("unknown key {token:?} in accelerator {accel:?}"),
     };
     Key::Named(named)
