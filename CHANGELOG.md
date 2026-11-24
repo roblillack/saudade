@@ -12,6 +12,10 @@ While pre-1.0, the minor version is bumped for breaking changes.
 
 ### Added
 
+- `WindowConfig::position` opens the window at a given spot on the desktop,
+  and `EventCtx::window_position` tells where it is now, so an app can put
+  its window back where the user left it. Both are in the platform's logical
+  coordinates; Wayland has neither. (#118)
 - `EventCtx::request_tick_at` and `request_tick_after`: a timer. The runtime
   sleeps until the earliest deadline any widget asked for and dispatches one
   `Event::Tick` then, so a caret can blink, an autosave wait out a pause in
@@ -84,6 +88,9 @@ While pre-1.0, the minor version is bumped for breaking changes.
 
 ### Changed
 
+- `WindowConfig` has a new public field, `position`, so code that builds one
+  as a struct literal must now set it; `WindowConfig::new` is unaffected.
+  (#118)
 - `NamedKey` has a new variant, `ContextMenu`, which a `match` without a
   catch-all has to handle. (#116)
 - `render_framed` centers the window title on the title bar and sets it in

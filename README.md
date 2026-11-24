@@ -404,6 +404,7 @@ impl EventCtx {
     pub fn request_tick(&mut self);              // one more Tick soon (an animation step)
     pub fn request_tick_at(&mut self, deadline: Instant); // one Tick then — a timer
     pub fn request_tick_after(&mut self, delay: Duration);
+    pub fn window_position(&self) -> Option<Point>; // where the window is; see "Window position"
 }
 ```
 
@@ -453,6 +454,14 @@ std::thread::spawn(move || {
 });
 app.run();
 ```
+
+#### Window position
+
+`EventCtx::window_position` tells where the main window's top-left corner
+sits on the desktop, and `WindowConfig::position` opens a window there, both
+in the platform's own logical coordinates (points on macOS), so an app can
+put its window back where the user left it. Wayland gives a window no say in
+where it goes: there the one is `None` and the other ignored.
 
 #### Fullscreen
 
@@ -2013,6 +2022,7 @@ pub struct WindowConfig {
     pub icon: Option<SvgImage>,   // see "Application icon"
     pub fullscreen: bool,         // open filling the display; see "Fullscreen"
     pub app_id: Option<String>,   // the desktop-entry name; see "Application icon"
+    pub position: Option<Point>,  // where to open it; see "Window position"
 }
 
 WindowConfig::new("About Retrofetch", 395, 305);

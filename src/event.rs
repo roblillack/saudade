@@ -487,6 +487,9 @@ pub struct EventCtx {
     /// The earliest moment a widget asked for an [`Event::Tick`] at — see
     /// [`Self::request_tick_at`].
     pub(crate) tick_at: Option<Instant>,
+    /// Where the main window sits on the desktop, filled in by the runtime —
+    /// see [`Self::window_position`].
+    pub(crate) window_position: Option<Point>,
     /// Set by a mnemonic-bearing widget (e.g. a [`FocusLabel`](crate::widgets::FocusLabel))
     /// whose accelerator was just matched, asking its parent container to move
     /// keyboard focus to the *next focusable sibling* after it. The container
@@ -531,6 +534,7 @@ impl EventCtx {
             swallow_key: false,
             tick_requested: false,
             tick_at: None,
+            window_position: None,
             focus_next_requested: false,
             cursor_request: None,
             fullscreen: false,
@@ -644,6 +648,19 @@ impl EventCtx {
     /// [`Self::request_tick_at`] `delay` from now.
     pub fn request_tick_after(&mut self, delay: Duration) {
         self.request_tick_at(Instant::now() + delay);
+    }
+
+    /// Where the main window's top-left corner sits on the desktop, in the
+    /// platform's own logical coordinates — points on macOS, and pixels at the
+    /// window's scale factor elsewhere. That is the unit
+    /// [`WindowConfig::position`](crate::WindowConfig::position) takes, so an
+    /// app can remember where its window was and open it there next time.
+    ///
+    /// `None` on Wayland, where a window never learns where it is, and in
+    /// dispatches the runtime makes outside any window (a test's
+    /// `MockBackend`).
+    pub fn window_position(&self) -> Option<Point> {
+        self.window_position
     }
 
     /// Ask the runtime to close the window after this dispatch completes.
