@@ -1269,7 +1269,7 @@ impl Widget for TextEditor {
                 }
                 ctx.request_paint();
             }
-            Event::Char { ch, modifiers } if !modifiers.has_command() => {
+            Event::Char { ch, modifiers } if !modifiers.suppresses_text() => {
                 if !self.focused || self.read_only {
                     return;
                 }

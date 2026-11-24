@@ -2765,7 +2765,7 @@ impl State {
                     return;
                 }
             }
-            if !modifiers.has_command()
+            if !modifiers.suppresses_text()
                 && let Some(utf8) = event.utf8.as_deref()
             {
                 for ch in utf8.chars() {
