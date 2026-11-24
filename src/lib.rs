@@ -47,10 +47,16 @@ mod icon;
 #[cfg(target_os = "macos")]
 mod macos_layer;
 #[cfg(target_os = "macos")]
+mod macos_menu;
+#[cfg(target_os = "macos")]
 mod macos_popup;
 #[cfg(all(unix, not(target_os = "macos")))]
 mod mime_drop;
 pub mod mock;
+// What the macOS menu bar is made of, worked out without AppKit — and so
+// tested on every platform.
+#[cfg(any(target_os = "macos", test))]
+mod native_menu;
 mod painter;
 // Only used off macOS, but built on every Unix so its tests run on a Mac too.
 #[cfg(unix)]
@@ -103,6 +109,6 @@ pub use widget::{PopupKind, PopupRequest, Widget};
 pub use widgets::{
     Bevel, Button, ButtonGroup, Checkbox, Column, Container, ContextMenu, Dialog, DialogIcon,
     Dropdown, FileDialog, FileFilter, FocusLabel, GroupButton, Image, Label, List, ListIcon,
-    ListItem, Menu, MenuBar, MenuItem, Modal, NumberInput, Orientation, ProgressBar, Row,
+    ListItem, Menu, MenuBar, MenuItem, MenuRole, Modal, NumberInput, Orientation, ProgressBar, Row,
     SCROLLBAR_THICKNESS, ScrollBar, Slider, SpinButton, TextEditor, TextInput,
 };

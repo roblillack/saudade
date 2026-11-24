@@ -114,14 +114,12 @@ fn main() {
 
     // Positions below are logical pixels in the example's window, as laid out
     // by its own code.
-    shoot(
-        &out,
-        "notepad",
-        notepad::window(root.join("LICENSE")),
-        |w| {
-            w.click(14, 10); // the File menu
-        },
-    );
+    // Notepad hands its menu bar to the `App`, which puts it in the window
+    // everywhere but macOS: `MenuBar::above` is that window.
+    let (config, menu_bar, content) = notepad::window(root.join("LICENSE"));
+    shoot(&out, "notepad", (config, menu_bar.above(content)), |w| {
+        w.click(14, 10); // the File menu
+    });
     shoot(&out, "filer", filer::window(root.join("examples")), |_| {});
     shoot(&out, "dnd", dnd::window(), stage_dnd);
     shoot(&out, "fullscreen", fullscreen::window(false), |_| {});

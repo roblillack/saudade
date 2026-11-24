@@ -92,8 +92,14 @@ impl Column {
     }
 
     pub fn push_fill(&mut self, widget: impl Widget + 'static) {
+        self.push_fill_boxed(Box::new(widget));
+    }
+
+    /// [`push_fill`](Self::push_fill) for a widget that is boxed already — an
+    /// [`App`](crate::App)'s root, which it puts beneath its menu bar.
+    pub(crate) fn push_fill_boxed(&mut self, widget: Box<dyn Widget>) {
         self.children.push(Child {
-            widget: Box::new(widget),
+            widget,
             mode: SizeMode::Fill,
         });
     }
@@ -131,6 +137,16 @@ impl Column {
             self.focused = Some(index);
         }
         focused
+    }
+
+    /// The child at `index`, in add order (fixed and fill children alike).
+    pub(crate) fn child(&self, index: usize) -> Option<&dyn Widget> {
+        self.children.get(index).map(|c| c.widget.as_ref())
+    }
+
+    /// The child at `index`, in add order, to change.
+    pub(crate) fn child_mut(&mut self, index: usize) -> Option<&mut (dyn Widget + 'static)> {
+        self.children.get_mut(index).map(|c| c.widget.as_mut())
     }
 
     /// The child holding the pointer, if it still holds it. A capture begins
@@ -498,6 +514,21 @@ impl Widget for Column {
     fn focusable(&self) -> bool {
         self.children.iter().any(|c| c.widget.focusable())
             || self.overlays.iter().any(|o| o.focusable())
+    }
+
+    /// Pass a focus change from the parent on to the child holding the focus
+    /// here. A leaf would show or hide its caret; a `Column` nested in another
+    /// container — the content beneath an [`App`](crate::App)'s menu bar —
+    /// has its focused widget do so instead, so that one reads as unfocused
+    /// while a menu of the parent's owns the keyboard. Focus this column has
+    /// suspended itself, for a menu or dialog of its own, stays suspended.
+    fn set_focused(&mut self, focused: bool) {
+        let suspended = self.focus_suspended;
+        if let Some(idx) = self.focused
+            && let Some(child) = self.children.get_mut(idx)
+        {
+            child.widget.set_focused(focused && !suspended);
+        }
     }
 
     fn focus_first(&mut self) -> bool {

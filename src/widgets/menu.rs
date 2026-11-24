@@ -36,8 +36,29 @@ pub enum MenuItem {
         /// `f()` is true, a checkmark is drawn in the item's left gutter. `None`
         /// is an ordinary (never-checked) item. See [`MenuItem::with_checked`].
         checked: Option<Box<dyn Fn() -> bool>>,
+        /// The standard command this item is, if it is one — see
+        /// [`MenuItem::with_role`]. Only the macOS menu bar reads it.
+        role: Option<MenuRole>,
     },
     Separator,
+}
+
+/// A standard command every program has, which macOS keeps in a place of its
+/// own: the application menu, the bold one named after the program at the left
+/// end of the menu bar. See [`MenuItem::with_role`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum MenuRole {
+    /// A box with the program's name, version and credits: Help ▸ About on
+    /// Windows and Linux; `About <App>`, first in the application menu, on a
+    /// Mac.
+    About,
+    /// The program's settings: Tools ▸ Options, Edit ▸ Preferences or the like
+    /// on Windows and Linux; `Settings…` (⌘,) in the application menu on a
+    /// Mac.
+    Preferences,
+    /// Ending the program: File ▸ Exit on Windows and Linux; `Quit <App>`
+    /// (⌘Q), last in the application menu, on a Mac.
+    Quit,
 }
 
 impl MenuItem {
@@ -51,7 +72,49 @@ impl MenuItem {
             callback: Box::new(callback),
             enabled: None,
             checked: None,
+            role: None,
         }
+    }
+
+    /// Mark the item as one of the standard commands a Mac keeps in its
+    /// application menu, so it goes there when the bar is the system's.
+    ///
+    /// Where a program's About, settings and Exit commands live differs: on
+    /// Windows and Linux they are ordinary items of the program's own menus —
+    /// Help ▸ About, Tools ▸ Options, File ▸ Exit — while on a Mac all three
+    /// sit in the application menu, the bold one named after the program. A
+    /// bar handed to [`App::with_menu_bar`](crate::App::with_menu_bar) is the
+    /// system menu bar on macOS, and there an item with a role is moved out of
+    /// the menu it is declared in, into the application menu:
+    ///
+    /// - [`MenuRole::About`] goes first, titled `About <App>`, keeping its own
+    ///   accelerator if it has one;
+    /// - [`MenuRole::Preferences`] after it, titled `Settings…`
+    ///   (`Preferences…` before macOS 13), on its own accelerator or else ⌘,;
+    /// - [`MenuRole::Quit`] last, titled `Quit <App>`, on ⌘Q.
+    ///
+    /// `<App>` is [`MenuBar::with_app_name`]'s name. A separator the move
+    /// leaves at either end of its menu, or next to another, goes too, and so
+    /// does a menu the move leaves empty. Everything else about the item stays:
+    /// its callback, and [`with_enabled`](Self::with_enabled) and
+    /// [`with_checked`](Self::with_checked) if it has them.
+    ///
+    /// Everywhere else — and on a Mac in a bar the app puts in its window
+    /// itself — the role changes nothing: the item stays where it was
+    /// declared, under its own label.
+    ///
+    /// ```no_run
+    /// # use saudade::*;
+    /// MenuItem::action("E&xit", |cx| cx.close()).with_role(MenuRole::Quit);
+    /// ```
+    ///
+    /// Of several items with the same role, the first one moves. No-op on
+    /// separators.
+    pub fn with_role(mut self, role: MenuRole) -> Self {
+        if let MenuItem::Action { role: slot, .. } = &mut self {
+            *slot = Some(role);
+        }
+        self
     }
 
     /// Attach a keyboard accelerator to an action item: the chord is shown
@@ -197,7 +260,15 @@ pub struct MenuBar {
     /// doesn't count as a move either — see the `PointerMove` arm.
     last_pointer: Option<Point>,
     cache: Cache,
+    /// The program's name in the macOS application menu — see
+    /// [`MenuBar::with_app_name`]. Only the macOS menu bar reads it.
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    app_name: Option<String>,
 }
+
+/// How tall a bar is put in the window when the `Rect` it was built with has
+/// no height: one line of the menu font, as Windows 3.1 had it.
+const DEFAULT_BAR_HEIGHT: i32 = 20;
 
 impl MenuBar {
     pub fn new(rect: Rect) -> Self {
@@ -210,12 +281,90 @@ impl MenuBar {
             drag_armed: false,
             last_pointer: None,
             cache: Cache::default(),
+            app_name: None,
         }
     }
 
     pub fn add_menu(mut self, menu: Menu) -> Self {
         self.menus.push(menu);
         self
+    }
+
+    /// The program's name, as the macOS application menu has it: in its
+    /// `About <name>`, `Hide <name>` and `Quit <name>` items, and as the
+    /// menu's title. Only a bar that is the system's — one handed to
+    /// [`App::with_menu_bar`](crate::App::with_menu_bar), on macOS — has an
+    /// application menu; everywhere else this changes nothing.
+    ///
+    /// Without one the process's name is used, which for a program started
+    /// straight from its executable rather than from an `.app` bundle is the
+    /// executable's file name (`my-app`), where the user expects `My App`.
+    ///
+    /// The bold title the menu has on the menu bar is drawn by macOS, which
+    /// may go by the bundle's name (`CFBundleName`) or, without a bundle, the
+    /// executable's, whatever the menu is called.
+    pub fn with_app_name(mut self, name: impl Into<String>) -> Self {
+        self.app_name = Some(name.into());
+        self
+    }
+
+    /// The name [`with_app_name`](Self::with_app_name) gave the program.
+    #[cfg(target_os = "macos")]
+    pub(crate) fn app_name(&self) -> Option<&str> {
+        self.app_name.as_deref()
+    }
+
+    /// The bar's menus, as declared.
+    #[cfg(any(target_os = "macos", test))]
+    pub(crate) fn menus(&self) -> &[Menu] {
+        &self.menus
+    }
+
+    /// How tall the bar is in a window: the height of the `Rect` it was built
+    /// with, or [`DEFAULT_BAR_HEIGHT`] for a `Rect` without one.
+    pub(crate) fn natural_height(&self) -> i32 {
+        if self.rect.h > 0 {
+            self.rect.h
+        } else {
+            DEFAULT_BAR_HEIGHT
+        }
+    }
+
+    /// Put the bar in a window above `content`, which fills the rest of it —
+    /// what [`App::with_menu_bar`](crate::App::with_menu_bar) does on Windows,
+    /// X11 and Wayland, and what an app that keeps its menu bar in the window
+    /// built for itself:
+    ///
+    /// ```no_run
+    /// # use saudade::*;
+    /// # let (bar, content) = (MenuBar::new(Rect::new(0, 0, 0, 20)), Container::new(1, 1));
+    /// Column::new().add_fixed(bar, 20).add_fill(content);
+    /// ```
+    ///
+    /// The bar is as tall as the `Rect` it was built with says (20 if that has
+    /// no height) and as wide as the window. Its mnemonics and accelerators
+    /// work while `content` has the keyboard, and the keyboard starts out with
+    /// `content`'s first focusable widget, as in that `Column`. Two things are
+    /// added: the window's close button reaches `content`'s
+    /// [`on_cancel`](crate::Widget::on_cancel), and while `content` holds the
+    /// pointer — a [`Modal`](crate::Modal) or [`Dialog`](crate::Dialog) open in
+    /// it, say — it gets every event and the bar stays shut, as it would were
+    /// that dialog an overlay of the `Column` holding the bar.
+    ///
+    /// This is how to show an app built for `App::with_menu_bar` offscreen,
+    /// with [`MockBackend`](crate::mock::MockBackend), the way it looks on
+    /// every platform but macOS — or to keep the bar in the window on a Mac
+    /// too:
+    ///
+    /// ```no_run
+    /// # use saudade::*;
+    /// # use saudade::mock::MockBackend;
+    /// # let (bar, content) = (MenuBar::new(Rect::new(0, 0, 0, 20)), Container::new(1, 1));
+    /// let mut window = bar.above(content);
+    /// let shot = MockBackend::new(520, 340).render(&mut window);
+    /// ```
+    pub fn above(self, content: impl Widget + 'static) -> impl Widget {
+        crate::widgets::MenuBarHost::new(self, Box::new(content))
     }
 
     /// Pin the [`ModifierScheme`] accelerators are matched and rendered with,
@@ -305,6 +454,26 @@ impl MenuBar {
         {
             callback(ctx);
         }
+    }
+
+    /// Fire item `item` of menu `menu` from outside the bar — the system menu
+    /// bar on macOS, which keeps its items' callbacks here. As any other way of
+    /// firing it, a disabled item doesn't fire. Asks for a repaint afterwards,
+    /// as an accelerator does. Returns whether the item fired.
+    #[cfg(target_os = "macos")]
+    pub(crate) fn fire_item(&mut self, menu: usize, item: usize, ctx: &mut EventCtx) -> bool {
+        let Some(MenuItem::Action {
+            callback, enabled, ..
+        }) = self.menus.get_mut(menu).and_then(|m| m.items.get_mut(item))
+        else {
+            return false;
+        };
+        if enabled.as_ref().is_some_and(|enabled| !enabled()) {
+            return false;
+        }
+        callback(ctx);
+        ctx.request_paint();
+        true
     }
 
     /// Find a top-level menu whose mnemonic matches the typed character.
