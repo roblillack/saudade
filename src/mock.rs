@@ -21,6 +21,20 @@
 //! Input simulation is not implemented yet — once added, callers will be
 //! able to feed [`Event`]s into the same backend to
 //! drive widgets between renders.
+//!
+//! The backend renders a widget, not an [`App`](crate::App), so a menu bar
+//! handed to [`App::with_menu_bar`](crate::App::with_menu_bar) isn't part of
+//! what it draws. [`MenuBar::above`](crate::MenuBar::above) is the window the
+//! runtime builds around the root for one on Windows, X11 and Wayland — render
+//! that to show the app with its bar, the same on every host:
+//!
+//! ```no_run
+//! # use saudade::*;
+//! # use saudade::mock::MockBackend;
+//! # let (menu_bar, root) = (MenuBar::new(Rect::new(0, 0, 0, 20)), Container::new(1, 1));
+//! let mut window = menu_bar.above(root);
+//! let snap = MockBackend::new(520, 340).render(&mut window);
+//! ```
 
 use crate::background::{BackgroundPattern, BackgroundState};
 use crate::chrome::{self, WindowChrome};

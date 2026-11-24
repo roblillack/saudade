@@ -5,8 +5,9 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
 use saudade::{
-    App, Column, Dialog, Event, EventCtx, FileDialog, FileFilter, Menu, MenuBar, MenuItem, Painter,
-    PopupRequest, Rect, SvgImage, TextEditor, Theme, Widget, WindowConfig, include_svg,
+    Accel, App, Column, Dialog, Event, EventCtx, FileDialog, FileFilter, Menu, MenuBar, MenuItem,
+    MenuRole, NamedKey, Painter, PopupRequest, Rect, SvgImage, TextEditor, Theme, Widget,
+    WindowConfig, include_svg,
 };
 
 const WINDOW_W: i32 = 520;
@@ -26,14 +27,20 @@ fn main() {
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("notepad.txt"));
 
-    let (config, root) = window(initial_path);
-    App::new(config, root).with_theme(Theme::windows_31()).run();
+    // The menu bar goes to the `App` rather than into the widget tree: on
+    // macOS it becomes the system menu bar at the top of the screen, and
+    // everywhere else the runtime puts it in the window, above the editor.
+    let (config, menu_bar, root) = window(initial_path);
+    App::new(config, root)
+        .with_menu_bar(menu_bar)
+        .with_theme(Theme::windows_31())
+        .run();
 }
 
-/// The window and the widget tree inside it, editing the file at
+/// The window, its menu bar and the widget tree inside it, editing the file at
 /// `initial_path`, kept apart from `main` so `examples/screenshots.rs` can
 /// render the same window offscreen.
-pub fn window(initial_path: PathBuf) -> (WindowConfig, impl Widget) {
+pub fn window(initial_path: PathBuf) -> (WindowConfig, MenuBar, impl Widget) {
     // Initial editor rect doesn't matter: Column::layout will resize it to
     // fill the window the moment the runtime starts.
     let mut editor = TextEditor::new(Rect::new(0, 0, 0, 0)).with_font_size(11.0);
@@ -67,7 +74,8 @@ pub fn window(initial_path: PathBuf) -> (WindowConfig, impl Widget) {
                         editor.borrow_mut().set_text("");
                         cx.request_paint();
                     }
-                }),
+                })
+                .with_accel(Accel::primary('n')),
                 MenuItem::action("&Open", {
                     let file_dialog = file_dialog.clone();
                     let editor = editor.clone();
@@ -86,14 +94,16 @@ pub fn window(initial_path: PathBuf) -> (WindowConfig, impl Widget) {
                         });
                         cx.request_paint();
                     }
-                }),
+                })
+                .with_accel(Accel::primary('o')),
                 MenuItem::action("&Save", {
                     let editor = editor.clone();
                     let path = path.clone();
                     move |_cx| {
                         let _ = fs::write(&*path.borrow(), editor.borrow().text());
                     }
-                }),
+                })
+                .with_accel(Accel::primary('s')),
                 MenuItem::action("Save &As...", {
                     let file_dialog = file_dialog.clone();
                     let editor = editor.clone();
@@ -116,12 +126,16 @@ pub fn window(initial_path: PathBuf) -> (WindowConfig, impl Widget) {
                         });
                         cx.request_paint();
                     }
-                }),
+                })
+                .with_accel(Accel::primary('s').shift()),
                 MenuItem::separator(),
                 MenuItem::action("Page Set&up...", warn(&dialog, "Page Setup", UNIMPL)),
-                MenuItem::action("&Print...", warn(&dialog, "Print", UNIMPL)),
+                MenuItem::action("&Print...", warn(&dialog, "Print", UNIMPL))
+                    .with_accel(Accel::primary('p')),
                 MenuItem::separator(),
-                MenuItem::action("E&xit", |cx| cx.close()),
+                // On a Mac this is "Quit Notepad" (⌘Q) in the application
+                // menu, and the separator above it goes along.
+                MenuItem::action("E&xit", |cx| cx.close()).with_role(MenuRole::Quit),
             ],
         ))
         .add_menu(Menu::new(
@@ -134,6 +148,7 @@ pub fn window(initial_path: PathBuf) -> (WindowConfig, impl Widget) {
                         cx.request_paint();
                     }
                 })
+                .with_accel(Accel::primary('z'))
                 .with_enabled({
                     let editor = editor.clone();
                     move || editor.borrow().can_undo()
@@ -145,6 +160,7 @@ pub fn window(initial_path: PathBuf) -> (WindowConfig, impl Widget) {
                         cx.request_paint();
                     }
                 })
+                .with_accel(Accel::primary('z').shift())
                 .with_enabled({
                     let editor = editor.clone();
                     move || editor.borrow().can_redo()
@@ -156,12 +172,22 @@ pub fn window(initial_path: PathBuf) -> (WindowConfig, impl Widget) {
                         editor.borrow_mut().cut();
                         cx.request_paint();
                     }
+                })
+                .with_accel(Accel::primary('x'))
+                .with_enabled({
+                    let editor = editor.clone();
+                    move || editor.borrow().has_selection()
                 }),
                 MenuItem::action("&Copy", {
                     let editor = editor.clone();
                     move |_cx| {
                         editor.borrow_mut().copy();
                     }
+                })
+                .with_accel(Accel::primary('c'))
+                .with_enabled({
+                    let editor = editor.clone();
+                    move || editor.borrow().has_selection()
                 }),
                 MenuItem::action("&Paste", {
                     let editor = editor.clone();
@@ -169,10 +195,13 @@ pub fn window(initial_path: PathBuf) -> (WindowConfig, impl Widget) {
                         editor.borrow_mut().paste();
                         cx.request_paint();
                     }
-                }),
+                })
+                .with_accel(Accel::primary('v')),
                 MenuItem::separator(),
-                MenuItem::action("&Find...", warn(&dialog, "Find", UNIMPL)),
-                MenuItem::action("Find &Next", warn(&dialog, "Find Next", UNIMPL)),
+                MenuItem::action("&Find...", warn(&dialog, "Find", UNIMPL))
+                    .with_accel(Accel::primary('f')),
+                MenuItem::action("Find &Next", warn(&dialog, "Find Next", UNIMPL))
+                    .with_accel(Accel::new(NamedKey::F3)),
                 MenuItem::action("&Replace...", warn(&dialog, "Replace", UNIMPL)),
                 MenuItem::action("&Go To...", warn(&dialog, "Go To Line", UNIMPL)),
                 MenuItem::separator(),
@@ -182,7 +211,8 @@ pub fn window(initial_path: PathBuf) -> (WindowConfig, impl Widget) {
                         editor.borrow_mut().select_all();
                         cx.request_paint();
                     }
-                }),
+                })
+                .with_accel(Accel::primary('a')),
             ],
         ))
         .add_menu(Menu::new(
@@ -194,24 +224,32 @@ pub fn window(initial_path: PathBuf) -> (WindowConfig, impl Widget) {
         ))
         .add_menu(Menu::new(
             "&Help",
-            vec![MenuItem::action("&About Notepad", {
-                let dialog = dialog.clone();
-                move |cx| {
-                    dialog.borrow_mut().show_info(
-                        "About Notepad",
-                        "notepad\n\nA saudade demonstration.\n\nBuilt on saudade — a minimal Win 3.1-styled GUI toolkit in Rust.",
-                    );
-                    cx.request_paint();
-                }
-            })],
-        ));
+            // On a Mac this is "About Notepad", first in the application
+            // menu — which leaves Help empty, so there is no Help menu there.
+            vec![
+                MenuItem::action("&About Notepad", {
+                    let dialog = dialog.clone();
+                    move |cx| {
+                        dialog.borrow_mut().show_info(
+                            "About Notepad",
+                            "notepad\n\nA saudade demonstration.\n\nBuilt on saudade — a minimal Win 3.1-styled GUI toolkit in Rust.",
+                        );
+                        cx.request_paint();
+                    }
+                })
+                .with_role(MenuRole::About),
+            ],
+        ))
+        // The application menu's title, and its About / Hide / Quit items.
+        // Without it a Mac shows the executable's name, `notepad`.
+        .with_app_name("Notepad");
 
-    // The Column layout makes the menu bar a fixed strip at the top spanning
-    // the full window width, and lets the editor flex to fill the rest. The
-    // dialog floats on top as an overlay (no layout slot). The runtime
-    // auto-focuses the editor on startup.
+    // The editor flexes to fill the window; the dialogs float on top as
+    // overlays (no layout slot). The menu bar isn't part of it: `main` hands
+    // it to the `App`, which on every platform but macOS puts it across the
+    // top of the window, above this. The runtime auto-focuses the editor on
+    // startup.
     let root = Column::new()
-        .add_fixed(menu_bar, MENU_BAR_H)
         .add_fill(SharedEditor(editor.clone()))
         .add_overlay(SharedDialog(dialog.clone()))
         .add_overlay(SharedFileDialog(file_dialog.clone()));
@@ -220,6 +258,7 @@ pub fn window(initial_path: PathBuf) -> (WindowConfig, impl Widget) {
         WindowConfig::new("Notepad", WINDOW_W, WINDOW_H)
             .resizable(true)
             .icon(ICON),
+        menu_bar,
         root,
     )
 }

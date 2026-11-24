@@ -7,7 +7,7 @@ use winit::dpi::{LogicalPosition, LogicalSize, PhysicalPosition, PhysicalSize};
 use winit::event::{
     ElementState, InnerSizeWriter, MouseButton as WinitMouseButton, MouseScrollDelta, WindowEvent,
 };
-#[cfg(all(unix, not(target_os = "macos")))]
+#[cfg(unix)]
 use winit::event_loop::EventLoopProxy;
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{Key as WKey, ModifiersKeyState, NamedKey as WNamedKey};
@@ -43,6 +43,7 @@ use crate::svg::SvgImage;
 use crate::theme::Theme;
 use crate::waker::Waker;
 use crate::widget::{PopupKind, PopupRequest, Widget};
+use crate::widgets::MenuBar;
 // The main window's own drop target, where saudade has one: see
 // `AppHandler::flush_os_drags`.
 #[cfg(windows)]
@@ -183,6 +184,7 @@ pub struct App {
     root: Box<dyn Widget>,
     ui_scale: Option<f32>,
     waker: Waker,
+    menu_bar: Option<MenuBar>,
 }
 
 impl App {
@@ -194,7 +196,60 @@ impl App {
             root: Box::new(root),
             ui_scale: None,
             waker: Waker::default(),
+            menu_bar: None,
         }
+    }
+
+    /// Give the window a menu bar — the system's on a Mac, the window's own
+    /// everywhere else.
+    ///
+    /// ```no_run
+    /// # use saudade::*;
+    /// # let (config, root) = (WindowConfig::new("Notes", 400, 300), Container::new(400, 300));
+    /// let bar = MenuBar::new(Rect::new(0, 0, 400, 20)).add_menu(Menu::new(
+    ///     "&File",
+    ///     vec![MenuItem::action("E&xit", |cx| cx.close()).with_role(MenuRole::Quit)],
+    /// ));
+    /// App::new(config, root).with_menu_bar(bar).run();
+    /// ```
+    ///
+    /// On macOS a window has no menu bar of its own: the menu bar at the top of
+    /// the screen belongs to the app in front. The bar becomes that one, and
+    /// `root` gets the whole window. Each item is a native item with the same
+    /// title (without its `&` mnemonic marker — a Mac has none) and its
+    /// accelerator as its key equivalent, read the Mac way: `primary` is ⌘,
+    /// `secondary` ⌃, `alt` ⌥. Its [`with_enabled`](crate::MenuItem::with_enabled)
+    /// and [`with_checked`](crate::MenuItem::with_checked) predicates are asked
+    /// each time a menu opens and before a key equivalent fires it, and its
+    /// callback runs on the event loop, with an [`EventCtx`] whose requests are
+    /// carried out as for any event. In front of the app's menus is the
+    /// application menu — `About` and `Settings…` if the bar has items with
+    /// those [roles](crate::MenuItem::with_role), Services, `Hide`, `Hide
+    /// Others`, `Show All`, `Quit` — named after the program (see
+    /// [`MenuBar::with_app_name`]), and a standard Window menu goes in front of
+    /// Help. Without an item with [`MenuRole::Quit`](crate::MenuRole::Quit),
+    /// `Quit` (⌘Q) closes the window as its close button does: the root's
+    /// [`on_cancel`](crate::Widget::on_cancel), then the end of the app.
+    ///
+    /// While one of saudade's own popup windows is open — a dialog, a menu, a
+    /// dropdown's list — the app's items are disabled, so that their keys reach
+    /// it as key presses (⌘C, ⌘V in a dialog's text field) rather than acting
+    /// on the window behind it. The application menu's items stay enabled.
+    ///
+    /// On Windows, X11 and Wayland the bar goes in the window instead, across
+    /// the top above `root`, as tall as the `Rect` it was built with — the way
+    /// [`MenuBar::above`] puts it there, which is what the app would get from
+    /// `Column::new().add_fixed(bar, height).add_fill(root)`: mnemonics, Alt,
+    /// accelerators while a widget below has the keyboard, the keyboard
+    /// starting out with `root`'s first focusable widget. Roles change nothing
+    /// there.
+    ///
+    /// An app that keeps a `MenuBar` in its widget tree itself still can; it is
+    /// then drawn in the window on every platform, macOS included. A second
+    /// call replaces the first bar.
+    pub fn with_menu_bar(mut self, bar: MenuBar) -> Self {
+        self.menu_bar = Some(bar);
+        self
     }
 
     /// A [`Waker`] for this app's event loop: whoever holds it can have the
@@ -265,14 +320,30 @@ impl App {
     }
 
     pub fn run(self) {
+        let app = self.bar_in_window();
         #[cfg(all(unix, not(target_os = "macos")))]
         {
             if is_wayland_session() {
-                crate::wayland::run(self);
+                crate::wayland::run(app);
                 return;
             }
         }
-        self.run_winit();
+        app.run_winit();
+    }
+
+    /// Everywhere but macOS a menu bar is the window's own: the root the
+    /// backends run is the bar above the app's root — see
+    /// [`MenuBar::above`]. On macOS the runtime makes it the system's.
+    fn bar_in_window(self) -> Self {
+        #[cfg(not(target_os = "macos"))]
+        if let Some(bar) = self.menu_bar {
+            return Self {
+                root: Box::new(crate::widgets::MenuBarHost::new(bar, self.root)),
+                menu_bar: None,
+                ..self
+            };
+        }
+        self
     }
 
     fn run_winit(self) {
@@ -296,6 +367,10 @@ impl App {
         #[cfg(all(unix, not(target_os = "macos")))]
         {
             handler.drop_waker = Some(event_loop.create_proxy());
+        }
+        #[cfg(target_os = "macos")]
+        {
+            handler.menu_waker = Some(event_loop.create_proxy());
         }
         // X11: ask the settings portal, before the window opens so it can open
         // in the right theme, and hear about every change after on the loop.
@@ -466,6 +541,14 @@ struct AppHandler {
     /// Tracks a key press a widget asked to swallow until release (via
     /// [`EventCtx::swallow_key_until_release`]).
     swallow: KeySwallow,
+    /// macOS: the app's menu bar, until `resumed` makes it the system's — see
+    /// `macos_menu`. Elsewhere it is part of `root` (see [`App::run`]).
+    #[cfg(target_os = "macos")]
+    menu_bar: Option<MenuBar>,
+    /// macOS: what wakes the event loop when the system menu bar has fired an
+    /// item, which `about_to_wait` then runs.
+    #[cfg(target_os = "macos")]
+    menu_waker: Option<EventLoopProxy<Option<Appearance>>>,
 }
 
 /// Bookkeeping for a key press a widget asked to swallow until its release.
@@ -653,6 +736,10 @@ impl AppHandler {
             drop_waker: None,
             swallow: KeySwallow::default(),
             quick_release: QuickRelease::default(),
+            #[cfg(target_os = "macos")]
+            menu_bar: app.menu_bar,
+            #[cfg(target_os = "macos")]
+            menu_waker: None,
         }
     }
 }
@@ -764,6 +851,18 @@ impl ApplicationHandler<Option<Appearance>> for AppHandler {
         if self.window_config.fullscreen {
             self.apply_fullscreen(true);
         }
+        // macOS: the bar becomes the system menu bar, in place of the one
+        // winit put up as the app finished launching, just before this.
+        #[cfg(target_os = "macos")]
+        if let Some(bar) = self.menu_bar.take() {
+            let waker = self.menu_waker.take();
+            crate::macos_menu::install(bar, move || {
+                if let Some(waker) = &waker {
+                    // `None` only wakes the loop; `about_to_wait` runs the item.
+                    let _ = waker.send_event(None);
+                }
+            });
+        }
     }
 
     fn window_event(
@@ -811,7 +910,12 @@ impl ApplicationHandler<Option<Appearance>> for AppHandler {
         if std::mem::take(&mut self.refit_fullscreen) {
             self.refit_fullscreen();
         }
+        // Before the popups are brought in line: an item may have opened one.
+        #[cfg(target_os = "macos")]
+        self.run_menu_commands(event_loop);
         self.sync_popup(event_loop);
+        #[cfg(target_os = "macos")]
+        self.refresh_menu_keys();
         self.pump_ticks(event_loop);
 
         if self.needs_redraw
@@ -860,24 +964,20 @@ impl ApplicationHandler<Option<Appearance>> for AppHandler {
         self.main_surface = None;
         self.context = None;
         self.main_win = None;
+        // The callbacks of the system menu bar's items hold on to the app's
+        // state, which goes with the rest of the app rather than being kept
+        // to the end of the process.
+        #[cfg(target_os = "macos")]
+        {
+            self.menu_bar = crate::macos_menu::take_bar();
+        }
     }
 }
 
 impl AppHandler {
     fn handle_main_event(&mut self, event: WindowEvent, event_loop: &ActiveEventLoop) {
         match event {
-            WindowEvent::CloseRequested => {
-                // Give the root a chance to react before we quit: a widget used
-                // directly as the window root (rather than hosted in a `Modal`)
-                // gets its `on_cancel` here, so a dialog-as-window can revert
-                // pending edits on close, just as Escape or a `Modal`'s close
-                // would. Most roots leave this a no-op.
-                let mut ctx = EventCtx::with_fullscreen(self.is_fullscreen());
-                ctx.window_position = self.window_position;
-                self.root.on_cancel(&mut ctx);
-                self.root_released = true;
-                event_loop.exit();
-            }
+            WindowEvent::CloseRequested => self.close_window(event_loop),
             WindowEvent::Moved(_) => {
                 if let Some(win) = self.main_win.as_ref() {
                     self.window_position = logical_position(win);
@@ -1355,11 +1455,77 @@ impl AppHandler {
         self.buttons.any_held() && self.root.captures_pointer()
     }
 
-    fn dispatch(&mut self, event: &Event, event_loop: &ActiveEventLoop) -> EventCtx {
+    /// The window's close button was clicked, or the macOS application menu's
+    /// own Quit chosen. Give the root a chance to react before we quit: a
+    /// widget used directly as the window root (rather than hosted in a
+    /// `Modal`) gets its `on_cancel` here, so a dialog-as-window can revert
+    /// pending edits on close, just as Escape or a `Modal`'s close would, and
+    /// an editor can save. Most roots leave this a no-op.
+    fn close_window(&mut self, event_loop: &ActiveEventLoop) {
+        let mut ctx = EventCtx::with_fullscreen(self.is_fullscreen());
+        ctx.window_position = self.window_position;
+        self.root.on_cancel(&mut ctx);
+        self.root_released = true;
+        event_loop.exit();
+    }
+
+    /// A fresh [`EventCtx`] for a dispatch, filled in with what the runtime
+    /// knows about the window.
+    fn event_ctx(&self) -> EventCtx {
         let mut ctx = EventCtx::with_fullscreen(self.is_fullscreen());
         ctx.modifiers = self.modifiers;
         ctx.window_position = self.window_position;
+        ctx
+    }
+
+    fn dispatch(&mut self, event: &Event, event_loop: &ActiveEventLoop) -> EventCtx {
+        let mut ctx = self.event_ctx();
         self.root.event(event, &mut ctx);
+        self.apply_ctx(&mut ctx, event_loop);
+        ctx
+    }
+
+    /// Run the items the macOS menu bar has fired since the last time, each as
+    /// a dispatch of its own: an [`EventCtx`] like any event's, handed to the
+    /// item's callback, and whatever it asks for carried out — see
+    /// `macos_menu`. The application menu's own Quit closes the window as its
+    /// close button does.
+    #[cfg(target_os = "macos")]
+    fn run_menu_commands(&mut self, event_loop: &ActiveEventLoop) {
+        for command in crate::macos_menu::take_commands() {
+            if event_loop.exiting() {
+                break;
+            }
+            match command {
+                crate::macos_menu::Command::Quit => self.close_window(event_loop),
+                crate::macos_menu::Command::Item(tag) => {
+                    let mut ctx = self.event_ctx();
+                    crate::macos_menu::fire(tag, &mut ctx);
+                    self.apply_ctx(&mut ctx, event_loop);
+                }
+            }
+        }
+    }
+
+    /// macOS: bring the system menu bar's key equivalents in line with what
+    /// the widgets have just done — an item enabled or disabled, a dialog
+    /// opened or closed, which disables the app's items while it is open. See
+    /// `macos_menu`.
+    #[cfg(target_os = "macos")]
+    fn refresh_menu_keys(&self) {
+        if !crate::macos_menu::installed() {
+            return;
+        }
+        let mut popups = Vec::new();
+        self.root.collect_popups(&mut popups);
+        crate::macos_menu::refresh(!popups.is_empty());
+    }
+
+    /// Carry out what the widgets asked for while handling an event — or a
+    /// menu item's callback, on macOS — through `ctx`.
+    fn apply_ctx(&mut self, ctx: &mut EventCtx, event_loop: &ActiveEventLoop) {
+        #[cfg(target_os = "macos")]
+        self.refresh_menu_keys();
         if ctx.paint_requested {
             self.needs_redraw = true;
             self.mark_popups_dirty();
@@ -1400,7 +1566,6 @@ impl AppHandler {
         // and X11 are the exception: `flush_os_drags` reads the flag off the
         // returned context.
         let _ = ctx.accepted_drop;
-        ctx
     }
 
     /// Dispatch the drags saudade's own drop target queued (see `win32_drop`

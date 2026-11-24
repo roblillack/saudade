@@ -127,10 +127,15 @@ windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Graphic
 # a popup window being a child of the window it drops from, which keeps the
 # keyboard (see `macos_popup`): `NSGraphics` has the ordering mode, an
 # `NSTrackingArea` brings it mouse moves, and an `NSEvent` monitor (a block,
-# hence `block2`) catches a click on that window's title bar.
+# hence `block2`) catches a click on that window's title bar. The seventh is
+# the system menu bar an `App::with_menu_bar` bar goes into (see
+# `macos_menu`): `NSMenu` and `NSMenuItem`, `NSCell` for an item's checkmark,
+# and Foundation's `NSString` and `NSProcessInfo` for the items' titles and
+# the name of the program they carry.
 objc2 ={ version = "0.6", default-features = false, features = ["std"] }
 block2 = { version = "0.6", default-features = false, features = ["std"] }
-objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "block2", "NSApplication", "NSEvent", "NSGraphics", "NSImage", "NSTrackingArea", "NSWindow", "NSResponder", "NSScreen", "NSView", "objc2-core-graphics", "objc2-quartz-core"] }
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "block2", "NSApplication", "NSCell", "NSEvent", "NSGraphics", "NSImage", "NSMenu", "NSMenuItem", "NSTrackingArea", "NSWindow", "NSResponder", "NSScreen", "NSView", "objc2-core-graphics", "objc2-quartz-core"] }
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSProcessInfo", "NSString"] }
 objc2-core-foundation = { version = "0.3", default-features = false, features = ["CFBase", "CFData", "CFString", "CFCGTypes", "std"] }
 objc2-core-graphics = { version = "0.3", default-features = false, features = ["CGContext", "CGBitmapContext", "CGColorSpace", "CGDataProvider", "CGDirectDisplay", "CGDisplayConfiguration", "CGImage", "std"] }
 objc2-quartz-core = { version = "0.3", default-features = false, features = ["CALayer", "CATransaction", "objc2-core-foundation", "std"] }

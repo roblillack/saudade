@@ -40,7 +40,7 @@ Reference apps live under `examples/`. Run any of them with
 
 | Example         | Screenshot                                                                                 | What it shows                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
 | --------------- | ------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `notepad`       | <img src="docs/screenshots/notepad.png" alt="The notepad example" width="300">             | Editor window with menu bar (`MenuBar`, `TextEditor`); File → Open / Save As drive a `FileDialog`. Also the one example that names a `WindowConfig::icon`, so it shows the desktop's own icon slot filled.                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| `notepad`       | <img src="docs/screenshots/notepad.png" alt="The notepad example" width="300">             | Editor window with menu bar (`MenuBar`, `TextEditor`); File → Open / Save As drive a `FileDialog`. The bar goes to `App::with_menu_bar`, which makes it the system menu bar on macOS — Exit and About moving to the application menu by their `MenuRole` — and puts it in the window elsewhere. Also the one example that names a `WindowConfig::icon`, so it shows the desktop's own icon slot filled.                                                                                                                                                                                                                              |
 | `filer`         | <img src="docs/screenshots/filer.png" alt="The filer example" width="300">                 | Filesystem browser using `List` with folder/file icons. Drag an entry out of the window to drop it onto another app (drag _source_ via `EventCtx::start_drag`; Wayland only).                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
 | `dnd`           | <img src="docs/screenshots/dnd.png" alt="The dnd example" width="300">                     | A drop zone that highlights while a drag hovers and shows what is dropped onto it, form by form: files by path, links, and files by their contents, with a thumbnail of a PNG image. Demonstrates OS drag-and-drop (`DragEnter` / `DragMove` / `DragLeave` / `Drop`) across macOS, Windows, X11, and Wayland.                                                                                                                                                                                                                                                                                                                                            |
 | `fullscreen`    | <img src="docs/screenshots/fullscreen.png" alt="The fullscreen example" width="300">       | Toggles the window in and out of fullscreen with a button, F, and Escape (`EventCtx::toggle_fullscreen` / `set_fullscreen`), showing the state `EventCtx::is_fullscreen` reports and the size the layout receives. Run it with `-- --fullscreen` to open fullscreen (`WindowConfig::fullscreen`).                                                                                                                                                                                                                                                                                                                                                        |
@@ -153,7 +153,7 @@ to an object-oriented UI framework.
 | svg        | `SvgImage`, `SvgPolygon`, `FillRule` + the `include_svg!` macro — compile-time vector icons                                                                                                                                                                                                                 |
 | font       | `Font`, `FontSet`, `FontFamily`, `FontStyle` — system font lookup + glyph rasterization                                                                                                                                                                                                                     |
 | widget     | `Widget` trait (paint / event / focus / overlay hooks)                                                                                                                                                                                                                                                      |
-| widgets    | `Container`, `Column`, `Row`, `Label`, `FocusLabel`, `Button`, `ButtonGroup`, `Checkbox`, `Bevel`, `Image`, `MenuBar`, `Menu`, `MenuItem`, `ContextMenu`, `ScrollBar`, `Slider`, `SpinButton`, `ProgressBar`, `List`, `Dropdown`, `Modal`, `Dialog`, `FileDialog`, `TextInput`, `NumberInput`, `TextEditor` |
+| widgets    | `Container`, `Column`, `Row`, `Label`, `FocusLabel`, `Button`, `ButtonGroup`, `Checkbox`, `Bevel`, `Image`, `MenuBar`, `Menu`, `MenuItem`, `MenuRole`, `ContextMenu`, `ScrollBar`, `Slider`, `SpinButton`, `ProgressBar`, `List`, `Dropdown`, `Modal`, `Dialog`, `FileDialog`, `TextInput`, `NumberInput`, `TextEditor` |
 | app        | `App`, `WindowConfig` — runtime entry point                                                                                                                                                                                                                                                                 |
 | icon       | turns `WindowConfig::icon` into what each platform's title bar, taskbar or dock wants                                                                                                                                                                                                                       |
 | mock       | `MockBackend`, `Snapshot`, `Desktop` — offscreen rendering to a pixel buffer / PNG                                                                                                                                                                                                                          |
@@ -676,13 +676,17 @@ any container that propagates `layout`. Widgets that don't override `layout`
 which is exactly what `Container`'s children want.
 
 ```rust
-// Notepad layout: menu bar pinned to the top, editor fills the rest.
-// The runtime auto-focuses the first focusable widget (the editor) at
-// startup, so the user can type immediately.
+// A menu bar pinned to the top, an editor filling the rest. The runtime
+// auto-focuses the first focusable widget (the editor) at startup, so the
+// user can type immediately.
 let root = Column::new()
     .add_fixed(menu_bar, MENU_BAR_H)
     .add_fill(text_editor);
 ```
+
+(An app's main menu bar is better handed to the `App` itself, which puts it
+in the window just like this — or, on a Mac, in the menu bar at the top of
+the screen: see "The system menu bar" under `MenuBar`.)
 
 `Column` also handles capture, focus, accelerator routing, and the
 overlay pass — same contract as `Container`.
@@ -1057,6 +1061,79 @@ dismissed that way.
 
 `MenuBar::open(idx)` programmatically opens a menu — handy for custom
 application-level keybindings.
+
+#### The system menu bar
+
+A window's menu bar is a Windows and Linux thing. On a Mac the menu bar
+sits at the top of the screen and belongs to whichever app is in front, and
+a menu bar inside a window looks out of place. So rather than putting its
+main menu bar into the widget tree, an app hands it to the `App`:
+
+```rust
+let menu_bar = MenuBar::new(Rect::new(0, 0, 520, 20))
+    .add_menu(Menu::new(
+        "&File",
+        vec![
+            MenuItem::action("&Open…", |_| { /* … */ }).with_accel(Accel::primary('o')),
+            MenuItem::separator(),
+            MenuItem::action("E&xit", |cx| cx.close()).with_role(MenuRole::Quit),
+        ],
+    ))
+    .add_menu(Menu::new(
+        "&Help",
+        vec![MenuItem::action("&About", |_| { /* … */ }).with_role(MenuRole::About)],
+    ))
+    .with_app_name("Notepad");
+
+App::new(WindowConfig::new("Notepad", 520, 340), root) // root: no menu bar in it
+    .with_menu_bar(menu_bar)
+    .run();
+```
+
+- **Windows, X11, Wayland**: the runtime puts the bar in the window, across
+  the top above `root`, as tall as the `Rect` it was built with (20 if that
+  has no height) — exactly what
+  `Column::new().add_fixed(menu_bar, 20).add_fill(root)` would give:
+  mnemonics, Alt, accelerators while a widget below has the keyboard, the
+  keyboard starting out with `root`'s first focusable widget. On top of that
+  the window's close button still reaches `root`'s `on_cancel`, and while
+  `root` holds the pointer — a `Modal`, `Dialog` or `FileDialog` open in it —
+  the bar stays shut. Roles and `with_app_name` change nothing here.
+- **macOS**: the bar becomes the system menu bar, built from native
+  `NSMenu`s, and `root` gets the whole window. Every item mirrors its
+  `MenuItem`: its label without the `&` (`Save &As...` reads "Save As…"),
+  its accelerator as the key equivalent (`primary` ⌘, `secondary` ⌃, `alt`
+  ⌥; F-keys, arrows, Return, Tab, Escape, ⌫ and ⌦ as AppKit names them),
+  `with_enabled` greying it — read each time a menu opens and before a key
+  fires it — and `with_checked` as its checkmark. The callback runs on the
+  event loop with an `EventCtx` like any event's, so repaints, dialogs it
+  opens, `close`, title changes and the rest all work as from an in-window
+  menu. In front of the app's menus comes the bold application menu, named
+  by `MenuBar::with_app_name` (the process name otherwise): About, Settings…
+  (Preferences… before macOS 13), Services, Hide, Hide Others, Show All and
+  Quit. Items with a `MenuRole` move there from wherever they were declared —
+  About first as "About Notepad", Preferences after it on ⌘, unless it has an
+  accelerator of its own, Quit last as "Quit Notepad" on ⌘Q — taking the
+  separators that would otherwise dangle with them, and a menu left empty
+  (Help above) goes altogether. Without a Quit item of the app's, Quit closes
+  the window as its close button does: `root`'s `on_cancel`, then the end of
+  the app. A standard Window menu (Minimize ⌘M, Zoom, Bring All to Front,
+  the window list) goes in front of Help.
+
+AppKit takes a key equivalent before the window sees it, so on a Mac the
+menu bar's shortcuts are the system's alone — the bar never reaches the
+widget tree, so nothing fires twice. As in a bar in the window, a disabled
+item lets its key go on to the focused widget (⌘Z reaching a text field's own
+undo when Edit ▸ Undo has nothing to take back). And while a dialog, menu or
+dropdown list of saudade's is open, the app's items are disabled, so ⌘C or
+⌘V reaches the dialog's text field instead of acting on the window behind
+it; the application menu stays available.
+
+A `MenuBar` an app puts in its widget tree itself keeps working the way it
+always has, in the window, on every platform — macOS included. And to show an
+app built for `with_menu_bar` offscreen the way it looks on Windows and Linux,
+`MenuBar::above(root)` returns the very widget the runtime puts in the window
+there (see "Offscreen rendering and screenshots").
 
 ### `ContextMenu`
 
@@ -2099,6 +2176,7 @@ draw call.
 
 ```rust
 let app = App::new(window_cfg, root_widget)
+   .with_menu_bar(menu_bar)           // optional; see "The system menu bar"
    .with_theme(Theme::windows_31())   // optional; the light-mode theme
    .with_dark_theme(Theme::windows_31_dark()) // optional; see "Dark mode"
    .with_ui_scale(2.0);               // optional; see "How big a logical pixel is"
@@ -2130,7 +2208,8 @@ session:
   pixels are layered windows.
 - **macOS** — winit 0.30, plus AppKit, Core Graphics and Core Text
   through `objc2`: menus, dropdowns and dialogs are child windows of the
-  window they open from; text is set in the system font through Core
+  window they open from; an `App::with_menu_bar` bar is the system menu
+  bar, built from `NSMenu`s; text is set in the system font through Core
   Text; the app icon goes on the dock tile; and popups with see-through
   pixels get a Core Animation layer of their own.
 - **Wayland** — if `WAYLAND_DISPLAY` is set and non-empty, the runtime
@@ -2181,6 +2260,16 @@ let mut root = Container::new(220, 64)
 // Just the client area, at 2× DPI.
 let snap = MockBackend::new(220, 64).with_scale(2.0).render(&mut root);
 std::fs::write("client.png", snap.to_png()).unwrap();
+```
+
+`MockBackend` renders a widget, not an `App`, so a menu bar handed to
+`App::with_menu_bar` isn't in it. `menu_bar.above(root)` is the window the
+runtime builds around `root` for it on Windows, X11 and Wayland — render
+that to see the app with its bar, on any host:
+
+```rust
+let mut window = menu_bar.above(root);
+let snap = MockBackend::new(520, 340).render(&mut window);
 ```
 
 `render` captures only the client area — the title bar and frame are usually
@@ -2486,8 +2575,8 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use saudade::{
-    App, Container, Event, EventCtx, Menu, MenuBar, MenuItem, Painter, Rect,
-    TextEditor, Theme, Widget, WindowConfig,
+    App, Column, Event, EventCtx, Menu, MenuBar, MenuItem, MenuRole, Painter,
+    Rect, TextEditor, Theme, Widget, WindowConfig,
 };
 
 const W: i32 = 520;
@@ -2496,8 +2585,7 @@ const BAR_H: i32 = 20;
 
 fn main() {
     let editor = Rc::new(RefCell::new(
-        TextEditor::new(Rect::new(4, BAR_H + 4, W - 8, H - BAR_H - 8))
-            .with_text("Hello, saudade!"),
+        TextEditor::new(Rect::new(0, 0, 0, 0)).with_text("Hello, saudade!"),
     ));
 
     let menu_bar = MenuBar::new(Rect::new(0, 0, W, BAR_H))
@@ -2512,16 +2600,17 @@ fn main() {
                     }
                 }),
                 MenuItem::separator(),
-                MenuItem::action("E&xit", |cx| cx.close()),
+                MenuItem::action("E&xit", |cx| cx.close()).with_role(MenuRole::Quit),
             ],
         ));
 
-    let root = Container::new(W, H)
-        .with_background(saudade::Color::WHITE)
-        .add(menu_bar)
-        .add(SharedEditor(editor.clone()));
+    // The editor fills the window; the bar goes to the `App`, which puts it
+    // above the editor — or, on a Mac, into the system menu bar.
+    let root = Column::new().add_fill(SharedEditor(editor.clone()));
 
-    App::new(WindowConfig::new("Notepad", W, H).resizable(true), root).run();
+    App::new(WindowConfig::new("Notepad", W, H).resizable(true), root)
+        .with_menu_bar(menu_bar)
+        .run();
 }
 
 // Tiny adapter so the menu callbacks can mutate the shared editor.
@@ -2529,6 +2618,7 @@ struct SharedEditor(Rc<RefCell<TextEditor>>);
 
 impl Widget for SharedEditor {
     fn bounds(&self) -> Rect { self.0.borrow().bounds() }
+    fn layout(&mut self, r: Rect) { self.0.borrow_mut().layout(r) }
     fn paint(&mut self, p: &mut Painter, t: &Theme) { self.0.borrow_mut().paint(p, t) }
     fn event(&mut self, e: &Event, c: &mut EventCtx) { self.0.borrow_mut().event(e, c) }
     fn focusable(&self) -> bool { self.0.borrow().focusable() }
@@ -2566,7 +2656,6 @@ Features that fit Saudade's philosophy but haven't been implemented yet:
 - `Grid` container (`Row` is already available alongside `Column`)
 - `RadioButton` (`TextInput`, `Checkbox`, and `List` already exist)
 - Multi-window support
-- Native menu bars on platforms that provide them
 
 ## License
 

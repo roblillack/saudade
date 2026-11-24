@@ -12,6 +12,31 @@ While pre-1.0, the minor version is bumped for breaking changes.
 
 ### Added
 
+- Native menu bars. `App::with_menu_bar` takes the app's main `MenuBar`
+  rather than the widget tree: on macOS it becomes the system menu bar at the
+  top of the screen, built from `NSMenu`s, and the root gets the whole
+  window; on Windows, X11 and Wayland the runtime puts it in the window above
+  the root, as the app's own `Column` would have. On a Mac each item mirrors
+  its `MenuItem` — title without the `&`, accelerator as its key equivalent
+  (⌘ for `primary`), `with_enabled` and `with_checked` read live — and its
+  callback runs with an `EventCtx` like any event's. The application menu
+  (About, Settings…, Services, Hide, Quit) and a Window menu come with it;
+  Quit closes the window as its close button does unless the app has a Quit
+  item of its own. While a dialog or popup of saudade's is open the app's
+  items are disabled, so ⌘C or ⌘V reach the dialog, and a disabled item lets
+  its key go on to the focused widget, as an in-window accelerator does.
+  (#120)
+- `MenuItem::with_role` and `MenuRole` (`About`, `Preferences`, `Quit`): on a
+  Mac an item with a role moves into the application menu, as "About
+  <App>", "Settings…" (⌘,) and "Quit <App>" (⌘Q), taking the separators it
+  would leave dangling with it. Elsewhere a role changes nothing. (#120)
+- `MenuBar::with_app_name`, the program's name in the macOS application menu
+  — the executable's file name otherwise, for a program not run from a
+  bundle. (#120)
+- `MenuBar::above(root)`: the bar across the top of a window above `root`, as
+  `App::with_menu_bar` puts it everywhere but macOS — to render such an app
+  offscreen with `MockBackend`, or to keep the bar in the window on a Mac.
+  (#120)
 - `WindowConfig::position` opens the window at a given spot on the desktop,
   and `EventCtx::window_position` tells where it is now, so an app can put
   its window back where the user left it. Both are in the platform's logical
@@ -88,6 +113,16 @@ While pre-1.0, the minor version is bumped for breaking changes.
 
 ### Changed
 
+- `MenuItem::Action` has a `role` field. Code that builds the variant
+  directly rather than through `MenuItem::action` has to give it one
+  (`role: None`). (#120)
+- A `Column` nested in another container passes a focus change from its
+  parent on to its focused child, so that child shows the focus going and
+  coming back rather than keeping its caret while, say, a menu of the parent's
+  owns the keyboard. (#120)
+- The notepad example hands its menu bar to `App::with_menu_bar`, gives its
+  items the usual shortcuts and greys Cut and Copy without a selection.
+  (#120)
 - The root widget's `on_cancel` now also runs when something other than the
   window's close button ends the app — ⌘Q in the default macOS application
   menu, a logout — so an app always gets a last chance to save. (#119)
