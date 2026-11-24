@@ -12,6 +12,10 @@ While pre-1.0, the minor version is bumped for breaking changes.
 
 ### Added
 
+- `Painter::fill_polygon`, `fill_polygon_rings`, `line` and `fill_ellipse`
+  draw anti-aliased shapes at run time — slanted and curved edges, at any
+  angle and scale — with the rasterizer `include_svg!` images are filled with.
+  (#112)
 - The platform's keys for the far ends in `TextEditor` and `TextInput`. On
   macOS ⌘← / ⌘→ jump to the start / end of the line, and in a `TextEditor`
   ⌘↑ / ⌘↓ to the start / end of the text; elsewhere Ctrl+Home / Ctrl+End

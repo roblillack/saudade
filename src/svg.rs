@@ -241,13 +241,34 @@ impl Rasterizer {
         ty: f32,
         tint: Option<Color>,
     ) {
+        let color = tint.unwrap_or(poly.color);
+        self.fill_rings(blend, poly.rings, poly.fill_rule, color, scale, tx, ty);
+    }
+
+    /// Fill the polygon made of `rings` with `color` under `fill_rule`,
+    /// transforming every point by `p * scale + (tx, ty)` into device pixels
+    /// and handing each covered pixel to `blend` with the color's alpha scaled
+    /// by its anti-aliased coverage. The workhorse behind both a baked
+    /// [`SvgPolygon`] and [`Painter::fill_polygon`].
+    #[allow(clippy::too_many_arguments)]
+    fn fill_rings<R: AsRef<[(f32, f32)]>>(
+        &mut self,
+        blend: &mut impl FnMut(i32, i32, Color, u8),
+        rings: &[R],
+        fill_rule: FillRule,
+        color: Color,
+        scale: f32,
+        tx: f32,
+        ty: f32,
+    ) {
         self.edges.clear();
         let map = |&(x, y): &(f32, f32)| (tx + x * scale, ty + y * scale);
 
         // Build edges and the polygon's tight device-pixel bounding box.
         let (mut min_x, mut min_y) = (f32::MAX, f32::MAX);
         let (mut max_x, mut max_y) = (f32::MIN, f32::MIN);
-        for ring in poly.rings {
+        for ring in rings {
+            let ring = ring.as_ref();
             let n = ring.len();
             if n < 3 {
                 continue;
@@ -299,7 +320,6 @@ impl Rasterizer {
         }
         let cov = &mut self.coverage[..width];
 
-        let color = tint.unwrap_or(poly.color);
         let max_alpha = color.alpha() as f32;
         let weight = 1.0 / SAMPLES as f32;
         for iy in row_lo..row_hi {
@@ -324,7 +344,7 @@ impl Rasterizer {
                 let mut winding = 0i32;
                 for i in 0..self.crossings.len() - 1 {
                     winding += self.crossings[i].1;
-                    let inside = match poly.fill_rule {
+                    let inside = match fill_rule {
                         FillRule::NonZero => winding != 0,
                         FillRule::EvenOdd => (i as i32 + 1) & 1 == 1,
                     };
@@ -349,6 +369,52 @@ impl Rasterizer {
             }
         }
     }
+}
+
+/// Fill the polygon made of `rings` — points in *logical* coordinates, which
+/// may be fractional — into `painter` with `color`, anti-aliased, under
+/// `fill_rule`. Backs [`Painter::fill_polygon`] and friends: the points are
+/// scaled to device pixels at the painter's scale, so the shape stays crisp at
+/// any DPI, and every pixel goes through the painter's clip.
+pub(crate) fn fill_logical_rings<R: AsRef<[(f32, f32)]>>(
+    painter: &mut Painter,
+    rings: &[R],
+    fill_rule: FillRule,
+    color: Color,
+) {
+    if color.alpha() == 0 {
+        return;
+    }
+    let scale = painter.scale();
+    let (mut min_x, mut min_y) = (f32::MAX, f32::MAX);
+    let (mut max_x, mut max_y) = (f32::MIN, f32::MIN);
+    for &(x, y) in rings.iter().flat_map(|r| r.as_ref().iter()) {
+        min_x = min_x.min(x * scale);
+        min_y = min_y.min(y * scale);
+        max_x = max_x.max(x * scale);
+        max_y = max_y.max(y * scale);
+    }
+    if min_x > max_x || min_y > max_y {
+        return;
+    }
+    let x0 = min_x.floor() as i32;
+    let y0 = min_y.floor() as i32;
+    let footprint = Rect::new(
+        x0,
+        y0,
+        max_x.ceil() as i32 - x0 + 1,
+        max_y.ceil() as i32 - y0 + 1,
+    );
+    let mut raster = Rasterizer::new(footprint);
+    raster.fill_rings(
+        &mut |x, y, c, a| painter.blend_pixel_phys(x, y, c, a),
+        rings,
+        fill_rule,
+        color,
+        scale,
+        0.0,
+        0.0,
+    );
 }
 
 /// Add `weight × horizontal_coverage` of the span `[xa, xb)` to the coverage

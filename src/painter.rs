@@ -1151,6 +1151,86 @@ impl<'a> Painter<'a> {
         image.draw_tinted(self, rect, tint);
     }
 
+    /// Fill the polygon through `points` with `color`, anti-aliased.
+    ///
+    /// The points are logical coordinates and may be fractional: the outline is
+    /// scaled to device pixels at the live DPI and filled with the same
+    /// coverage-sampling rasterizer that draws an [`SvgImage`](crate::SvgImage),
+    /// so a slanted or curved edge comes out smooth at any scale instead of
+    /// stair-stepping the way a stack of [`fill_rect`](Self::fill_rect)s would.
+    /// The polygon closes itself (the last point joins the first), may be
+    /// concave or self-intersecting (the non-zero winding rule decides what is
+    /// inside), and honors the active clip. Fewer than three points draw
+    /// nothing.
+    ///
+    /// ```ignore
+    /// // A right-pointing triangle, 8 logical pixels tall.
+    /// p.fill_polygon(&[(10.0, 10.0), (16.0, 14.0), (10.0, 18.0)], theme.text);
+    /// ```
+    pub fn fill_polygon(&mut self, points: &[(f32, f32)], color: Color) {
+        self.fill_polygon_rings(&[points], crate::svg::FillRule::NonZero, color);
+    }
+
+    /// Fill a shape made of several rings — an outline with holes in it, say —
+    /// with `color` under `fill_rule`, anti-aliased. Like
+    /// [`fill_polygon`](Self::fill_polygon), which is the single-ring case,
+    /// every point is a (possibly fractional) logical coordinate.
+    pub fn fill_polygon_rings(
+        &mut self,
+        rings: &[&[(f32, f32)]],
+        fill_rule: crate::svg::FillRule,
+        color: Color,
+    ) {
+        crate::svg::fill_logical_rings(self, rings, fill_rule, color);
+    }
+
+    /// Draw an anti-aliased straight line `width` logical pixels thick from
+    /// `(x1, y1)` to `(x2, y2)`, with square-cut ends that stop at the end
+    /// points. Unlike [`h_line`](Self::h_line) / [`v_line`](Self::v_line) it
+    /// runs at any angle — the strokes of a check mark, a diagonal cross, an
+    /// arrow's shaft — and its coordinates may be fractional. A zero-length
+    /// line draws nothing.
+    pub fn line(&mut self, x1: f32, y1: f32, x2: f32, y2: f32, width: f32, color: Color) {
+        let (dx, dy) = (x2 - x1, y2 - y1);
+        let len = (dx * dx + dy * dy).sqrt();
+        if len <= f32::EPSILON || width <= 0.0 {
+            return;
+        }
+        // Half the width, along the line's normal.
+        let (nx, ny) = (-dy / len * width * 0.5, dx / len * width * 0.5);
+        self.fill_polygon(
+            &[
+                (x1 + nx, y1 + ny),
+                (x2 + nx, y2 + ny),
+                (x2 - nx, y2 - ny),
+                (x1 - nx, y1 - ny),
+            ],
+            color,
+        );
+    }
+
+    /// Fill the ellipse inscribed in `rect` with `color`, anti-aliased — a
+    /// circle when `rect` is square. Handy for status lights, radio-button
+    /// dots and the like, which otherwise need an SVG of their own.
+    pub fn fill_ellipse(&mut self, rect: Rect, color: Color) {
+        if rect.w <= 0 || rect.h <= 0 {
+            return;
+        }
+        let (rx, ry) = (rect.w as f32 / 2.0, rect.h as f32 / 2.0);
+        let (cx, cy) = (rect.x as f32 + rx, rect.y as f32 + ry);
+        // Enough segments that no chord strays more than a fraction of a
+        // device pixel from the true curve at this size and scale.
+        let r_phys = rx.max(ry) * self.scale;
+        let segments = ((r_phys.sqrt() * 8.0).ceil() as usize).clamp(16, 256);
+        let points: Vec<(f32, f32)> = (0..segments)
+            .map(|i| {
+                let t = i as f32 / segments as f32 * std::f32::consts::TAU;
+                (cx + rx * t.cos(), cy + ry * t.sin())
+            })
+            .collect();
+        self.fill_polygon(&points, color);
+    }
+
     /// The font families this painter draws with.
     pub fn fonts(&self) -> FontSet<'a> {
         self.fonts
