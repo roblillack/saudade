@@ -83,6 +83,28 @@ pub struct FontSet<'a> {
     pub mono: Option<&'a Font>,
 }
 
+/// The vertical metrics of a face at one size, in logical pixels — see
+/// [`Font::metrics`]. Both `ascent` and `descent` are distances, positive
+/// above and below the baseline respectively.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct FontMetrics {
+    /// How far the face reaches above the baseline.
+    pub ascent: f32,
+    /// How far the face reaches below the baseline.
+    pub descent: f32,
+    /// The extra space the face asks for between one line's descent and the
+    /// next line's ascent.
+    pub line_gap: f32,
+}
+
+impl FontMetrics {
+    /// The distance from one baseline to the next in a block of text set in
+    /// this face: ascent, descent and line gap together.
+    pub fn line_height(&self) -> f32 {
+        self.ascent + self.descent + self.line_gap
+    }
+}
+
 /// The number of distinct faces a [`Font`] can hold — one per [`FontStyle`].
 pub(crate) const STYLE_COUNT: usize = 4;
 
@@ -308,6 +330,18 @@ impl Faces {
         }
     }
 
+    /// Vertical metrics at `size` pixels in an already-resolved style.
+    fn metrics(&self, size: f32, style: FontStyle) -> FontMetrics {
+        match self {
+            Faces::Outlines(faces) => faces[style as usize]
+                .get()
+                .map(|face| face.metrics(size))
+                .unwrap_or_default(),
+            #[cfg(target_os = "macos")]
+            Faces::Native(family) => family.metrics(size, style),
+        }
+    }
+
     /// Advance width of one glyph at `size` pixels in an already-resolved style.
     fn advance(&self, ch: char, size: f32, style: FontStyle) -> f32 {
         match self {
@@ -371,6 +405,16 @@ impl OutlineFace {
         let font = ab_glyph::FontVec::try_from_vec_and_index(data, index).ok()?;
         let units_per_em = font.units_per_em()?;
         Some(Self { font, units_per_em })
+    }
+
+    /// Vertical metrics at `px` pixels per em.
+    fn metrics(&self, px: f32) -> FontMetrics {
+        let unit = px / self.units_per_em;
+        FontMetrics {
+            ascent: self.font.ascent_unscaled() * unit,
+            descent: -self.font.descent_unscaled() * unit,
+            line_gap: self.font.line_gap_unscaled() * unit,
+        }
     }
 
     /// Advance width of `ch` at `px` pixels per em.
@@ -502,6 +546,36 @@ impl Font {
             Self::serif_from(&fonts),
             Self::monospace_from(&fonts),
         ]
+    }
+
+    /// The system font the runtime sets `family` in, shared.
+    ///
+    /// The three system families are looked up once per thread, the first time
+    /// any of them is asked for — by the runtime as it starts, or by the app
+    /// itself — and every later call hands back the very same `Font`, the one
+    /// every [`Painter`](crate::Painter) of the app draws with. That makes it
+    /// the way to measure text *outside* a paint pass, while handling an event
+    /// or laying out a document, and get exactly the advances the text will be
+    /// drawn with, glyph caches included, without loading the fonts a second
+    /// time. `None` when the host has no font for the family.
+    ///
+    /// ```ignore
+    /// let mono = Font::system(FontFamily::Mono);
+    /// let width = mono.map_or(0.0, |f| f.measure_styled("fn main()", 13.0, FontStyle::Regular).0);
+    /// ```
+    pub fn system(family: FontFamily) -> Option<Rc<Font>> {
+        thread_local! {
+            static SYSTEM: OnceCell<[Option<Rc<Font>>; 3]> = const { OnceCell::new() };
+        }
+        SYSTEM.with(|cell| {
+            let fonts = cell.get_or_init(|| Self::load_system().map(|f| f.map(Rc::new)));
+            fonts[match family {
+                FontFamily::Sans => 0,
+                FontFamily::Serif => 1,
+                FontFamily::Mono => 2,
+            }]
+            .clone()
+        })
     }
 
     /// Try to load a system sans-serif font, with its bold / italic / bold-italic
@@ -644,6 +718,19 @@ impl Font {
         let g = Rc::new(Glyph { metrics, bitmap });
         self.glyphs.borrow_mut().insert(key, g.clone());
         g
+    }
+
+    /// The vertical metrics of the face that draws `style` at `size` logical
+    /// pixels: how far it reaches above and below the baseline, and the gap it
+    /// asks for between lines. A style the family has no face for reports the
+    /// metrics of the face it falls back to, the one it is drawn in.
+    ///
+    /// [`Painter::text_styled`](crate::Painter::text_styled) puts the baseline
+    /// `size` below the `y` it is given, so text whose baseline belongs at `b`
+    /// is drawn at `y = b - size`, and the line it sits on spans from
+    /// `b - ascent` to `b + descent`.
+    pub fn metrics(&self, size: f32, style: FontStyle) -> FontMetrics {
+        self.faces.metrics(size, self.resolved(style))
     }
 
     /// Measure a single line of regular-weight text at the given pixel size.

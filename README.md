@@ -1841,6 +1841,11 @@ to `text` one below the other.
 could be loaded, text calls become no-ops; layout code that depends on
 text measurement should be defensive.
 
+`text_styled` puts the baseline `size` below the `y` it is given. To set
+text on a baseline, or to space lines the way the face wants, ask the
+font for its vertical metrics: `Font::metrics(size, style)` gives a
+`FontMetrics { ascent, descent, line_gap }` in logical pixels.
+
 ### Querying state
 
 ```rust
@@ -1929,7 +1934,11 @@ passed off as styled). A style the system has no face for falls back to
 the nearest real face — never a synthesized smear or shear.
 
 The runtime loads all three once at startup and hands them to every
-`Painter` it constructs as a `FontSet { sans, serif, mono }`. Draw and
+`Painter` it constructs as a `FontSet { sans, serif, mono }`. They are
+shared: `Font::system(family)` hands out the very `Rc<Font>` the runtime
+draws a family with, so an app can measure text outside a paint pass —
+lay a document out while handling a key, say — with exactly the advances
+it will be drawn with, glyph caches included. Draw and
 measure in a specific family and weight with `Painter::text_styled(..,
 family, style)` / `Painter::measure_text_styled(.., family, style)`,
 choosing a `FontFamily` (`Sans` / `Serif` / `Mono`) and a `FontStyle`

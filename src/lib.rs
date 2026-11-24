@@ -87,7 +87,7 @@ pub use event::{
     Cursor, DragData, DraggedFile, DropAction, Event, EventCtx, Key, Modifiers, MouseButton,
     NamedKey,
 };
-pub use font::{Font, FontFamily, FontSet, FontStyle};
+pub use font::{Font, FontFamily, FontMetrics, FontSet, FontStyle};
 pub use geometry::{Color, Point, Rect, Size};
 pub use painter::{Frame, Merged, Painter, Ring, RoundedBand, SavedClip};
 // `include_svg!` reads an SVG at compile time and expands to a const
