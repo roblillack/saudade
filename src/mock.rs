@@ -237,6 +237,7 @@ impl MockBackend {
             close_requested: ctx.close_requested,
             fullscreen_request: ctx.fullscreen_request,
             accepted_drop: ctx.accepted_drop,
+            tick_at: ctx.tick_at,
         }
     }
 
@@ -603,6 +604,10 @@ pub struct DispatchOutcome {
     /// What a drop would do, as a widget said with [`EventCtx::accept_drop`]
     /// or [`EventCtx::accept_drop_as`]; `None` if none would take it.
     pub accepted_drop: Option<DropAction>,
+    /// The earliest deadline a widget asked to be ticked at with
+    /// [`EventCtx::request_tick_at`], if any. The mock keeps no clock: a test
+    /// dispatches the [`Event::Tick`](crate::Event::Tick) itself.
+    pub tick_at: Option<std::time::Instant>,
 }
 
 /// Result of [`MockBackend::render`]. Holds a physical-pixel ARGB32

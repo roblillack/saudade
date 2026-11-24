@@ -12,6 +12,15 @@ While pre-1.0, the minor version is bumped for breaking changes.
 
 ### Added
 
+- `EventCtx::request_tick_at` and `request_tick_after`: a timer. The runtime
+  sleeps until the earliest deadline any widget asked for and dispatches one
+  `Event::Tick` then, so a caret can blink, an autosave wait out a pause in
+  the typing or a clock step once a second without the ~60 Hz tick stream of
+  `wants_ticks` keeping the process awake. `MockBackend`'s
+  `DispatchOutcome::tick_at` reports the deadline a dispatch asked for. (#117)
+- `Waker`, from `App::waker`: wakes the event loop from another thread, or
+  from a callback the operating system makes into the program, and has it
+  dispatch an `Event::Tick` to the widget tree. (#117)
 - `NamedKey::ContextMenu`, the Menu key of PC keyboards, for opening a
   context menu from the keyboard. (#116)
 - `Font::metrics` (and `FontMetrics`) gives a face's ascent, descent and line
