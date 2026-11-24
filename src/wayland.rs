@@ -62,6 +62,8 @@ use wayland_protocols::wp::fractional_scale::v1::client::wp_fractional_scale_man
 use wayland_protocols::wp::fractional_scale::v1::client::wp_fractional_scale_v1::{
     self, WpFractionalScaleV1,
 };
+use wayland_protocols::wp::text_input::zv3::client::zwp_text_input_manager_v3::ZwpTextInputManagerV3;
+use wayland_protocols::wp::text_input::zv3::client::zwp_text_input_v3::{self, ZwpTextInputV3};
 use wayland_protocols::wp::viewporter::client::wp_viewport::{self, WpViewport};
 use wayland_protocols::wp::viewporter::client::wp_viewporter::{self, WpViewporter};
 use wayland_protocols::xdg::dialog::v1::client::xdg_dialog_v1::XdgDialogV1;
@@ -84,6 +86,7 @@ use crate::event::{
 };
 use crate::font::{Font, FontFamily, FontSet};
 use crate::geometry::{Color, Point, Rect, Size};
+use crate::ime::ImeTracker;
 use crate::mime_drop::{self, Reading, URI_LIST};
 use crate::painter::Painter;
 use crate::svg::SvgImage;
@@ -189,6 +192,16 @@ pub(crate) fn run(app: App) {
     // been installed with one.
     let toplevel_icon_mgr: Option<XdgToplevelIconManagerV1> = globals
         .bind::<XdgToplevelIconManagerV1, _, _>(&qh, 1..=1, ())
+        .ok();
+    // Optional: zwp_text_input_v3 (an "unstable" protocol every major
+    // compositor has) is how an input method — IBus, Fcitx — reaches a
+    // Wayland client: it composes on the compositor's side and hands us the
+    // preedit and the committed text (see `State::apply_ime`). Without it, or
+    // without an input method running, keys come in as they always do, and
+    // dead keys and the Compose key are composed by xkbcommon in SCTK's
+    // keyboard.
+    let text_input_mgr: Option<ZwpTextInputManagerV3> = globals
+        .bind::<ZwpTextInputManagerV3, _, _>(&qh, 1..=1, ())
         .ok();
 
     // Server-side decorations, please — and where the compositor won't draw
@@ -318,6 +331,9 @@ pub(crate) fn run(app: App) {
         qh: qh.clone(),
         loop_handle: event_loop.handle(),
         swallow: KeySwallow::default(),
+        ime: ImeTracker::default(),
+        text_input_mgr,
+        text_input: None,
     };
     drop(conn);
 
@@ -538,6 +554,30 @@ struct State {
     /// Tracks a key press a widget asked to swallow until release (via
     /// [`EventCtx::swallow_key_until_release`]).
     swallow: KeySwallow,
+    /// What the input method is composing, and whether the focused widget
+    /// takes text — see [`Self::apply_ime`].
+    ime: ImeTracker,
+    /// The `zwp_text_input_manager_v3` global, `None` on compositors without
+    /// it — where there is no input method to speak of.
+    text_input_mgr: Option<ZwpTextInputManagerV3>,
+    /// The seat's text input, made along with its keyboard.
+    text_input: Option<TextInput>,
+}
+
+/// The seat's `zwp_text_input_v3`: what an input method on the compositor's
+/// side composes text through — see [`State::apply_ime`].
+struct TextInput {
+    object: ZwpTextInputV3,
+    /// The surface with the text-input focus, which follows the keyboard's:
+    /// what the last `enter` named, until a `leave`.
+    surface: Option<wl_surface::WlSurface>,
+    /// The cursor rectangle committed with the text input enabled, in the
+    /// surface's local coordinates; `None` while it is disabled.
+    enabled: Option<Rect>,
+    /// What the events since the last `done` asked for, applied by the next
+    /// one: the new preedit, with its cursor, and the text to commit.
+    pending_preedit: Option<(String, i32, i32)>,
+    pending_commit: Option<String>,
 }
 
 /// Wayland-side state for the subordinate window that hosts a widget
@@ -1071,6 +1111,8 @@ impl State {
     /// drown the compositor.
     fn tick(&mut self) {
         self.sync_popup();
+        // The text input's surface may have changed hands with a dialog's.
+        self.apply_ime();
 
         // Animation: while any widget asks for ticks, fan one out each
         // loop iteration (~60 Hz). Idle widgets ignore the event, so
@@ -1310,11 +1352,164 @@ impl State {
     /// requests it didn't act on: `accepted_drop` for the incoming-drag events
     /// (turned into accept/reject on the drag offer) and `swallow_key` for the
     /// keyboard path. Most callers ignore the result.
+    ///
+    /// Then the input method is settled: a key or a click may have moved the
+    /// focus, which the widget now holding it is asked about — see
+    /// [`ImeTracker`].
     fn dispatch(&mut self, event: Event) -> EventCtx {
+        let ctx = self.dispatch_once(&event);
+        if let Some(probe) = self.ime.settle(&event, ctx.ime_area) {
+            let answer = self.dispatch_once(&probe);
+            self.ime.probed(answer.ime_area);
+        }
+        self.apply_ime();
+        ctx
+    }
+
+    /// Ask the focused widget whether it takes text, as [`Self::dispatch`] does
+    /// after a key or a click, for a moment the focus may have moved without
+    /// either: the first focus, and the keyboard coming to one of our surfaces.
+    fn probe_ime(&mut self) {
+        let probe = self.ime.probe();
+        let answer = self.dispatch_once(&probe);
+        self.ime.probed(answer.ime_area);
+        self.apply_ime();
+    }
+
+    /// Enable the text input while the focused widget takes text, with the
+    /// cursor rectangle at its caret, and disable it while it doesn't. Only a
+    /// change is sent, each with the `commit` that applies it.
+    ///
+    /// The text input goes with the keyboard: it works on the surface the
+    /// compositor last said it `enter`ed, the main window's or a dialog's, and
+    /// is enabled afresh on every new one, as the protocol has it.
+    fn apply_ime(&mut self) {
+        let want = match (self.ime.wanted(), self.text_input.as_ref()) {
+            (
+                Some(area),
+                Some(TextInput {
+                    surface: Some(surface),
+                    ..
+                }),
+            ) => Some(self.surface_rect(surface, area)),
+            _ => None,
+        };
+        let Some(ti) = self.text_input.as_mut() else {
+            return;
+        };
+        match want {
+            Some(rect) if ti.enabled != Some(rect) => {
+                if ti.enabled.is_none() {
+                    ti.object.enable();
+                }
+                ti.object
+                    .set_cursor_rectangle(rect.x, rect.y, rect.w, rect.h);
+                ti.object.commit();
+                ti.enabled = Some(rect);
+            }
+            None if ti.enabled.is_some() => {
+                ti.object.disable();
+                ti.object.commit();
+                ti.enabled = None;
+                // Whatever was being composed is gone with it. A text field
+                // that lost the focus has dropped its preedit by itself; one
+                // that keeps it, under an open menu, hears of it from the
+                // probe once the menu is gone.
+                let _ = self.ime.cancel();
+            }
+            _ => {}
+        }
+    }
+
+    /// `area`, in the widget tree's logical pixels, in the local coordinates
+    /// of `surface`: in from the decorations we draw around a toplevel's
+    /// content, and from a popup's anchor.
+    fn surface_rect(&self, surface: &wl_surface::WlSurface, area: Rect) -> Rect {
+        let (cx, cy) = match self.toplevel_of(surface) {
+            Some(t) => self.toplevel_layout(t).content,
+            None => (0, 0),
+        };
+        let anchor = self.surface_anchor(surface);
+        let ui = self.ui;
+        Rect::new(
+            cx as i32 + surface_offset(area.x - anchor.x, ui),
+            cy as i32 + surface_offset(area.y - anchor.y, ui),
+            surface_offset(area.w, ui).max(1),
+            surface_offset(area.h, ui).max(1),
+        )
+    }
+
+    /// Take in what the text input reports, applying it on each `done`.
+    fn text_input_event(&mut self, event: zwp_text_input_v3::Event) {
+        let Some(ti) = self.text_input.as_mut() else {
+            return;
+        };
+        match event {
+            // The keyboard came to one of our surfaces: enable the text input
+            // there if the focused widget takes text.
+            zwp_text_input_v3::Event::Enter { surface } => {
+                ti.surface = Some(surface);
+                ti.enabled = None;
+                self.probe_ime();
+            }
+            // The compositor ignores the text input until the next `enter`,
+            // and whatever was being composed is gone.
+            zwp_text_input_v3::Event::Leave { .. } => {
+                ti.surface = None;
+                ti.enabled = None;
+                ti.pending_preedit = None;
+                ti.pending_commit = None;
+                if let Some(event) = self.ime.cancel() {
+                    self.dispatch(event);
+                }
+            }
+            zwp_text_input_v3::Event::PreeditString {
+                text,
+                cursor_begin,
+                cursor_end,
+            } => {
+                ti.pending_preedit = Some((text.unwrap_or_default(), cursor_begin, cursor_end));
+            }
+            zwp_text_input_v3::Event::CommitString { text } => {
+                ti.pending_commit = text;
+            }
+            // We never tell the input method what text surrounds the caret, so
+            // it has none to ask us to delete.
+            zwp_text_input_v3::Event::DeleteSurroundingText { .. } => {}
+            // Apply in the protocol's order: the old preedit goes, the commit
+            // goes in, the new preedit is shown. A `done` whose serial is
+            // behind our commits is still applied, as the protocol asks; what
+            // we committed since is in effect either way.
+            //
+            // As for keys: a window with a dialog open over it has no business
+            // typing into it.
+            zwp_text_input_v3::Event::Done { .. } => {
+                let commit = ti.pending_commit.take();
+                let (text, begin, end) = ti.pending_preedit.take().unwrap_or_default();
+                let blocked = self.keyboard_under_dialog();
+                if let Some(text) = commit
+                    && let Some(event) = self.ime.commit(text)
+                    && !blocked
+                {
+                    self.dispatch(event);
+                }
+                // Both at -1 hides the cursor.
+                let cursor = (begin >= 0 && end >= 0).then_some((begin as usize, end as usize));
+                if let Some(event) = self.ime.preedit(text, cursor)
+                    && !blocked
+                {
+                    self.dispatch(event);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn dispatch_once(&mut self, event: &Event) -> EventCtx {
         let mut ctx = EventCtx::with_fullscreen(self.fullscreen);
         ctx.modifiers = self.modifiers;
         ctx.dragging_out = self.drag_source.is_some();
-        self.root.event(&event, &mut ctx);
+        self.root.event(event, &mut ctx);
         if ctx.paint_requested {
             self.needs_redraw = true;
             self.mark_popups_dirty();
@@ -2518,6 +2713,7 @@ impl WindowHandler for State {
                 // widget on initial configure so single-widget roots react
                 // to keyboard input out of the box.
                 self.root.focus_first();
+                self.probe_ime();
             }
             return;
         }
@@ -2621,6 +2817,18 @@ impl SeatHandler for State {
                     }),
                 )
                 .ok();
+            // The text input follows the keyboard, so it comes with it.
+            if let Some(mgr) = self.text_input_mgr.as_ref()
+                && self.text_input.is_none()
+            {
+                self.text_input = Some(TextInput {
+                    object: mgr.get_text_input(&seat, qh, ()),
+                    surface: None,
+                    enabled: None,
+                    pending_preedit: None,
+                    pending_commit: None,
+                });
+            }
         }
         if capability == Capability::Pointer && self.pointer.is_none() {
             self.pointer = self.seat_state.get_pointer(qh, &seat).ok();
@@ -2644,6 +2852,9 @@ impl SeatHandler for State {
             && let Some(k) = self.keyboard.take()
         {
             k.release();
+            if let Some(ti) = self.text_input.take() {
+                ti.object.destroy();
+            }
         }
         if capability == Capability::Pointer
             && let Some(p) = self.pointer.take()
@@ -3702,6 +3913,32 @@ fn write_premultiplied(rgba: &[u8], dst: &mut [u32]) {
         let a = px[3] as u32;
         let scaled = |c: u8| (c as u32 * a + 127) / 255;
         *out = (a << 24) | (scaled(px[0]) << 16) | (scaled(px[1]) << 8) | scaled(px[2]);
+    }
+}
+
+// The text-input manager only makes text inputs; it has no events.
+impl Dispatch<ZwpTextInputManagerV3, ()> for State {
+    fn event(
+        _state: &mut Self,
+        _proxy: &ZwpTextInputManagerV3,
+        _event: <ZwpTextInputManagerV3 as Proxy>::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qhandle: &QueueHandle<Self>,
+    ) {
+    }
+}
+
+impl Dispatch<ZwpTextInputV3, ()> for State {
+    fn event(
+        state: &mut Self,
+        _proxy: &ZwpTextInputV3,
+        event: zwp_text_input_v3::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qhandle: &QueueHandle<Self>,
+    ) {
+        state.text_input_event(event);
     }
 }
 

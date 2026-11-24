@@ -41,6 +41,7 @@ use crate::chrome::{self, WindowChrome};
 use crate::event::{DropAction, Event, EventCtx, Modifiers};
 use crate::font::{Font, FontSet};
 use crate::geometry::{Color, Point, Rect, Size};
+use crate::ime::ImeTracker;
 use crate::painter::Painter;
 use crate::theme::Theme;
 use crate::widget::{PopupKind, PopupRequest, Widget};
@@ -79,6 +80,9 @@ pub struct MockBackend {
     /// The title a widget last gave the window with
     /// [`EventCtx::set_window_title`] — see [`Self::window_title`].
     title: std::cell::RefCell<Option<String>>,
+    /// Whether the focused widget takes text, and what is being composed, as
+    /// the live runtime keeps track of it — see [`Self::ime_area`].
+    ime: std::cell::RefCell<ImeTracker>,
 }
 
 /// Which backdrop the content pass fills behind the widget tree, mirroring the
@@ -116,6 +120,7 @@ impl MockBackend {
             modifiers: std::cell::Cell::new(Modifiers::default()),
             dragging_out: std::cell::Cell::new(false),
             title: std::cell::RefCell::new(None),
+            ime: std::cell::RefCell::new(ImeTracker::default()),
         }
     }
 
@@ -235,7 +240,60 @@ impl MockBackend {
     /// [`DispatchOutcome`] flags the widget set on its `EventCtx`. Used by
     /// tests to drive focus / keyboard behavior without spinning up the
     /// full winit / Wayland runtime.
+    ///
+    /// The input method is kept track of as the live runtime does it: after a
+    /// key, a click or a drop the focused widget is asked again whether it
+    /// takes text (see [`EventCtx::set_ime_area`]), and
+    /// [`DispatchOutcome::ime_area`] tells what came of it. An
+    /// [`Event::Ime`](crate::Event::Ime) dispatched here counts as the
+    /// platform's, so a later [`Ime::Preedit`](crate::Ime::Preedit) a probe
+    /// sends repeats it.
     pub fn dispatch(&self, root: &mut dyn Widget, event: &Event) -> DispatchOutcome {
+        self.ime.borrow_mut().observe(event);
+        let ctx = self.dispatch_once(root, event);
+        let probe = self.ime.borrow_mut().settle(event, ctx.ime_area);
+        let mut outcome = self.outcome(&ctx);
+        if let Some(probe) = probe {
+            let answer = self.dispatch_once(root, &probe);
+            outcome.paint_requested |= answer.paint_requested;
+            self.ime.borrow_mut().probed(answer.ime_area);
+        }
+        self.turn_ime_off_unwanted();
+        outcome.ime_area = self.ime_area();
+        outcome
+    }
+
+    /// What the live runtime does as it turns the input method off: the
+    /// composition is gone with it.
+    fn turn_ime_off_unwanted(&self) {
+        let mut ime = self.ime.borrow_mut();
+        if ime.wanted().is_none() {
+            let _ = ime.cancel();
+        }
+    }
+
+    /// Ask the focused widget of `root` whether it takes text, as the live
+    /// runtime does when its window opens — once the first focusable widget
+    /// has the focus — and whenever the window comes to the front. The
+    /// widget is sent the composition in progress as an
+    /// [`Ime::Preedit`](crate::Ime::Preedit), an empty one when there is none.
+    pub fn probe_ime(&self, root: &mut dyn Widget) -> DispatchOutcome {
+        let probe = self.ime.borrow().probe();
+        let ctx = self.dispatch_once(root, &probe);
+        self.ime.borrow_mut().probed(ctx.ime_area);
+        self.turn_ime_off_unwanted();
+        self.outcome(&ctx)
+    }
+
+    /// Where the input method would be anchored now — the caret area the
+    /// focused widget last gave [`EventCtx::set_ime_area`] — or `None` while
+    /// no widget that takes text has the focus, when the live runtime keeps
+    /// the input method off.
+    pub fn ime_area(&self) -> Option<Rect> {
+        self.ime.borrow().wanted()
+    }
+
+    fn dispatch_once(&self, root: &mut dyn Widget, event: &Event) -> EventCtx {
         let mut ctx = EventCtx::with_fullscreen(self.fullscreen.get());
         ctx.modifiers = self.modifiers.get();
         ctx.dragging_out = self.dragging_out.get();
@@ -246,12 +304,17 @@ impl MockBackend {
         if let Some(title) = ctx.title_request.take() {
             *self.title.borrow_mut() = Some(title);
         }
+        ctx
+    }
+
+    fn outcome(&self, ctx: &EventCtx) -> DispatchOutcome {
         DispatchOutcome {
             paint_requested: ctx.paint_requested,
             close_requested: ctx.close_requested,
             fullscreen_request: ctx.fullscreen_request,
             accepted_drop: ctx.accepted_drop,
             tick_at: ctx.tick_at,
+            ime_area: self.ime_area(),
         }
     }
 
@@ -622,6 +685,11 @@ pub struct DispatchOutcome {
     /// [`EventCtx::request_tick_at`], if any. The mock keeps no clock: a test
     /// dispatches the [`Event::Tick`](crate::Event::Tick) itself.
     pub tick_at: Option<std::time::Instant>,
+    /// Where the input method is anchored once the dispatch is over — the
+    /// caret area the focused widget gave [`EventCtx::set_ime_area`] — or
+    /// `None` when the live runtime would have it turned off: no widget that
+    /// takes text has the focus. The same as [`MockBackend::ime_area`] then.
+    pub ime_area: Option<Rect>,
 }
 
 /// Result of [`MockBackend::render`]. Holds a physical-pixel ARGB32

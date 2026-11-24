@@ -5,7 +5,8 @@ use std::time::{Duration, Instant};
 use winit::application::ApplicationHandler;
 use winit::dpi::{LogicalPosition, LogicalSize, PhysicalPosition, PhysicalSize};
 use winit::event::{
-    ElementState, InnerSizeWriter, MouseButton as WinitMouseButton, MouseScrollDelta, WindowEvent,
+    ElementState, Ime as WinitIme, InnerSizeWriter, MouseButton as WinitMouseButton,
+    MouseScrollDelta, WindowEvent,
 };
 #[cfg(unix)]
 use winit::event_loop::EventLoopProxy;
@@ -37,6 +38,7 @@ use crate::event::{
 };
 use crate::font::{Font, FontFamily, FontSet};
 use crate::geometry::{Color, Point, Rect, Size};
+use crate::ime::ImeTracker;
 use crate::painter::Painter;
 use crate::present::{Alpha, Surface};
 use crate::svg::SvgImage;
@@ -549,6 +551,13 @@ struct AppHandler {
     /// item, which `about_to_wait` then runs.
     #[cfg(target_os = "macos")]
     menu_waker: Option<EventLoopProxy<Option<Appearance>>>,
+    /// What the input method is composing, and whether the focused widget
+    /// takes text — see [`Self::apply_ime`].
+    ime: ImeTracker,
+    /// The window the input method is allowed on, and the caret area it was
+    /// last given there, in that window's physical pixels. `None` while it is
+    /// allowed nowhere.
+    ime_on: Option<(WindowId, Rect)>,
 }
 
 /// Bookkeeping for a key press a widget asked to swallow until its release.
@@ -740,6 +749,8 @@ impl AppHandler {
             menu_bar: app.menu_bar,
             #[cfg(target_os = "macos")]
             menu_waker: None,
+            ime: ImeTracker::default(),
+            ime_on: None,
         }
     }
 }
@@ -863,6 +874,9 @@ impl ApplicationHandler<Option<Appearance>> for AppHandler {
                 }
             });
         }
+        // A text field that took the focus above takes the very first key
+        // through the input method, a dead key included.
+        self.probe_ime(event_loop);
     }
 
     fn window_event(
@@ -916,6 +930,9 @@ impl ApplicationHandler<Option<Appearance>> for AppHandler {
         self.sync_popup(event_loop);
         #[cfg(target_os = "macos")]
         self.refresh_menu_keys();
+        // A dialog opened or closed takes the input method along with the
+        // keyboard.
+        self.apply_ime();
         self.pump_ticks(event_loop);
 
         if self.needs_redraw
@@ -1009,6 +1026,7 @@ impl AppHandler {
                 // when the scale factor stays the same, so this is where it is
                 // first seen.
                 self.refresh_screen();
+                self.probe_ime(event_loop);
             }
             // Windows and macOS: a menu leaves the keyboard with the window it
             // drops from (see `win32_popup`, `macos_popup`), so this losing it
@@ -1170,6 +1188,7 @@ impl AppHandler {
             } => {
                 self.dispatch_key(&key, None, is_synthetic, event_loop);
             }
+            WindowEvent::Ime(ime) => self.dispatch_ime(ime, None, event_loop),
             WindowEvent::RedrawRequested => {
                 self.paint_main();
                 self.mark_popups_dirty();
@@ -1196,6 +1215,9 @@ impl AppHandler {
                 };
                 if focused {
                     p.was_focused = true;
+                    if p.kind == PopupKind::Dialog {
+                        self.probe_ime(event_loop);
+                    }
                     return;
                 }
                 // A brand-new popup window reports one unfocused *before* it is
@@ -1334,6 +1356,10 @@ impl AppHandler {
                 ..
             } => {
                 self.dispatch_key(&key, Some(idx), is_synthetic, event_loop);
+                self.mark_popups_dirty();
+            }
+            WindowEvent::Ime(ime) => {
+                self.dispatch_ime(ime, Some(idx), event_loop);
                 self.mark_popups_dirty();
             }
             WindowEvent::RedrawRequested => {
@@ -1478,7 +1504,126 @@ impl AppHandler {
         ctx
     }
 
+    /// Dispatch `event` into the widget tree and apply the requests it left on
+    /// the [`EventCtx`], which comes back for the caller to read what it acts
+    /// on itself. Then settle the input method: a key or a click may have
+    /// moved the focus, which the widget now holding it is asked about — see
+    /// [`ImeTracker`].
     fn dispatch(&mut self, event: &Event, event_loop: &ActiveEventLoop) -> EventCtx {
+        let ctx = self.dispatch_once(event, event_loop);
+        if let Some(probe) = self.ime.settle(event, ctx.ime_area) {
+            let answer = self.dispatch_once(&probe, event_loop);
+            self.ime.probed(answer.ime_area);
+        }
+        self.apply_ime();
+        ctx
+    }
+
+    /// Ask the focused widget whether it takes text, as [`Self::dispatch`] does
+    /// after a key or a click, for a moment the focus may have moved without
+    /// either: the first focus, given at startup, and a window coming to the
+    /// front.
+    fn probe_ime(&mut self, event_loop: &ActiveEventLoop) {
+        let probe = self.ime.probe();
+        let answer = self.dispatch_once(&probe, event_loop);
+        self.ime.probed(answer.ime_area);
+        self.apply_ime();
+    }
+
+    /// Hand what the platform's input method reports for the window at `from`
+    /// — its index in the popup stack, or `None` for the main window — to the
+    /// widget tree as an [`Event::Ime`].
+    fn dispatch_ime(&mut self, ime: WinitIme, from: Option<usize>, event_loop: &ActiveEventLoop) {
+        let event = match ime {
+            // The composition starts with its first preedit; nothing to tell.
+            WinitIme::Enabled => None,
+            WinitIme::Preedit(text, cursor) => self.ime.preedit(text, cursor),
+            WinitIme::Commit(text) => self.ime.commit(text),
+            // Turned off — by us, or by the user switching input sources on a
+            // Mac — with whatever was being composed gone.
+            WinitIme::Disabled => self.ime.cancel(),
+        };
+        // As for keys: a window under a dialog has no business typing into it.
+        if let Some(event) = event
+            && !self.under_dialog(from)
+        {
+            self.dispatch(&event, event_loop);
+        }
+    }
+
+    /// Let the platform's input method at the keyboard while the focused widget
+    /// takes text, anchored at its caret, and keep it away while it doesn't:
+    /// what [`ImeTracker::wanted`] says, on the window holding the keyboard.
+    ///
+    /// That window is the dialog on top of the popup stack, if one is open — a
+    /// dialog is modal, and a menu takes no text — else the main window. A
+    /// dialog's window comes and goes in `sync_popup`, after the dispatch that
+    /// opened or closed it, which is why `about_to_wait` calls this again.
+    fn apply_ime(&mut self) {
+        let target = self.ime.wanted().and_then(|area| {
+            match self
+                .popups
+                .iter()
+                .rposition(|p| p.kind == PopupKind::Dialog)
+            {
+                Some(idx) => {
+                    let p = &self.popups[idx];
+                    let local = Rect::new(area.x - p.anchor.x, area.y - p.anchor.y, area.w, area.h);
+                    Some((p.win.clone(), physical_rect(local, p.scale, 0, 0)))
+                }
+                None => {
+                    let win = self.main_win.clone()?;
+                    let content = self.root.bounds().into();
+                    let (origin_x, origin_y) = origin(content, self.scale, self.physical);
+                    Some((win, physical_rect(area, self.scale, origin_x, origin_y)))
+                }
+            }
+        });
+        if let Some((id, _)) = self.ime_on
+            && target.as_ref().map(|(win, _)| win.id()) != Some(id)
+        {
+            if let Some(win) = self.window_by_id(id) {
+                // An input method that held a composition when the focus left
+                // would carry on with it when the input method comes back.
+                #[cfg(target_os = "macos")]
+                if self.ime.is_composing() {
+                    discard_composition(&win);
+                }
+                win.set_ime_allowed(false);
+            }
+            // A text field that lost the focus mid-composition has dropped its
+            // preedit by itself; one that keeps it, under an open menu, hears
+            // of it from the probe once the menu is gone.
+            let _ = self.ime.cancel();
+            self.ime_on = None;
+        }
+        let Some((win, area)) = target else {
+            return;
+        };
+        if self.ime_on.is_none() {
+            win.set_ime_allowed(true);
+        }
+        if self.ime_on.map(|(_, on)| on) != Some(area) {
+            win.set_ime_cursor_area(
+                PhysicalPosition::new(area.x, area.y),
+                PhysicalSize::new(area.w.max(1) as u32, area.h.max(1) as u32),
+            );
+        }
+        self.ime_on = Some((win.id(), area));
+    }
+
+    /// The main window or the popup window with id `id`, if it is still open.
+    fn window_by_id(&self, id: WindowId) -> Option<Rc<Window>> {
+        if self.main_id == Some(id) {
+            return self.main_win.clone();
+        }
+        self.popups
+            .iter()
+            .find(|p| p.win_id == id)
+            .map(|p| p.win.clone())
+    }
+
+    fn dispatch_once(&mut self, event: &Event, event_loop: &ActiveEventLoop) -> EventCtx {
         let mut ctx = self.event_ctx();
         self.root.event(event, &mut ctx);
         self.apply_ctx(&mut ctx, event_loop);
@@ -1502,6 +1647,9 @@ impl AppHandler {
                     let mut ctx = self.event_ctx();
                     crate::macos_menu::fire(tag, &mut ctx);
                     self.apply_ctx(&mut ctx, event_loop);
+                    // An item may have moved the focus, as a key or a click
+                    // may: opened a dialog, say.
+                    self.probe_ime(event_loop);
                 }
             }
         }
@@ -1868,6 +2016,10 @@ impl AppHandler {
             // press it hasn't seen, and one that went down in the dialog ends
             // there.
             ElementState::Pressed if self.under_dialog(from) => {}
+            // Windows: a key the input method took for its composition. It
+            // reaches the composition, as `WindowEvent::Ime`, and not the
+            // widgets.
+            ElementState::Pressed if key.logical_key == WKey::Named(WNamedKey::Process) => {}
             ElementState::Pressed => {
                 // A key whose press a widget asked to swallow (e.g. the letter
                 // that fired a menu item) is dropped wholesale — including OS
@@ -2961,6 +3113,30 @@ fn logical_position(win: &Window) -> Option<Point> {
     ))
 }
 
+/// Have the input method behind a macOS window drop whatever it is composing.
+/// winit forgets the composition it shows when the input method is turned
+/// off, but the system's text input context for the view keeps it, and would
+/// carry on with it — a dead key's accent, a half-typed Japanese word — once
+/// the input method is turned on again.
+#[cfg(target_os = "macos")]
+fn discard_composition(win: &Window) {
+    use objc2_app_kit::NSView;
+    use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
+
+    let Ok(handle) = win.window_handle() else {
+        return;
+    };
+    let RawWindowHandle::AppKit(handle) = handle.as_raw() else {
+        return;
+    };
+    // SAFETY: winit owns this `NSView` for as long as the window lives, which
+    // is past the end of this borrow — `win` is still holding it.
+    let view: &NSView = unsafe { handle.ns_view.cast().as_ref() };
+    if let Some(context) = view.inputContext() {
+        context.discardMarkedText();
+    }
+}
+
 /// What winit's theme stands for in saudade's terms.
 fn appearance_of(theme: winit::window::Theme) -> Appearance {
     match theme {
@@ -3188,6 +3364,20 @@ fn relayout(
     let logical_w = (physical.width as f32 / s).round() as i32;
     let logical_h = (physical.height as f32 / s).round() as i32;
     root.layout(Rect::new(0, 0, logical_w.max(1), logical_h.max(1)));
+}
+
+/// A rect in the widget tree's logical pixels, in the physical pixels of a
+/// window whose content is drawn at `scale` from `(origin_x, origin_y)` — the
+/// inverse of [`physical_to_logical`], for telling the platform where
+/// something is.
+fn physical_rect(rect: Rect, scale: f32, origin_x: i32, origin_y: i32) -> Rect {
+    let at = |v: i32| (v as f32 * scale).round() as i32;
+    Rect::new(
+        origin_x + at(rect.x),
+        origin_y + at(rect.y),
+        at(rect.w),
+        at(rect.h),
+    )
 }
 
 fn physical_to_logical(

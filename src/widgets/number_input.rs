@@ -1,4 +1,4 @@
-use crate::event::{Event, EventCtx, Key, MouseButton, NamedKey};
+use crate::event::{Event, EventCtx, Ime, Key, MouseButton, NamedKey};
 use crate::geometry::Rect;
 use crate::painter::Painter;
 use crate::theme::Theme;
@@ -347,6 +347,17 @@ impl NumberInput {
     }
 }
 
+/// `ch` as the field reads it: a full-width digit, point, comma or minus as
+/// its ASCII self, and a comma as the decimal point.
+fn halfwidth(ch: char) -> char {
+    match ch {
+        '０'..='９' => char::from(b'0' + (ch as u32 - '０' as u32) as u8),
+        '．' | '，' | ',' => '.',
+        '－' | '−' => '-',
+        _ => ch,
+    }
+}
+
 /// The text field's rect: all of `rect` but the spin buttons on its right,
 /// plus the two pixels of the field's own right border and bevel, which the
 /// buttons cover — so the text area inside them reaches up to the buttons'
@@ -422,6 +433,13 @@ impl Widget for NumberInput {
                 self.edit(&point, ctx);
             }
             Event::Char { .. } => self.edit(event, ctx),
+            // An input method in its full-width mode — a Japanese one, say —
+            // commits full-width digits, which the field takes as the plain
+            // ones they are. The comma stands in for the point here too.
+            Event::Ime(Ime::Commit(text)) => {
+                let text = text.chars().map(halfwidth).collect();
+                self.edit(&Event::Ime(Ime::Commit(text)), ctx);
+            }
             Event::KeyDown { key, modifiers } => {
                 let steps = match key {
                     Key::Named(NamedKey::Up) => 1,

@@ -4,7 +4,7 @@ use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use crate::accel::ModifierScheme;
-use crate::event::{Cursor, Event, EventCtx, Key, MouseButton, NamedKey};
+use crate::event::{Cursor, Event, EventCtx, Ime, Key, MouseButton, NamedKey};
 use crate::font::{FontFamily, FontStyle};
 use crate::geometry::{Color, Point, Rect};
 use crate::painter::{Merged, Painter};
@@ -151,6 +151,15 @@ pub struct TextEditor {
     blink_since: Instant,
     /// Cached on/off state of the focused caret. Updated by `Event::Tick`.
     blink_on: bool,
+    /// What the input method is composing, shown underlined at the caret but
+    /// not part of the text: empty when nothing is. See [`Ime::Preedit`].
+    preedit: String,
+    /// The byte range of `preedit` the input method has its caret on, or
+    /// highlights.
+    preedit_cursor: Option<(usize, usize)>,
+    /// How wide `preedit` was drawn, in logical pixels, at the last paint:
+    /// the input method's area spans it.
+    preedit_w: i32,
 }
 
 impl TextEditor {
@@ -187,6 +196,9 @@ impl TextEditor {
             menu_pick: Rc::new(Cell::new(None)),
             blink_since: Instant::now(),
             blink_on: true,
+            preedit: String::new(),
+            preedit_cursor: None,
+            preedit_w: 0,
         }
     }
 
@@ -1025,6 +1037,122 @@ impl TextEditor {
         }
         self.cursor.1 = best_col;
     }
+
+    // ---------------------------------------------------------------- input method
+
+    /// Whether the editor takes text now: it has the focus, and an edit can
+    /// land — not read-only, and no right-click menu in the way.
+    fn takes_text(&self) -> bool {
+        self.focused && self.enabled && !self.read_only && !self.menu.is_open()
+    }
+
+    /// Where the input method's candidate window and popups belong: the
+    /// caret, in window coordinates — or, while something is being composed,
+    /// the composition, which starts at the caret. As of the last paint,
+    /// which measured the visible lines.
+    fn ime_area(&self) -> Rect {
+        let text = self.text_area();
+        let (row, col) = self.cursor;
+        let prefix_w = self
+            .cumulative_widths
+            .get(&row)
+            .and_then(|widths| widths.get(col))
+            .copied()
+            .unwrap_or(0);
+        let x = text.x + PADDING_X - self.h_scrollbar.value() + prefix_w;
+        let x = x.clamp(text.x, (text.right() - 1).max(text.x));
+        let offset = row as i64 - self.scroll_top() as i64;
+        let offset = offset.clamp(0, i64::from(self.visible_rows() - 1)) as i32;
+        let y = text.y + PADDING_Y + offset * LINE_HEIGHT;
+        let w = self.preedit_w.clamp(1, (text.right() - x).max(1));
+        Rect::new(x, y, w, LINE_HEIGHT)
+    }
+
+    /// Show `text` as the composition in progress. Returns whether that
+    /// changed anything.
+    fn set_preedit(&mut self, text: &str, cursor: Option<(usize, usize)>) -> bool {
+        if self.preedit == text && self.preedit_cursor == cursor {
+            return false;
+        }
+        self.preedit = text.to_string();
+        self.preedit_cursor = cursor;
+        if text.is_empty() {
+            self.preedit_w = 0;
+        }
+        true
+    }
+
+    /// Put text the input method committed in place of the selection, as if
+    /// it had been typed — one undo step with the typing around it. Line
+    /// breaks and tabs go in; other control characters are left out.
+    fn commit_text(&mut self, text: &str) {
+        let text: String = text
+            .chars()
+            .filter(|&c| c == '\n' || c == '\t' || !c.is_control())
+            .collect();
+        if !text.is_empty() {
+            self.replace_selection(&text, EditKind::Typing);
+        }
+    }
+
+    /// Paint row `row` with the composition in progress at the caret,
+    /// underlined — the part the input method highlights, if any, twice as
+    /// thick — and the caret where the input method has it, `caret` pixels
+    /// into the composition.
+    fn paint_composing(
+        &self,
+        painter: &mut Painter,
+        theme: &Theme,
+        (row, text_x, y): (usize, i32, i32),
+        caret: Option<i32>,
+    ) {
+        let line = &self.lines[row];
+        let (before, after) = line.split_at(char_to_byte(line, self.cursor.1));
+        let at = text_x
+            + self
+                .cumulative_widths
+                .get(&row)
+                .and_then(|widths| widths.get(self.cursor.1))
+                .copied()
+                .unwrap_or(0);
+        let mono = |painter: &mut Painter, x: i32, text: &str| {
+            painter.text_styled(
+                x,
+                y,
+                text,
+                self.font_size,
+                theme.text,
+                FontFamily::Mono,
+                FontStyle::Regular,
+            );
+        };
+        mono(painter, text_x, before);
+        mono(painter, at, &self.preedit);
+        mono(painter, at + self.preedit_w, after);
+
+        let underline_y = y + LINE_HEIGHT - 1;
+        painter.h_line(at, underline_y, self.preedit_w, theme.text);
+        match (self.preedit_cursor, caret) {
+            (Some((start, end)), _) if start < end => {
+                let measure = |i| {
+                    painter
+                        .measure_text_styled(
+                            prefix(&self.preedit, i),
+                            self.font_size,
+                            FontFamily::Mono,
+                            FontStyle::Regular,
+                        )
+                        .w
+                };
+                let (x0, x1) = (measure(start), measure(end));
+                painter.h_line(at + x0, underline_y - 1, x1 - x0, theme.text);
+            }
+            (_, Some(caret)) if self.blink_on => {
+                painter.v_line(at + caret, y, LINE_HEIGHT, theme.text);
+            }
+            _ => {}
+        }
+    }
 }
 
 impl Widget for TextEditor {
@@ -1078,27 +1206,53 @@ impl Widget for TextEditor {
             self.cumulative_widths.insert(row, widths);
         }
 
+        // A composition in progress goes in at the caret, pushing the rest of
+        // its line along; the view follows the input method's caret in it.
+        let composing = self.takes_text() && !self.preedit.is_empty();
+        let mut preedit_caret = None;
+        self.preedit_w = 0;
+        if composing {
+            let measure = |text: &str| {
+                painter
+                    .measure_text_styled(text, self.font_size, FontFamily::Mono, FontStyle::Regular)
+                    .w
+            };
+            self.preedit_w = measure(&self.preedit);
+            preedit_caret = self
+                .preedit_cursor
+                .map(|(_, end)| measure(prefix(&self.preedit, end)));
+        }
+
         // Settle the horizontal scroll before anything is placed by it.
         self.sync_h_scrollbar(painter);
         if std::mem::take(&mut self.reveal_caret)
             && let Some(widths) = self.cumulative_widths.get(&self.cursor.0)
         {
             let caret = widths.get(self.cursor.1).or(widths.last()).copied();
-            self.reveal_caret_x(caret.unwrap_or(0));
+            let in_preedit = preedit_caret.unwrap_or(self.preedit_w);
+            self.reveal_caret_x(caret.unwrap_or(0) + in_preedit);
         }
         let text_x = text.x + PADDING_X - self.h_scrollbar.value();
         // Text scrolled sideways stops at the bevel, not at the padding and
         // not, as a long line would otherwise, somewhere past the field.
         let clip = painter.push_clip_frame(text, 2, merged);
 
-        let selection = self.selection_range();
+        // The composition replaces the selection when it is committed, so the
+        // selection isn't drawn in the meantime.
+        let selection = if composing {
+            None
+        } else {
+            self.selection_range()
+        };
         for row_offset in 0..visible {
             let row = scroll_top + row_offset;
             if row >= self.lines.len() {
                 break;
             }
             let y = text_y0 + row_offset as i32 * LINE_HEIGHT;
-            if self.enabled {
+            if composing && row == self.cursor.0 {
+                self.paint_composing(painter, theme, (row, text_x, y), preedit_caret);
+            } else if self.enabled {
                 self.paint_line(painter, theme, row, text_x, y, selection);
             } else {
                 // Disabled: plain greyed text, no selection band.
@@ -1115,7 +1269,8 @@ impl Widget for TextEditor {
         }
 
         let (crow, ccol) = self.cursor;
-        if self.enabled && crow >= scroll_top && crow < scroll_top + visible {
+        // A composition draws the caret where the input method has it.
+        if self.enabled && !composing && crow >= scroll_top && crow < scroll_top + visible {
             let prefix_w = self
                 .cumulative_widths
                 .get(&crow)
@@ -1165,6 +1320,98 @@ impl Widget for TextEditor {
         if !self.enabled {
             return;
         }
+        self.handle(event, ctx);
+        // Focused and editable, the editor takes text — through the input
+        // method, too — and says so on every event it gets, with where its
+        // caret is now. Not while its right-click menu has the keyboard.
+        if self.takes_text() {
+            ctx.set_ime_area(self.ime_area());
+        }
+    }
+
+    fn captures_pointer(&self) -> bool {
+        // The open menu keeps the pointer too, so it behaves modally.
+        self.drag_active
+            || self.menu.is_open()
+            || self.v_scrollbar.captures_pointer()
+            || self.h_scrollbar.captures_pointer()
+    }
+
+    fn collect_popups(&self, out: &mut Vec<PopupRequest>) {
+        self.menu.collect_popups(out);
+    }
+
+    fn focusable(&self) -> bool {
+        self.enabled
+    }
+
+    fn set_focused(&mut self, focused: bool) {
+        let was_focused = self.focused;
+        self.focused = focused;
+        if focused {
+            if !was_focused {
+                self.reset_blink();
+            }
+        } else {
+            // Don't carry a stale click history across focus losses — that
+            // would let a re-entry click count as a "double" even though the
+            // intervening focus change broke the user's gesture.
+            self.last_click = None;
+            self.click_count = 0;
+            self.drag_active = false;
+            // A composition doesn't follow the focus out: the runtime turns
+            // the input method off, or tells whichever field has the focus now.
+            self.set_preedit("", None);
+        }
+    }
+
+    fn wants_ticks(&self) -> bool {
+        // Steady-state ticks for the caret blink. The embedded scrollbar's
+        // own auto-repeat doesn't need forwarding here — it pushes a tick
+        // request through the `EventCtx` itself (see `EventCtx::request_tick`).
+        self.focused && self.enabled
+    }
+
+    fn layout(&mut self, bounds: Rect) {
+        self.rect = bounds;
+        // Carve the rightmost column for the vertical scrollbar and, if it is
+        // shown, the bottom row for the horizontal one; the rest is the text
+        // area. Where both are shown each stops a pixel into the corner square
+        // between them, so its frame can share their end lines.
+        let across = if self.show_h_scrollbar {
+            SCROLLBAR_THICKNESS - 1
+        } else {
+            0
+        };
+        self.v_scrollbar.set_rect(Rect::new(
+            bounds.right() - SCROLLBAR_THICKNESS,
+            bounds.y,
+            SCROLLBAR_THICKNESS,
+            bounds.h - across,
+        ));
+        self.h_scrollbar.set_rect(if self.show_h_scrollbar {
+            Rect::new(
+                bounds.x,
+                bounds.bottom() - SCROLLBAR_THICKNESS,
+                bounds.w - across,
+                SCROLLBAR_THICKNESS,
+            )
+        } else {
+            Rect::new(0, 0, 0, 0)
+        });
+        // Re-sync the scrollbar's range to the new viewport height and clamp the
+        // current scroll into it — but DON'T snap the view to the caret. A
+        // layout pass fires for reasons unrelated to editing: on Wayland the
+        // compositor sends a `configure` (hence a relayout) every time the
+        // window's activation state changes, so forcing the cursor into view
+        // here would yank a wheel-scrolled view back to the caret (line 0 for a
+        // freshly opened file) the moment the window lost or regained focus.
+        self.sync_scrollbar();
+    }
+}
+
+impl TextEditor {
+    fn handle(&mut self, event: &Event, ctx: &mut EventCtx) {
         // The open right-click menu owns the pointer and the keyboard.
         if self.menu.is_open() {
             self.menu.event(event, ctx);
@@ -1437,6 +1684,21 @@ impl Widget for TextEditor {
                     _ => {}
                 }
             }
+            Event::Ime(Ime::Preedit { text, cursor }) if self.takes_text() => {
+                if self.set_preedit(text, *cursor) {
+                    // The caret goes where the input method has it, in view.
+                    self.ensure_cursor_visible();
+                    self.reset_blink();
+                    ctx.request_paint();
+                }
+            }
+            Event::Ime(Ime::Commit(text)) if self.takes_text() => {
+                self.set_preedit("", None);
+                self.commit_text(text);
+                self.ensure_cursor_visible();
+                self.reset_blink();
+                ctx.request_paint();
+            }
             Event::Tick => {
                 if !self.focused {
                     return;
@@ -1452,85 +1714,6 @@ impl Widget for TextEditor {
         }
     }
 
-    fn captures_pointer(&self) -> bool {
-        // The open menu keeps the pointer too, so it behaves modally.
-        self.drag_active
-            || self.menu.is_open()
-            || self.v_scrollbar.captures_pointer()
-            || self.h_scrollbar.captures_pointer()
-    }
-
-    fn collect_popups(&self, out: &mut Vec<PopupRequest>) {
-        self.menu.collect_popups(out);
-    }
-
-    fn focusable(&self) -> bool {
-        self.enabled
-    }
-
-    fn set_focused(&mut self, focused: bool) {
-        let was_focused = self.focused;
-        self.focused = focused;
-        if focused {
-            if !was_focused {
-                self.reset_blink();
-            }
-        } else {
-            // Don't carry a stale click history across focus losses — that
-            // would let a re-entry click count as a "double" even though the
-            // intervening focus change broke the user's gesture.
-            self.last_click = None;
-            self.click_count = 0;
-            self.drag_active = false;
-        }
-    }
-
-    fn wants_ticks(&self) -> bool {
-        // Steady-state ticks for the caret blink. The embedded scrollbar's
-        // own auto-repeat doesn't need forwarding here — it pushes a tick
-        // request through the `EventCtx` itself (see `EventCtx::request_tick`).
-        self.focused && self.enabled
-    }
-
-    fn layout(&mut self, bounds: Rect) {
-        self.rect = bounds;
-        // Carve the rightmost column for the vertical scrollbar and, if it is
-        // shown, the bottom row for the horizontal one; the rest is the text
-        // area. Where both are shown each stops a pixel into the corner square
-        // between them, so its frame can share their end lines.
-        let across = if self.show_h_scrollbar {
-            SCROLLBAR_THICKNESS - 1
-        } else {
-            0
-        };
-        self.v_scrollbar.set_rect(Rect::new(
-            bounds.right() - SCROLLBAR_THICKNESS,
-            bounds.y,
-            SCROLLBAR_THICKNESS,
-            bounds.h - across,
-        ));
-        self.h_scrollbar.set_rect(if self.show_h_scrollbar {
-            Rect::new(
-                bounds.x,
-                bounds.bottom() - SCROLLBAR_THICKNESS,
-                bounds.w - across,
-                SCROLLBAR_THICKNESS,
-            )
-        } else {
-            Rect::new(0, 0, 0, 0)
-        });
-        // Re-sync the scrollbar's range to the new viewport height and clamp the
-        // current scroll into it — but DON'T snap the view to the caret. A
-        // layout pass fires for reasons unrelated to editing: on Wayland the
-        // compositor sends a `configure` (hence a relayout) every time the
-        // window's activation state changes, so forcing the cursor into view
-        // here would yank a wheel-scrolled view back to the caret (line 0 for a
-        // freshly opened file) the moment the window lost or regained focus.
-        self.sync_scrollbar();
-    }
-}
-
-impl TextEditor {
     fn paint_line(
         &self,
         painter: &mut Painter,
@@ -1640,6 +1823,16 @@ fn end_of(at: Pos, text: &str) -> Pos {
         None => (at.0, at.1 + text.chars().count()),
         Some((head, last)) => (at.0 + head.matches('\n').count() + 1, last.chars().count()),
     }
+}
+
+/// The start of `text` up to byte `end`, or to the character boundary before
+/// it: an input method's cursor is a byte offset into its preedit.
+fn prefix(text: &str, end: usize) -> &str {
+    let mut end = end.min(text.len());
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    &text[..end]
 }
 
 fn char_to_byte(line: &str, char_idx: usize) -> usize {
