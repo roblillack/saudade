@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use crate::geometry::{Point, Size};
+use crate::geometry::{Point, Rect, Size};
 
 /// How many document lines one mouse-wheel detent (notch) scrolls. Matches the
 /// modern desktop default of three lines per notch. The platform backends
@@ -336,9 +336,62 @@ pub enum Event {
         ch: char,
         modifiers: Modifiers,
     },
+    /// Text from an input method — a dead-key sequence on macOS, a Chinese,
+    /// Japanese or Korean IME, a Wayland input method — on its way into the
+    /// focused widget: see [`Ime`]. Routed to the focused widget like
+    /// [`Event::Char`], and only ever sent while a widget asks for it with
+    /// [`EventCtx::set_ime_area`].
+    Ime(Ime),
     /// Periodic animation tick, fired by the runtime at roughly 60 Hz while
     /// any widget in the tree returns `wants_ticks() == true`.
     Tick,
+}
+
+/// What an input method (IME) has for the focused widget: see [`Event::Ime`].
+///
+/// Some text takes more than one keystroke to type. A dead key puts an accent
+/// up and waits for the letter to put it on (`´` then `e` for `é`), a Japanese
+/// or Chinese input method turns a run of Latin letters into the characters
+/// they spell, picked from a list. While that is going on, the text being
+/// composed — the *preedit* — is shown at the caret but is not part of the
+/// text yet; when the user is done, the input method *commits* the final text.
+///
+/// A widget that takes text input says so with [`EventCtx::set_ime_area`], and
+/// only then does the runtime let the platform's input method at the keyboard.
+/// Typing then reaches it two ways, and each character exactly one of them:
+///
+/// * Keys that type their text straight away — plain letters, digits, Space,
+///   Option-typed symbols on a Mac — arrive as [`Event::Char`], as they do
+///   without an input method.
+/// * Text that was composed arrives as [`Ime::Commit`], with
+///   [`Ime::Preedit`] showing it along the way. A dead-key `´` followed by
+///   `e` is a `Preedit` of `"´"`, then `Commit("é")` — no `Char` for either key.
+///
+/// While something is being composed, the keys the input method takes for
+/// itself — Backspace and the arrows within a preedit, Enter or Space to pick
+/// a candidate — don't reach the widget as [`Event::KeyDown`] either; once
+/// nothing is, shortcuts and editing keys arrive as `KeyDown` as always.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Ime {
+    /// Composition in progress: show `text` at the caret, provisionally
+    /// (underlined), replacing any previous preedit — it is not part of the
+    /// text yet. Empty text means the composition was cleared or cancelled.
+    /// `cursor` is the byte range within `text` the input method wants
+    /// highlighted, or its caret where the range is empty; `None` hides the
+    /// caret.
+    ///
+    /// The runtime may send the composition it knows of again, unchanged — an
+    /// empty one when nothing is being composed — to ask the focused widget
+    /// whether it still takes text after something may have moved the focus
+    /// (see [`EventCtx::set_ime_area`]). So handle it idempotently: the same
+    /// preedit twice is no change.
+    Preedit {
+        text: String,
+        cursor: Option<(usize, usize)>,
+    },
+    /// Final text to insert at the caret, replacing the selection, ending the
+    /// composition: the preedit is gone. Insert it as if it had been typed.
+    Commit(String),
 }
 
 impl Event {
@@ -355,10 +408,13 @@ impl Event {
         }
     }
 
+    /// `true` for the events that go to the widget holding the keyboard focus
+    /// rather than the one under the pointer: [`Event::KeyDown`],
+    /// [`Event::KeyUp`], [`Event::Char`] and [`Event::Ime`].
     pub fn is_keyboard(&self) -> bool {
         matches!(
             self,
-            Event::KeyDown { .. } | Event::KeyUp { .. } | Event::Char { .. }
+            Event::KeyDown { .. } | Event::KeyUp { .. } | Event::Char { .. } | Event::Ime(_)
         )
     }
 }
@@ -516,6 +572,9 @@ pub struct EventCtx {
     /// window should carry once the dispatch is over. Applied by the runtime
     /// alongside the other requests.
     pub(crate) title_request: Option<String>,
+    /// Where the caret of a widget that takes text input sits, set when it
+    /// calls [`Self::set_ime_area`] — what keeps the input method enabled.
+    pub(crate) ime_area: Option<Rect>,
 }
 
 impl EventCtx {
@@ -541,6 +600,7 @@ impl EventCtx {
             fullscreen_request: None,
             modifiers: Modifiers::default(),
             title_request: None,
+            ime_area: None,
         }
     }
 
@@ -822,6 +882,50 @@ impl EventCtx {
     /// ask during one dispatch, the last one wins.
     pub fn set_window_title(&mut self, title: impl Into<String>) {
         self.title_request = Some(title.into());
+    }
+
+    /// Say that this widget takes text input and has the keyboard focus, with
+    /// its caret at `caret` — a rectangle in logical window coordinates, the
+    /// height of the line it sits on. The runtime then lets the platform's
+    /// input method at the keyboard, so dead keys compose and a Chinese,
+    /// Japanese or Korean input method works, and it anchors the input
+    /// method's candidate window and popups at `caret`. Composed text reaches
+    /// the widget as [`Event::Ime`]; see [`Ime`] for how it shares the typing
+    /// with [`Event::Char`].
+    ///
+    /// The input method stays enabled only while the focused widget keeps
+    /// saying so. Call this whenever you handle an event while focused —
+    /// including [`Event::Tick`] and every [`Event::Ime`] — and after moving
+    /// the caret, so the candidate window follows it:
+    ///
+    /// ```no_run
+    /// # use saudade::*;
+    /// # struct Field { focused: bool, caret: Rect }
+    /// # impl Field {
+    /// fn event(&mut self, event: &Event, ctx: &mut EventCtx) {
+    ///     // … handle the event, moving `self.caret` …
+    ///     if self.focused {
+    ///         ctx.set_ime_area(self.caret);
+    ///     }
+    /// }
+    /// # }
+    /// ```
+    ///
+    /// Whenever something may have moved the keyboard focus — a key, a click,
+    /// a drop, the window coming to the front — the runtime asks the focused
+    /// widget again, by sending it the composition in progress as an
+    /// [`Ime::Preedit`] (an empty one when there is none), and turns the input
+    /// method off unless it answers with this call. So the input method goes
+    /// off by itself once the focus has moved on to a button or a list, and
+    /// while an open menu has the keyboard; there is nothing to undo. Other
+    /// events — pointer moves, ticks — can only move the area, not turn the
+    /// input method off. Without the focus, don't call it.
+    ///
+    /// The input method serves whichever window has the keyboard — the main
+    /// window, or the dialog open over it. On Wayland it needs the
+    /// compositor's `text-input-v3` and an input method running.
+    pub fn set_ime_area(&mut self, caret: Rect) {
+        self.ime_area = Some(caret);
     }
 
     /// Begin dragging `data` out of this window as an OS drag-and-drop

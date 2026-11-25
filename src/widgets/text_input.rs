@@ -1,7 +1,7 @@
 use std::time::{Duration, Instant};
 
 use crate::accel::ModifierScheme;
-use crate::event::{Cursor, Event, EventCtx, Key, MouseButton, NamedKey};
+use crate::event::{Cursor, Event, EventCtx, Ime, Key, MouseButton, NamedKey};
 use crate::geometry::{Color, Point, Rect};
 use crate::painter::Painter;
 use crate::theme::Theme;
@@ -62,6 +62,15 @@ pub struct TextInput {
     /// Logical pixels at the right end of the field the text stays out of,
     /// for a host that draws something there — a `NumberInput`'s unit.
     reserved_right: i32,
+    /// What the input method is composing, shown underlined at the caret but
+    /// not part of the text: empty when nothing is. See [`Ime::Preedit`].
+    preedit: String,
+    /// The byte range of `preedit` the input method has its caret on, or
+    /// highlights.
+    preedit_cursor: Option<(usize, usize)>,
+    /// How wide `preedit` was drawn, in logical pixels, at the last paint:
+    /// the input method's area spans it.
+    preedit_w: i32,
 }
 
 impl TextInput {
@@ -86,6 +95,9 @@ impl TextInput {
             blink_on: true,
             unfocused_marks: true,
             reserved_right: 0,
+            preedit: String::new(),
+            preedit_cursor: None,
+            preedit_w: 0,
         }
     }
 
@@ -477,13 +489,15 @@ impl TextInput {
             .unwrap_or(0)
     }
 
-    fn adjust_scroll(&mut self, visible_w: i32) {
+    /// Scroll so the caret is in view, `extra_w` being drawn at it — the
+    /// preedit — with `caret_in_extra` of that before the caret.
+    fn adjust_scroll(&mut self, visible_w: i32, extra_w: i32, caret_in_extra: i32) {
         if visible_w <= 0 {
             self.scroll_x = 0;
             return;
         }
-        let total_w = self.cumulative_widths.last().copied().unwrap_or(0);
-        let caret = self.caret_x_offset();
+        let total_w = self.cumulative_widths.last().copied().unwrap_or(0) + extra_w;
+        let caret = self.caret_x_offset() + caret_in_extra;
         if caret < self.scroll_x {
             self.scroll_x = caret;
         }
@@ -505,6 +519,46 @@ impl TextInput {
     fn reset_blink(&mut self) {
         self.blink_since = Instant::now();
         self.blink_on = true;
+    }
+
+    /// Where the input method's candidate window and popups belong: the
+    /// caret, in window coordinates — or, while something is being composed,
+    /// the composition, which starts at the caret. As of the last paint,
+    /// which measured the text.
+    fn ime_area(&self) -> Rect {
+        let inner = self.rect.inset(2);
+        let right = (inner.right() - self.reserved_right).max(inner.x);
+        let x =
+            (self.rect.x + PADDING_X - self.scroll_x + self.caret_x_offset()).clamp(inner.x, right);
+        let w = self.preedit_w.clamp(1, (right - x).max(1));
+        Rect::new(x, inner.y, w, inner.h)
+    }
+
+    /// Show `text` as the composition in progress. Returns whether that
+    /// changed anything.
+    fn set_preedit(&mut self, text: &str, cursor: Option<(usize, usize)>) -> bool {
+        if self.preedit == text && self.preedit_cursor == cursor {
+            return false;
+        }
+        self.preedit = text.to_string();
+        self.preedit_cursor = cursor;
+        if text.is_empty() {
+            self.preedit_w = 0;
+        }
+        true
+    }
+
+    /// Put text the input method committed in place of the selection, as if
+    /// it had been typed: what a single-line field can't hold — line breaks
+    /// and other control characters — is left out.
+    fn commit_text(&mut self, text: &str) -> bool {
+        let text: String = text.chars().filter(|c| !c.is_control()).collect();
+        if text.is_empty() {
+            return false;
+        }
+        self.delete_selection();
+        self.insert_text(&text);
+        true
     }
 
     fn fire_change(&mut self, ctx: &mut EventCtx) {
@@ -539,8 +593,26 @@ impl Widget for TextInput {
         painter.stroke_rect(self.rect, theme.border);
 
         self.rebuild_widths(painter, font_size);
+        // A composition in progress goes in at the caret, pushing the text
+        // after it along: the view scrolls to keep the input method's caret in
+        // it, which may be anywhere in the composition.
+        let composing = self.focused && self.enabled && !self.preedit.is_empty();
+        let mut preedit_caret = None;
+        self.preedit_w = 0;
+        if composing {
+            self.preedit_w = painter.measure_text(&self.preedit, font_size).w;
+            preedit_caret = self.preedit_cursor.map(|(_, end)| {
+                painter
+                    .measure_text(prefix(&self.preedit, end), font_size)
+                    .w
+            });
+        }
         let visible_w = (self.rect.w - PADDING_X * 2 - self.reserved_right).max(0);
-        self.adjust_scroll(visible_w);
+        self.adjust_scroll(
+            visible_w,
+            self.preedit_w,
+            preedit_caret.unwrap_or(self.preedit_w),
+        );
 
         let text_x0 = self.rect.x + PADDING_X - self.scroll_x;
         let text_h = painter.measure_text("Ag", font_size).h;
@@ -565,6 +637,18 @@ impl Widget for TextInput {
                 let text: String = self.chars.iter().collect();
                 painter.text(text_x0, text_y, &text, font_size, theme.disabled_text);
             }
+            painter.restore_clip(saved_clip);
+            return;
+        }
+
+        if composing {
+            let line = TextLine {
+                x: text_x0,
+                y: text_y,
+                h: text_h,
+                font_size,
+            };
+            self.paint_composing(painter, theme, line, inner, preedit_caret);
             painter.restore_clip(saved_clip);
             return;
         }
@@ -624,6 +708,101 @@ impl Widget for TextInput {
         if !self.enabled {
             return;
         }
+        self.handle(event, ctx);
+        // Focused, the field takes text — through the input method, too —
+        // and says so on every event it gets, with where its caret is now.
+        if self.focused {
+            ctx.set_ime_area(self.ime_area());
+        }
+    }
+
+    fn captures_pointer(&self) -> bool {
+        self.drag_active
+    }
+
+    fn focusable(&self) -> bool {
+        self.enabled
+    }
+
+    fn set_focused(&mut self, focused: bool) {
+        let was_focused = self.focused;
+        self.focused = focused;
+        if focused {
+            if !was_focused {
+                self.reset_blink();
+            }
+        } else {
+            // Don't carry a stale click history across focus losses — that
+            // would let a re-entry click count as a "double" even though the
+            // intervening focus change broke the user's gesture.
+            self.last_click = None;
+            self.click_count = 0;
+            self.drag_active = false;
+            // A composition doesn't follow the focus out: the runtime turns
+            // the input method off, or tells whichever field has the focus now.
+            self.set_preedit("", None);
+        }
+    }
+
+    fn wants_ticks(&self) -> bool {
+        self.focused && self.enabled
+    }
+
+    fn layout(&mut self, bounds: Rect) {
+        self.rect = bounds;
+    }
+}
+
+/// Where a line of text is drawn in a [`TextInput`], and how big.
+#[derive(Clone, Copy)]
+struct TextLine {
+    x: i32,
+    y: i32,
+    h: i32,
+    font_size: f32,
+}
+
+impl TextInput {
+    /// Paint the text with the composition in progress at the caret,
+    /// underlined — the part the input method highlights, if any, twice as
+    /// thick — and the caret where the input method has it. A selection is
+    /// what the composition will replace, so it isn't drawn while there is one.
+    fn paint_composing(
+        &self,
+        painter: &mut Painter,
+        theme: &Theme,
+        line: TextLine,
+        inner: Rect,
+        caret: Option<i32>,
+    ) {
+        let before: String = self.chars[..self.cursor].iter().collect();
+        let after: String = self.chars[self.cursor..].iter().collect();
+        let at = line.x + self.caret_x_offset();
+        painter.text(line.x, line.y, &before, line.font_size, theme.text);
+        painter.text(at, line.y, &self.preedit, line.font_size, theme.text);
+        let after_x = at + self.preedit_w;
+        painter.text(after_x, line.y, &after, line.font_size, theme.text);
+
+        let underline_y = (line.y + line.h).min(inner.bottom() - 1);
+        painter.h_line(at, underline_y, self.preedit_w, theme.text);
+        match (self.preedit_cursor, caret) {
+            (Some((start, end)), _) if start < end => {
+                let measure = |i| {
+                    painter
+                        .measure_text(prefix(&self.preedit, i), line.font_size)
+                        .w
+                };
+                let (x0, x1) = (measure(start), measure(end));
+                painter.h_line(at + x0, underline_y - 1, x1 - x0, theme.text);
+            }
+            (_, Some(caret)) if self.blink_on => {
+                painter.v_line(at + caret, inner.y, inner.h, theme.text);
+            }
+            _ => {}
+        }
+    }
+
+    fn handle(&mut self, event: &Event, ctx: &mut EventCtx) {
         match event {
             Event::PointerDown {
                 pos,
@@ -778,6 +957,20 @@ impl Widget for TextInput {
                     _ => {}
                 }
             }
+            Event::Ime(Ime::Preedit { text, cursor }) if self.focused => {
+                if self.set_preedit(text, *cursor) {
+                    self.reset_blink();
+                    ctx.request_paint();
+                }
+            }
+            Event::Ime(Ime::Commit(text)) if self.focused => {
+                self.set_preedit("", None);
+                if self.commit_text(text) {
+                    self.fire_change(ctx);
+                }
+                self.reset_blink();
+                ctx.request_paint();
+            }
             Event::Tick => {
                 if !self.focused {
                     return;
@@ -792,39 +985,16 @@ impl Widget for TextInput {
             _ => {}
         }
     }
+}
 
-    fn captures_pointer(&self) -> bool {
-        self.drag_active
+/// The start of `text` up to byte `end`, or to the character boundary before
+/// it: an input method's cursor is a byte offset into its preedit.
+fn prefix(text: &str, end: usize) -> &str {
+    let mut end = end.min(text.len());
+    while !text.is_char_boundary(end) {
+        end -= 1;
     }
-
-    fn focusable(&self) -> bool {
-        self.enabled
-    }
-
-    fn set_focused(&mut self, focused: bool) {
-        let was_focused = self.focused;
-        self.focused = focused;
-        if focused {
-            if !was_focused {
-                self.reset_blink();
-            }
-        } else {
-            // Don't carry a stale click history across focus losses — that
-            // would let a re-entry click count as a "double" even though the
-            // intervening focus change broke the user's gesture.
-            self.last_click = None;
-            self.click_count = 0;
-            self.drag_active = false;
-        }
-    }
-
-    fn wants_ticks(&self) -> bool {
-        self.focused && self.enabled
-    }
-
-    fn layout(&mut self, bounds: Rect) {
-        self.rect = bounds;
-    }
+    &text[..end]
 }
 
 /// Small upward wedge: a one-pixel apex with a three-pixel base, with `cx`

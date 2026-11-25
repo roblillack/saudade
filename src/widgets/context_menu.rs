@@ -457,7 +457,9 @@ impl Widget for ContextMenu {
                 // the keyboard: it must not *also* reach the widget behind.
                 ctx.consume_event();
             }
-            Event::Char { .. } => ctx.consume_event(),
+            // Typing, or an input method's text, mustn't reach the widget
+            // behind either.
+            Event::Char { .. } | Event::Ime(_) => ctx.consume_event(),
             _ => {}
         }
     }

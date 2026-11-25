@@ -12,6 +12,17 @@ While pre-1.0, the minor version is bumped for breaking changes.
 
 ### Added
 
+- Input methods: dead keys, and Chinese, Japanese and Korean IMEs.
+  `EventCtx::set_ime_area` is how the focused widget says it takes text, and
+  where its caret is; the runtime then lets the platform's input method at
+  the keyboard — winit's on macOS, Windows and X11, `zwp_text_input_v3` on
+  Wayland — anchors its candidate window at the caret, and turns it off once
+  the focus has moved on. Composed text arrives as `Event::Ime`: an
+  `Ime::Preedit` to show at the caret while it is being composed, an
+  `Ime::Commit` to insert. `TextInput`, `NumberInput` and `TextEditor` take
+  it, showing the composition underlined at the caret; `MockBackend`'s
+  `DispatchOutcome::ime_area` and `MockBackend::ime_area` / `probe_ime` let
+  a test see whether the input method would be on. (#121)
 - Native menu bars. `App::with_menu_bar` takes the app's main `MenuBar`
   rather than the widget tree: on macOS it becomes the system menu bar at the
   top of the screen, built from `NSMenu`s, and the root gets the whole
@@ -113,6 +124,13 @@ While pre-1.0, the minor version is bumped for breaking changes.
 
 ### Changed
 
+- `Event` has a new variant, `Event::Ime`, which a `match` without a
+  catch-all has to handle; `Event::is_keyboard` counts it, so containers
+  route it to the focused widget like `Char`. After a key, a click or a drop
+  the runtime — and `MockBackend::dispatch` — now sends the focused widget
+  the composition in progress as an `Ime::Preedit` (an empty one when there
+  is none) to learn whether it still takes text: a widget that doesn't care
+  ignores it. (#121)
 - `MenuItem::Action` has a `role` field. Code that builds the variant
   directly rather than through `MenuItem::action` has to give it one
   (`role: None`). (#120)
@@ -136,6 +154,10 @@ While pre-1.0, the minor version is bumped for breaking changes.
 
 ### Fixed
 
+- Dead keys compose in text fields on macOS: ⌥E then E types `é`, as does
+  the German layout's `´` then E, where they typed nothing or a plain `e`.
+  winit only runs the Mac's text input for a window that allows an input
+  method, which saudade's never did. (#121)
 - On macOS, text typed with the Option key reaches the widgets: ⌥L for `@`,
   ⌥5 for `[` on a German keyboard and the like were dropped, Option counting
   as a command modifier. `Modifiers::suppresses_text` says which modifiers

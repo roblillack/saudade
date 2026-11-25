@@ -44,6 +44,7 @@ mod font;
 mod font_scan;
 mod geometry;
 mod icon;
+mod ime;
 #[cfg(target_os = "macos")]
 mod macos_layer;
 #[cfg(target_os = "macos")]
@@ -91,7 +92,7 @@ pub use app::{App, WindowConfig};
 pub use background::{BackgroundPattern, PATTERN_COLORS};
 pub use chrome::{WindowChrome, WindowFrame};
 pub use event::{
-    Cursor, DragData, DraggedFile, DropAction, Event, EventCtx, Key, Modifiers, MouseButton,
+    Cursor, DragData, DraggedFile, DropAction, Event, EventCtx, Ime, Key, Modifiers, MouseButton,
     NamedKey,
 };
 pub use font::{Font, FontFamily, FontMetrics, FontSet, FontStyle};

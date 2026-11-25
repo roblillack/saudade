@@ -80,10 +80,12 @@ libc = "0.2"
 # Linux/BSD only: the SCTK Wayland backend (see src/wayland.rs) plus arboard's
 # wl-data-control clipboard backend. These crates don't build on macOS/Windows,
 # where winit's native windowing and arboard's native clipboard take over.
+# wayland-protocols' "unstable" set is for `zwp_text_input_v3`, the way to an
+# input method on Wayland.
 [target.'cfg(all(unix, not(target_os = "macos")))'.dependencies]
 smithay-client-toolkit = "0.19"
 wayland-client = "0.31"
-wayland-protocols = { version = "0.32", features = ["client", "staging"] }
+wayland-protocols = { version = "0.32", features = ["client", "staging", "unstable"] }
 arboard = { version = "3", default-features = false, features = ["wayland-data-control"] }
 # X11: the two hints that make a window a dialog of another, and a display's
 # physical size, none of which winit can say or tell (see `src/x11.rs`). And an
@@ -131,10 +133,12 @@ windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Graphic
 # the system menu bar an `App::with_menu_bar` bar goes into (see
 # `macos_menu`): `NSMenu` and `NSMenuItem`, `NSCell` for an item's checkmark,
 # and Foundation's `NSString` and `NSProcessInfo` for the items' titles and
-# the name of the program they carry.
+# the name of the program they carry. The eighth is `NSTextInputContext`:
+# dropping what the input method is composing when the focus leaves a text
+# field, which winit only forgets its own copy of.
 objc2 ={ version = "0.6", default-features = false, features = ["std"] }
 block2 = { version = "0.6", default-features = false, features = ["std"] }
-objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "block2", "NSApplication", "NSCell", "NSEvent", "NSGraphics", "NSImage", "NSMenu", "NSMenuItem", "NSTrackingArea", "NSWindow", "NSResponder", "NSScreen", "NSView", "objc2-core-graphics", "objc2-quartz-core"] }
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "block2", "NSApplication", "NSCell", "NSEvent", "NSGraphics", "NSImage", "NSMenu", "NSMenuItem", "NSTrackingArea", "NSWindow", "NSResponder", "NSScreen", "NSTextInputContext", "NSView", "objc2-core-graphics", "objc2-quartz-core"] }
 objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSProcessInfo", "NSString"] }
 objc2-core-foundation = { version = "0.3", default-features = false, features = ["CFBase", "CFData", "CFString", "CFCGTypes", "std"] }
 objc2-core-graphics = { version = "0.3", default-features = false, features = ["CGContext", "CGBitmapContext", "CGColorSpace", "CGDataProvider", "CGDirectDisplay", "CGDisplayConfiguration", "CGImage", "std"] }

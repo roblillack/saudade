@@ -212,7 +212,13 @@ pub enum Event {
     KeyDown      { key: Key, modifiers: Modifiers },
     KeyUp        { key: Key, modifiers: Modifiers },
     Char         { ch: char, modifiers: Modifiers },
+    Ime(Ime),    // text from an input method — see "Input methods"
     Tick,        // ~60 Hz while any widget wants_ticks()
+}
+
+pub enum Ime {
+    Preedit { text: String, cursor: Option<(usize, usize)> }, // being composed
+    Commit(String),                                           // composed: insert it
 }
 
 pub struct DragData {
@@ -243,7 +249,8 @@ pub struct Modifiers { pub shift: bool, pub control: bool, pub alt: bool, pub lo
 including `Scroll` and the positional drag events (`DragEnter`, `DragMove`,
 `Drop`), so containers route them to the widget under the pointer — or `None`
 for `PointerLeave`, `DragLeave`, and keyboard events.
-`Event::is_keyboard()` distinguishes the three keyboard variants.
+`Event::is_keyboard()` distinguishes the four keyboard variants — `KeyDown`,
+`KeyUp`, `Char` and `Ime` — which containers route to the focused widget.
 
 `Event` is `Clone` but not `Copy`: `Drop` owns a `DragData` (`Vec`s of paths,
 files and links).
@@ -265,6 +272,79 @@ when a command modifier (Ctrl / Alt / Logo) is held so editors don't
 ingest "\x01" for Ctrl+A; the matching `KeyDown` still fires.
 
 `Modifiers::has_command()` is true if any of Ctrl / Alt / Logo is held.
+
+### Input methods
+
+Some text takes more than one keystroke: a dead key puts an accent up and
+waits for the letter to put it on (`´` then `e` for `é`; ⌥E then E on a
+Mac), and a Chinese, Japanese or Korean input method (IME) turns a run of
+Latin letters into the characters they spell, picked from a candidate
+window. A widget that takes text says so, and the runtime then lets the
+platform's input method at the keyboard:
+
+```rust
+fn event(&mut self, event: &Event, ctx: &mut EventCtx) {
+    match event {
+        Event::Char { ch, modifiers } if !modifiers.suppresses_text() => self.insert(*ch),
+        Event::Ime(Ime::Preedit { text, cursor }) => self.show_composition(text, *cursor),
+        Event::Ime(Ime::Commit(text)) => self.insert_str(text), // replaces the selection
+        _ => { /* keys, clicks … */ }
+    }
+    if self.focused {
+        // "I take text, and my caret is here" — on every event, while focused.
+        ctx.set_ime_area(self.caret_rect());
+    }
+}
+```
+
+Each character arrives exactly once, one of two ways. Keys that type
+their text straight away — plain letters, digits, Option-typed symbols on
+a Mac — keep arriving as `Char`. Composed text arrives as `Ime::Commit`,
+with `Ime::Preedit` showing it along the way: a dead-key `´` then `e` is a
+`Preedit("´")`, then `Commit("é")`, with no `Char` for either key. The
+preedit is shown at the caret, underlined, but is not part of the text
+until it is committed; an empty one means the composition is over. While
+something is being composed, the keys the input method takes for itself
+don't arrive as `KeyDown` either; otherwise shortcuts, arrows, Backspace,
+Enter and Tab do, as always.
+
+`EventCtx::set_ime_area(caret)` takes the caret's rectangle in logical
+window coordinates; the candidate window and the platform's own popups
+go below it. The input method stays on only while the focused widget
+keeps asking. After every key, click and drop — anything that may have
+moved the focus — and when a window comes to the front, the runtime asks
+the focused widget again by sending it the composition in progress as an
+`Ime::Preedit` (an empty one when there is none), and turns the input
+method off unless that widget calls `set_ime_area` while handling it. So
+it goes off by itself when the focus moves on to a button or a list, or
+while an open menu has the keyboard, and comes back with the focus.
+Pointer moves and ticks can move the area but never turn it off. A widget
+should therefore handle `Ime::Preedit` idempotently — the same composition
+twice is no change — and call `set_ime_area` only while focused.
+
+`TextInput`, `NumberInput` and `TextEditor` do all of this. Per backend:
+
+- **macOS** — winit's text input client, `interpretKeyEvents` and all, is
+  only used while a widget asks, so dead keys (⌥E, ⌥U, ⌥N, ⌥\`, the German
+  layout's `´` and `^` …) and the system's input methods work in text
+  widgets, and stay out of the way of everything else. A composition left
+  unfinished when the focus moves is dropped, rather than picked up again
+  by the next key.
+- **Windows** — the IME is attached to the window only while a widget asks
+  (`ImmAssociateContextEx`); dead keys are composed by the keyboard layout,
+  as before, and arrive as `Char`.
+- **X11** — through XIM, as winit has it (`XMODIFIERS`); dead keys are
+  composed by xkbcommon as before when no input method takes them.
+- **Wayland** — through `zwp_text_input_v3`, where the compositor has it
+  (GNOME, KDE, Sway, Hyprland, …) and an input method such as IBus or Fcitx
+  is running. Without one, dead keys and the Compose key are composed by
+  xkbcommon in SCTK's keyboard, and arrive as `Char`, with nothing shown
+  while the accent waits.
+
+`MockBackend` keeps track of it the way the runtime does: each
+`DispatchOutcome` has an `ime_area`, `Some` while a widget that takes text
+has the focus, and `MockBackend::probe_ime` asks the focused widget as the
+runtime does when a window opens.
 
 ### Drag and drop
 
@@ -401,6 +481,7 @@ impl EventCtx {
     pub fn modifiers(&self) -> Modifiers;        // the modifier keys held now
     pub fn set_window_title(&mut self, title: impl Into<String>); // retitle the window
     pub fn set_cursor(&mut self, cursor: Cursor); // pointer shape, on PointerMove
+    pub fn set_ime_area(&mut self, caret: Rect);  // "I take text, caret here" — see "Input methods"
     pub fn request_tick(&mut self);              // one more Tick soon (an animation step)
     pub fn request_tick_at(&mut self, deadline: Instant); // one Tick then — a timer
     pub fn request_tick_after(&mut self, delay: Duration);
@@ -1365,6 +1446,11 @@ wedge at the bottom of the field marks where the caret will be once the
 focus comes back. As on `TextEditor`, `cut`, `copy`, `paste`, and
 `select_all` are there to call from menu items.
 
+With the focus, the field takes text from an input method too (see "Input
+methods"): what is being composed shows at the caret, underlined, and the
+committed text goes in as if typed, replacing the selection and firing
+`on_change`.
+
 ### `NumberInput`
 
 A `TextInput` for a number, with a `SpinButton` pair along its right edge to
@@ -1418,6 +1504,10 @@ exactly 1.
 | PageUp / PageDown | ten steps up / down                                  |
 | mouse wheel       | one step per notch, over the arrows or while focused |
 | anything else     | edits the text as in a `TextInput`                   |
+
+An input method's text goes through the same check, after its full-width
+digits, point, comma and minus — what a Japanese input method types in its
+full-width mode — are read as the plain ones.
 
 `on_change` never fires for `set_value`, `set_range`, `set_step` or
 `set_precision`, so inputs that update each other don't loop. The value is an
@@ -1534,6 +1624,12 @@ output there. Its paper is tinted a touch towards the theme's `face`, so it
 can be told from an editable box beside it, while the text stays as legible
 as ever — unlike `set_enabled(false)`, which greys the text and refuses
 the focus.
+
+With the focus, and unless it is read-only, the editor takes text from an
+input method (see "Input methods"): what is being composed shows at the
+caret, underlined, pushing the rest of the line along, and the committed
+text goes in as if typed — replacing the selection, and undone with the
+typing around it.
 
 Without the focus, a small wedge under the line marks where the caret
 will be once the focus comes back, as in `TextInput`.
